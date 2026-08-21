@@ -34,7 +34,9 @@
         .example-img { width: 55px; height: 55px; object-fit: contain; border-radius: 4px; background: #222; border: 1px solid #555; }
         .task-prompt { color: #fff; font-size: 14px; font-weight: bold; margin: 0; line-height: 1.4; flex: 1; }
         .img-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
-        .img-grid img { width: 100%; height: 120px; object-fit: cover; cursor: pointer; border: 4px solid transparent; background: #222; }
+        .img-grid img { width: 100%; height: 120px; object-fit: cover; cursor: pointer; border: 4px solid transparent; background: #222; transition: opacity 0.3s; }
+        @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+        .img-grid img[src=""], .img-grid img:not([src]) { background: linear-gradient(90deg,#1a1a1a 25%,#2d2d2d 50%,#1a1a1a 75%); background-size:200% 100%; animation:shimmer 1.2s infinite; }
         .img-grid img.selected { border-color: #00ff88; opacity: 0.7; }
         .img-grid img.ai-pick { border-color: #ff00ff; }
         /* Trained grid */
@@ -78,7 +80,10 @@
 <div class="grid-container" id="tasksArea"></div>
 
 <script>
-const SERVER_URL = "https://hcaptcha-solver-production.up.railway.app";
+// Auto-detect: server pe deploy ho to same origin, local file ho to hardcoded
+const SERVER_URL = location.protocol === 'file:'
+    ? (localStorage.getItem('hcm_server') || "https://hcaptcha-solver-production.up.railway.app")
+    : location.origin;
 const tasksArea = document.getElementById('tasksArea');
 const syncStatus = document.getElementById('syncStatus');
 let currentTab = 'pending', serverData = { pending:{}, trained:{} }, activeTasksStore = {}, videoTasks = [];
@@ -111,35 +116,63 @@ async function initAI() {
     }
 }
 
-function saveKNN() {
+// KNN IndexedDB helpers — no 5MB limit
+const IDB = { name:'hcm_knn', store:'knn', key:'model_v3' };
+function idbOpen() {
+    return new Promise((res,rej)=>{
+        let r = indexedDB.open(IDB.name,1);
+        r.onupgradeneeded = e => e.target.result.createObjectStore(IDB.store);
+        r.onsuccess = e => res(e.target.result);
+        r.onerror   = () => rej(r.error);
+    });
+}
+async function idbSet(val) {
+    let db = await idbOpen();
+    return new Promise((res,rej)=>{
+        let tx = db.transaction(IDB.store,'readwrite');
+        tx.objectStore(IDB.store).put(val, IDB.key);
+        tx.oncomplete = res; tx.onerror = ()=>rej(tx.error);
+    });
+}
+async function idbGet() {
+    let db = await idbOpen();
+    return new Promise((res,rej)=>{
+        let tx  = db.transaction(IDB.store,'readonly');
+        let req = tx.objectStore(IDB.store).get(IDB.key);
+        req.onsuccess = () => res(req.result||null);
+        req.onerror   = () => rej(req.error);
+    });
+}
+
+async function saveKNN() {
     if (!knn) return;
     try {
         let ds = knn.getClassifierDataset();
         let ser = {};
         for (let k in ds) { ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape }; }
-        localStorage.setItem('hcaptcha_knn_v3', JSON.stringify(ser));
+        await idbSet(ser);
+        // localStorage bhi try karo (chhota data ho to)
+        try { localStorage.setItem('hcaptcha_knn_v3', JSON.stringify(ser)); } catch(e) {}
         let concepts = Object.keys(ser).filter(k => !k.startsWith('negative_')).length;
-        console.log("✅ KNN Saved!", concepts, "concepts");
         syncStatus.innerHTML = `🤖 AI Ready ✅ (${concepts} concepts)`;
-    } catch(e) { console.log("KNN save error:", e); }
+    } catch(e) { console.error("KNN save error:", e); }
 }
 
-function loadKNN() {
+async function loadKNN() {
     try {
-        // Server pe deploy hone par — railway domain ka localStorage use hoga
-        let saved = localStorage.getItem('hcaptcha_knn_v3');
-        if (!saved) {
-            console.log("No saved KNN model");
-            return;
+        // Pehle IndexedDB — phir localStorage fallback
+        let ser = await idbGet();
+        if (!ser) {
+            let ls = localStorage.getItem('hcaptcha_knn_v3');
+            if (ls) ser = JSON.parse(ls);
         }
-        let ser = JSON.parse(saved);
+        if (!ser) return;
         let ds = {};
         for (let k in ser) { ds[k] = tf.tensor(ser[k].data, ser[k].shape); }
         knn.setClassifierDataset(ds);
         let concepts = Object.keys(ser).filter(k => !k.startsWith('negative_')).length;
-        console.log("✅ KNN Loaded!", concepts, "concepts");
         syncStatus.innerHTML = `🤖 AI Ready ✅ (${concepts} concepts)`;
-    } catch(e) { console.log("KNN load error:", e); }
+    } catch(e) { console.error("KNN load error:", e); }
 }
 
 // Toggle buttons
@@ -398,22 +431,26 @@ function filterTasks() {
 // ==========================================
 // FETCH
 // ==========================================
+let _fetchTimer = null;
+
 async function fetchTasks() {
-    if (!document.hidden && !isFetching) {
-        isFetching = true;
-        try {
-            let res = await fetch(`${SERVER_URL}/api/get-hcaptcha?t=${Date.now()}`, { cache: 'no-store' });
-            if (res.ok) {
-                serverData = await res.json();
-                document.getElementById('c-pending').innerText = Object.keys(serverData.pending).length;
-                document.getElementById('c-trained').innerText = Object.keys(serverData.trained).length;
-                renderCurrentData();
-            }
-        } catch(e) {}
-        isFetching = false;
-    }
-    setTimeout(fetchTasks, 800);
+    if (document.hidden || isFetching) return;
+    isFetching = true;
+    try {
+        let res = await fetch(`${SERVER_URL}/api/get-hcaptcha?t=${Date.now()}`, { cache:'no-store' });
+        if (res.ok) {
+            serverData = await res.json();
+            document.getElementById('c-pending').innerText = Object.keys(serverData.pending).length;
+            document.getElementById('c-trained').innerText = Object.keys(serverData.trained).length;
+            renderCurrentData();
+        }
+    } catch(e) {}
+    isFetching = false;
 }
+
+function startFetch() { if (!_fetchTimer) _fetchTimer = setInterval(fetchTasks, 800); fetchTasks(); }
+function stopFetch()  { if (_fetchTimer) { clearInterval(_fetchTimer); _fetchTimer = null; } }
+document.addEventListener('visibilitychange', () => document.hidden ? stopFetch() : startFetch());
 
 // ==========================================
 // RENDER
@@ -488,9 +525,16 @@ function buildCard(t) {
     let isPending = currentTab === 'pending';
 
     let parts = t.prompt.split('|||');
-    let exHtml = parts[1] ? `<img src="${parts[1]}" class="example-img" loading="lazy" onerror="this.style.display='none'">` : '';
+    // XSS fix: sirf https:// ya data:image/ allow karo
+function _safeUrl(u) {
+    if (!u) return '';
+    if (u.startsWith('data:image/') || /^https?:\/\//.test(u))
+        return u.replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return '';
+}
+let exHtml = parts[1] ? `<img src="${_safeUrl(parts[1])}" class="example-img" loading="lazy" onerror="this.style.display='none'">` : '';
 
-    let isMediaMissing = t.media.length === 0 || (t.media[0] && !t.media[0].src && !t.media[0].frames);
+    let isMediaMissing = t.media.length === 0 || t.media.every(m => !m.thumb && !m.src && !m.frames);
     let mediaHTML = '';
 
     if (isMediaMissing) {
@@ -603,31 +647,39 @@ tasksArea.addEventListener('click', (e) => {
     }
 });
 
+const _saving = new Set();
+
 async function sendToServer(taskId, btnEl, card) {
-    let t = activeTasksStore[taskId]; if (!t) return;
-
-    if (isAIReady && currentTab === 'pending' && t.clicks.length > 0) {
-        if (btnEl) { btnEl.textContent = '🧠 Learning...'; }
-        await trainAIBrain(t);
+    if (_saving.has(taskId)) return; // race condition guard
+    _saving.add(taskId);
+    let t = activeTasksStore[taskId];
+    if (!t) { _saving.delete(taskId); return; }
+    try {
+        if (isAIReady && currentTab === 'pending' && t.clicks.length > 0) {
+            if (btnEl) { btnEl.textContent = '🧠 Learning...'; btnEl.disabled = true; }
+            await trainAIBrain(t);
+        }
+        if (currentTab === 'pending') {
+            ghostBlocker.add(taskId);
+            setTimeout(() => ghostBlocker.delete(taskId), 4000);
+            if (card) card.remove();
+            delete activeTasksStore[taskId];
+        } else {
+            if (btnEl) { btnEl.textContent='Updated!'; setTimeout(()=>{ if(btnEl){btnEl.textContent='Update';btnEl.disabled=false;} },1000); }
+        }
+        await fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
+            method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ taskId, clicks: t.clicks })
+        });
+    } catch(e) {
+        if (btnEl) { btnEl.textContent='❌ Retry'; btnEl.disabled = false; }
+    } finally {
+        _saving.delete(taskId);
     }
-
-    if (currentTab === 'pending') {
-        ghostBlocker.add(taskId);
-        setTimeout(() => ghostBlocker.delete(taskId), 4000);
-        if (card) card.remove();
-        delete activeTasksStore[taskId];
-    } else {
-        if (btnEl) { btnEl.textContent='Updated!'; setTimeout(()=>{btnEl.textContent='Update';btnEl.style.background='';},1000); }
-    }
-
-    fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ taskId, clicks: t.clicks })
-    }).catch(e => {});
 }
 
-// ✅ Pehle fetch, phir AI load
-setTimeout(fetchTasks, 200);
+// Init
+setTimeout(startFetch, 200);
 setTimeout(initAI, 500);
 </script>
 </body>
