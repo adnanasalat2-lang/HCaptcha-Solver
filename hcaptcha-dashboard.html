@@ -26,9 +26,7 @@
         .search-box input::placeholder { color: #666; font-weight: normal; }
         .grid-container { display: flex; flex-wrap: wrap; gap: 15px; }
         
-        /* FIX: Card ki width ko flexible rakha gaya hai */
         .task-card { background: #1e1e1e; min-width: 420px; max-width: 600px; flex: 1; padding: 15px; border: 1px solid #333; border-radius: 6px; }
-        
         .task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 10px rgba(255,0,255,0.4); }
         .task-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
         .task-id { color: #ff4444; font-family: monospace; font-size: 16px; font-weight: bold; }
@@ -45,10 +43,8 @@
         .trained-grid img { width: 100%; height: 90px; object-fit: cover; border: 3px solid #333; background: #222; }
         .trained-grid img.was-clicked { border-color: #00ff88; }
         .trained-grid img.retrain-pick { border-color: #ff8800; cursor: pointer; }
-        .single-box { position: relative; width: 100%; cursor: crosshair; }
-        
-        /* FIX: Video wale frame ko zyada height de di gayi hai */
-        .single-box img { width: 100%; min-height: 400px; object-fit: contain; border: 2px solid #444; border-radius: 4px; background: #222; }
+        .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; background: #000; border-radius: 4px; border: 2px solid #444; overflow: hidden; }
+        .single-box img { width: 100%; height: auto; min-height: 450px; max-height: 600px; object-fit: contain; display: block; }
         
         .dot { position: absolute; width: 18px; height: 18px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
         .missing-media { background: #111; color: #888; padding: 20px 10px; text-align: center; border-radius: 4px; border: 1px dashed #444; font-size: 13px; line-height: 1.6; }
@@ -440,8 +436,8 @@ function renderCurrentData() {
     if (oldBtn) oldBtn.remove();
 
     let frag = document.createDocumentFragment();
-
     let ids = Object.keys(activeData);
+
     if (currentTab === 'trained') {
         ids = ids.reverse();
         let toShow = ids.slice(0, (trainedPage + 1) * TRAINED_PAGE_SIZE);
@@ -466,15 +462,35 @@ function renderCurrentData() {
         }
     } else {
         for (let id of ids) {
-            if (ghostBlocker.has(id) || activeTasksStore[id]) continue;
+            if (ghostBlocker.has(id)) continue;
             let td = activeData[id];
             let media = td.media || [];
             let isGrid = media.length > 1;
-            let clicks = [];
-            activeTasksStore[id] = { id, clicks, type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
+
+            // FIX: Smart Update! Agar nayi images load hui hain to card ko update karo
+            if (activeTasksStore[id] && isGrid) {
+                let oldLoaded = activeTasksStore[id].media.filter(m => m.thumb && m.thumb.startsWith('data:')).length;
+                let newLoaded = media.filter(m => m.thumb && m.thumb.startsWith('data:')).length;
+                
+                if (newLoaded > oldLoaded) {
+                    // Clicks ko mehfooz rakho taake user ki mehnat zaya na ho!
+                    td.clicks = activeTasksStore[id].clicks || [];
+                    
+                    let domCard = document.querySelector(`.task-card[data-id="${id}"]`);
+                    if (domCard) domCard.remove();
+                    delete activeTasksStore[id];
+                } else {
+                    continue; // Skip if no new images
+                }
+            } else if (activeTasksStore[id]) {
+                continue;
+            }
+            
+            activeTasksStore[id] = { id, clicks: td.clicks || [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
             let card = buildCard(activeTasksStore[id]);
             if (card) frag.appendChild(card);
-            if (isAIReady && autoTrainEnabled && isGrid) {
+            
+            if (isAIReady && autoTrainEnabled && isGrid && activeTasksStore[id].clicks.length === 0) {
                 predictWithAI(activeTasksStore[id]);
             }
         }
@@ -553,7 +569,6 @@ function buildCard(t) {
     return card;
 }
 
-// FIX: Yahan interval 200ms kiya hai taake video speed normal rahay
 setInterval(() => {
     videoTasks.forEach(vt => {
         let el = document.querySelector(`.vid-player[data-id="${vt.id}"]`);
