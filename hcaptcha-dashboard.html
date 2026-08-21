@@ -4,7 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>hCaptcha Master - AI Edition</title>
-    <!-- TF scripts sirf Auto Train ON par load hongi -->
+    <!-- TF Models — page load hote hi -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
     <style>
         * { box-sizing: border-box; }
         body { background-color: #121212; color: #ffffff; font-family: Arial, sans-serif; margin: 0; padding: 20px; }
@@ -115,20 +118,28 @@ function saveKNN() {
         let ser = {};
         for (let k in ds) { ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape }; }
         localStorage.setItem('hcaptcha_knn_v3', JSON.stringify(ser));
-        console.log("✅ KNN Saved!", Object.keys(ser).length, "concepts");
-    } catch(e) {}
+        let concepts = Object.keys(ser).filter(k => !k.startsWith('negative_')).length;
+        console.log("✅ KNN Saved!", concepts, "concepts");
+        syncStatus.innerHTML = `🤖 AI Ready ✅ (${concepts} concepts)`;
+    } catch(e) { console.log("KNN save error:", e); }
 }
 
 function loadKNN() {
     try {
+        // Server pe deploy hone par — railway domain ka localStorage use hoga
         let saved = localStorage.getItem('hcaptcha_knn_v3');
-        if (!saved) return;
+        if (!saved) {
+            console.log("No saved KNN model");
+            return;
+        }
         let ser = JSON.parse(saved);
         let ds = {};
         for (let k in ser) { ds[k] = tf.tensor(ser[k].data, ser[k].shape); }
         knn.setClassifierDataset(ds);
-        console.log("✅ KNN Loaded!", Object.keys(ser).length, "concepts");
-    } catch(e) {}
+        let concepts = Object.keys(ser).filter(k => !k.startsWith('negative_')).length;
+        console.log("✅ KNN Loaded!", concepts, "concepts");
+        syncStatus.innerHTML = `🤖 AI Ready ✅ (${concepts} concepts)`;
+    } catch(e) { console.log("KNN load error:", e); }
 }
 
 // Toggle buttons
@@ -412,6 +423,7 @@ const TRAINED_PAGE_SIZE = 20;
 
 function renderCurrentData() {
     let activeData = currentTab === 'pending' ? serverData.pending : serverData.trained;
+    let taskNum = 1; // Sequential number
 
     document.querySelectorAll('.task-card').forEach(card => {
         let id = card.dataset.id;
@@ -528,7 +540,7 @@ function buildCard(t) {
 
     card.innerHTML = `
         <div class="task-head">
-            <span class="task-id">#${t.id.substring(0,6)}</span>
+            <span class="task-id">${t.num ? `<span style="color:#888;font-size:12px">#${t.num}</span> ` : ''}#${t.id.substring(0,6)}</span>
             ${!isPending ? `<span style="font-size:11px;color:#666">${t.clicks.length} clicks</span>` : ''}
         </div>
         <div class="prompt-container">${exHtml}<div class="task-prompt">${parts[0]}</div></div>
@@ -614,8 +626,9 @@ async function sendToServer(taskId, btnEl, card) {
     }).catch(e => {});
 }
 
-// ✅ Sirf fetch — AI Auto Train ON par load hogi
+// ✅ Pehle fetch, phir AI load
 setTimeout(fetchTasks, 200);
+setTimeout(initAI, 500);
 </script>
 </body>
 </html>
