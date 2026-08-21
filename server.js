@@ -162,11 +162,12 @@ app.post('/api/new-hcaptcha', (req, res) => {
     const task = req.body;
     if (!task || !task.taskId) return res.json({ success: false, error: 'Missing taskId' });
 
-    // ✅ evaluateAutoSolve — exact match + dhash concept matching dono
+    // evaluateAutoSolve — exact match + dhash concept matching dono
     let autoRes = evaluateAutoSolve(task);
     if (autoRes.solved) {
         persistDatabase();
-        return res.json({ success: true, autoSolved: true });
+        // clicks bhi bhejo — extension ko dobara check-hcaptcha nahi karni padegi
+        return res.json({ success: true, autoSolved: true, clicks: autoRes.clicks });
     }
 
     // Pending limit
@@ -283,10 +284,13 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// ✅ Dashboard Railway pe serve karo
+// Dashboard serve karo
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'hcaptcha-dashboard.html'));
+    let f = path.join(__dirname, 'hcaptcha-dashboard.html');
+    if (fs.existsSync(f)) res.sendFile(f);
+    else res.status(404).send('hcaptcha-dashboard.html nahi mila. Server folder mein rakho.');
 });
+app.get('/dashboard', (req, res) => res.redirect('/'));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 hCaptcha Engine Running on Port ${PORT}`));
