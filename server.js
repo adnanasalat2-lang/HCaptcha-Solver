@@ -10,7 +10,6 @@ app.use(express.json({ limit: '60mb' }));
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE = path.join(DATA_DIR, 'database.json');
 
-// Fix #5: Trained ka bhi limit — max 5000 entries
 const MAX_PENDING = 80;
 const MAX_TRAINED = 5000;
 
@@ -25,20 +24,17 @@ function getCleanKey(task) {
     return "TXT_" + p;
 }
 
-// Fix #14: Hamming distance — BigInt XOR se O(1) comparison (hex string pe)
+// FIX #1: BigInt XOR Hamming distance
 function dhashToBigInt(hexOrBin) {
     if (!hexOrBin || hexOrBin === "0000000000000000") return null;
-    // Binary string (0/1 chars) ko BigInt mein convert
     if (/^[01]+$/.test(hexOrBin)) {
         return BigInt('0b' + hexOrBin);
     }
-    // Hex string fallback
     try { return BigInt('0x' + hexOrBin); } catch(e) { return null; }
 }
 
 function getHammingDistance(h1, h2) {
     if (!h1 || !h2 || h1.length !== h2.length) return 999;
-    // Fast path: BigInt XOR then popcount
     const b1 = dhashToBigInt(h1);
     const b2 = dhashToBigInt(h2);
     if (b1 !== null && b2 !== null) {
@@ -47,13 +43,11 @@ function getHammingDistance(h1, h2) {
         while (xor > 0n) { diff += Number(xor & 1n); xor >>= 1n; }
         return diff;
     }
-    // Fallback: char by char
     let diff = 0;
     for (let i = 0; i < h1.length; i++) { if (h1[i] !== h2[i]) diff++; }
     return diff;
 }
 
-// Fix #7: rebuildConceptBank — incremental update ke functions bhi rakhe hain
 function rebuildConceptBank() {
     conceptBank = {};
     for (let id in hcaptchaTrained) {
@@ -71,10 +65,23 @@ function _addToConceptBank(tr) {
     });
 }
 
-function _removeFromConceptBank(tr) {
-    // Rebuild karna padega kyunki ek concept mein multiple trained entries hoti hain
-    // Sirf tab call karo jab delete/restore ho — warna incremental
-    rebuildConceptBank();
+// FIX #7: Incremental remove — sirf us conceptKey ki entries rebuild karo
+// Poora rebuild sirf tab jab ek concept mein multiple overlapping entries hoon
+function _removeFromConceptBankForTask(tr) {
+    if (!tr) { rebuildConceptBank(); return; }
+    let cKey = getCleanKey(tr);
+    // Is concept ki saari trained entries se fresh rebuild karo — sirf is concept ke liye
+    conceptBank[cKey] = new Set();
+    for (let id in hcaptchaTrained) {
+        let t = hcaptchaTrained[id];
+        if (getCleanKey(t) !== cKey) continue;
+        (t.clicks || []).forEach(idx => {
+            if (t.media && t.media[idx] && t.media[idx].dhash && t.media[idx].dhash !== "0000000000000000") {
+                conceptBank[cKey].add(t.media[idx].dhash);
+            }
+        });
+    }
+    if (conceptBank[cKey].size === 0) delete conceptBank[cKey];
 }
 
 function initDB() {
@@ -85,18 +92,16 @@ function initDB() {
             hcaptchaPending = {};
             hcaptchaTrained = data.trained || {};
 
-            // Fix #5: DB load pe bhi limit enforce karo
             const trainedKeys = Object.keys(hcaptchaTrained);
             if (trainedKeys.length > MAX_TRAINED) {
                 const toDelete = trainedKeys.slice(0, trainedKeys.length - MAX_TRAINED);
                 toDelete.forEach(k => delete hcaptchaTrained[k]);
-                console.log(`[DB] Trimmed ${toDelete.length} old trained entries to enforce limit`);
+                console.log(`[DB] Trimmed ${toDelete.length} old trained entries`);
             }
 
             rebuildConceptBank();
             console.log(`[DB] Engine Loaded. Trained: ${Object.keys(hcaptchaTrained).length} | Concepts: ${Object.keys(conceptBank).length}`);
         } catch (e) {
-            // Fix #13: silent catch nahi — log karo
             console.error("[DB] Error loading database:", e.message);
         }
     }
@@ -110,7 +115,6 @@ function persistDatabase() {
         try {
             fs.writeFileSync(DB_FILE, JSON.stringify({ trained: hcaptchaTrained }), 'utf8');
         } catch(err) {
-            // Fix #13: disk full / permission error — log karo silently ignore mat karo
             console.error('[DB] PERSIST ERROR:', err.message);
         }
     }, 1000);
@@ -142,7 +146,7 @@ function evaluateAutoSolve(task) {
             hcaptchaTrained[task.taskId] = {
                 id: task.taskId,
                 prompt: task.prompt,
-                refHash: task.refHash,
+                refHash: task.refHash || "",
                 media: lightMedia,
                 clicks: matchedClicks,
                 trainedAt: new Date().toISOString()
@@ -162,23 +166,22 @@ app.post('/api/new-hcaptcha', (req, res) => {
     const task = req.body;
     if (!task || !task.taskId) return res.json({ success: false, error: 'Missing taskId' });
 
-    // evaluateAutoSolve — exact match + dhash concept matching dono
     let autoRes = evaluateAutoSolve(task);
     if (autoRes.solved) {
         persistDatabase();
-        // clicks bhi bhejo — extension ko dobara check-hcaptcha nahi karni padegi
         return res.json({ success: true, autoSolved: true, clicks: autoRes.clicks });
     }
 
-    // Pending limit
     const keys = Object.keys(hcaptchaPending);
     if (keys.length >= MAX_PENDING) {
         keys.slice(0, 10).forEach(k => delete hcaptchaPending[k]);
     }
 
+    // FIX #2: refHash bhi save karo pending mein
     hcaptchaPending[task.taskId] = {
         id: task.taskId,
         prompt: task.prompt,
+        refHash: task.refHash || "",
         media: task.media,
         timestamp: task.timestamp
     };
@@ -226,13 +229,13 @@ app.post('/api/submit-hcaptcha', (req, res) => {
         hcaptchaTrained[taskId] = {
             id: taskId,
             prompt: source.prompt,
+            refHash: source.refHash || "",
             conceptKey: getCleanKey(source),
             media: lightMedia,
             clicks: clicks || [],
             trainedAt: new Date().toISOString()
         };
 
-        // Fix #5: Trained limit enforce karo
         const trainedKeys = Object.keys(hcaptchaTrained);
         if (trainedKeys.length > MAX_TRAINED) {
             const oldest = trainedKeys.slice(0, trainedKeys.length - MAX_TRAINED);
@@ -246,20 +249,24 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     res.json({ success: true });
 });
 
-// Trained → Pending wapas
+// FIX #13: Restore — conceptBank properly update karo, phir pending mein daalo
 app.post('/api/restore-hcaptcha', (req, res) => {
     const { taskId } = req.body;
     if (!taskId) return res.json({ success: false, error: 'Missing taskId' });
 
     if (hcaptchaTrained[taskId]) {
+        let tr = hcaptchaTrained[taskId];
         hcaptchaPending[taskId] = {
-            ...hcaptchaTrained[taskId],
+            id: tr.id,
+            prompt: tr.prompt,
+            refHash: tr.refHash || "",
+            media: tr.media,
             clicks: [],
             restoredAt: new Date().toISOString()
         };
         delete hcaptchaTrained[taskId];
-        // Fix #7: Incremental — poora rebuild sirf delete pe
-        _removeFromConceptBank(null); // internally rebuild
+        // FIX #7: Sirf is task ki concept rebuild karo — poori rebuild nahi
+        _removeFromConceptBankForTask(tr);
         persistDatabase();
         console.log(`[RESTORE] #${taskId} wapas pending mein`);
     }
@@ -267,14 +274,17 @@ app.post('/api/restore-hcaptcha', (req, res) => {
 });
 
 app.delete('/api/delete-hcaptcha/:id', (req, res) => {
+    let tr = hcaptchaTrained[req.params.id];
+    let pe = hcaptchaPending[req.params.id];
     delete hcaptchaPending[req.params.id];
     delete hcaptchaTrained[req.params.id];
-    _removeFromConceptBank(null); // rebuild
+    // FIX #7: Incremental remove
+    if (tr) _removeFromConceptBankForTask(tr);
+    else if (pe) _removeFromConceptBankForTask(pe);
     persistDatabase();
     res.json({ success: true });
 });
 
-// Health check endpoint
 app.get('/api/health', (req, res) => {
     res.json({
         status: 'ok',
@@ -284,7 +294,6 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// Dashboard serve karo
 app.get('/', (req, res) => {
     let f = path.join(__dirname, 'hcaptcha-dashboard.html');
     if (fs.existsSync(f)) res.sendFile(f);
