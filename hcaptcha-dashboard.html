@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>hCaptcha Master - AI Edition</title>
-    <!-- TF Models — page load hote hi -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -39,7 +38,6 @@
         .img-grid img[src=""], .img-grid img:not([src]) { background: linear-gradient(90deg,#1a1a1a 25%,#2d2d2d 50%,#1a1a1a 75%); background-size:200% 100%; animation:shimmer 1.2s infinite; }
         .img-grid img.selected { border-color: #00ff88; opacity: 0.7; }
         .img-grid img.ai-pick { border-color: #ff00ff; }
-        /* Trained grid */
         .trained-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
         .trained-grid img { width: 100%; height: 90px; object-fit: cover; border: 3px solid #333; background: #222; }
         .trained-grid img.was-clicked { border-color: #00ff88; }
@@ -80,7 +78,6 @@
 <div class="grid-container" id="tasksArea"></div>
 
 <script>
-// Auto-detect: server pe deploy ho to same origin, local file ho to hardcoded
 const SERVER_URL = location.protocol === 'file:'
     ? (localStorage.getItem('hcm_server') || "https://hcaptcha-solver-production.up.railway.app")
     : location.origin;
@@ -91,16 +88,39 @@ let ghostBlocker = new Set();
 let isFetching = false;
 
 // ==========================================
+// FIX #1 (scope): _safeUrl — top-level define karo, buildCard se pehle
+// ==========================================
+function _safeUrl(u) {
+    if (!u) return '';
+    if (u.startsWith('data:image/') || /^https?:\/\//.test(u))
+        return u.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return '';
+}
+
+// FIX #12 (XSS): prompt text ko sanitize karo — innerHTML mein seedha mat daalo
+function _escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+// ==========================================
 // AI
 // ==========================================
 let isAIReady = false, aiModel, knn;
 let autoTrainEnabled = false, autoSaveEnabled = false;
 let retrainState = {};
 
+// FIX #9: KNN max examples cap — unbounded growth rokne ke liye
+const KNN_MAX_EXAMPLES_PER_CLASS = 200;
+
 async function initAI() {
     syncStatus.innerHTML = "🧠 AI Loading...";
     try {
-        // Wait karo jab tak scripts load hon
         await new Promise(r => setTimeout(r, 500));
         aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
         knn = knnClassifier.create();
@@ -116,7 +136,7 @@ async function initAI() {
     }
 }
 
-// KNN IndexedDB helpers — no 5MB limit
+// KNN IndexedDB helpers
 const IDB = { name:'hcm_knn', store:'knn', key:'model_v3' };
 function idbOpen() {
     return new Promise((res,rej)=>{
@@ -151,7 +171,6 @@ async function saveKNN() {
         let ser = {};
         for (let k in ds) { ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape }; }
         await idbSet(ser);
-        // localStorage bhi try karo (chhota data ho to)
         try { localStorage.setItem('hcaptcha_knn_v3', JSON.stringify(ser)); } catch(e) {}
         let concepts = Object.keys(ser).filter(k => !k.startsWith('negative_')).length;
         syncStatus.innerHTML = `🤖 AI Ready ✅ (${concepts} concepts)`;
@@ -160,7 +179,6 @@ async function saveKNN() {
 
 async function loadKNN() {
     try {
-        // Pehle IndexedDB — phir localStorage fallback
         let ser = await idbGet();
         if (!ser) {
             let ls = localStorage.getItem('hcaptcha_knn_v3');
@@ -175,21 +193,14 @@ async function loadKNN() {
     } catch(e) { console.error("KNN load error:", e); }
 }
 
-// Toggle buttons
 function toggleAutoTrain() {
     autoTrainEnabled = !autoTrainEnabled;
     let btn = document.getElementById('btnAutoTrain');
     btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
     btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
-    
     if (autoTrainEnabled) {
-        if (isAIReady) {
-            reEvaluatePending();
-        } else {
-            // ✅ Ab TF load karo
-            syncStatus.innerHTML = "🧠 AI Loading...";
-            loadTFScripts(() => initAI());
-        }
+        if (isAIReady) { reEvaluatePending(); }
+        else { syncStatus.innerHTML = "🧠 AI Loading..."; loadTFScripts(() => initAI()); }
     }
 }
 
@@ -218,21 +229,37 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
-// Train KNN — sahi clicks positive, galat negative
+// FIX #9: KNN example count cap — zyada ho to purane half examples discard karo
+function pruneKNNClass(label) {
+    if (!knn) return;
+    try {
+        let ds = knn.getClassifierDataset();
+        if (!ds[label]) return;
+        let tensor = ds[label];
+        let count = tensor.shape[0];
+        if (count <= KNN_MAX_EXAMPLES_PER_CLASS) return;
+        // Purane half rakho — naye important hain
+        let keep = Math.floor(KNN_MAX_EXAMPLES_PER_CLASS * 0.6);
+        let sliced = tensor.slice([count - keep, 0], [keep, tensor.shape[1]]);
+        let newDs = { ...ds, [label]: sliced };
+        knn.setClassifierDataset(newDs);
+        console.log(`[KNN] Pruned class "${label}": ${count} → ${keep}`);
+    } catch(e) { console.error("[KNN] Prune error:", e); }
+}
+
 async function trainAIBrain(task, wrongIndices = []) {
     if (!isAIReady || task.type !== 'grid' || !task.media) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let negLabel = 'negative_' + pText;
 
     for (let m of task.media) {
-        // ✅ FIXED: thumb use karo — src expire ho jata hai
         let imgSrc = m.thumb || m.src;
         if (!imgSrc) continue;
         try {
             let img = new Image();
             if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
             img.src = imgSrc;
-            await new Promise((res, rej) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 3000); });
+            await new Promise((res) => { img.onload = res; img.onerror = res; setTimeout(res, 3000); });
             if (!img.complete || img.naturalWidth === 0) continue;
             let tfImg = tf.browser.fromPixels(img);
             let features = aiModel.infer(tfImg, true);
@@ -241,23 +268,28 @@ async function trainAIBrain(task, wrongIndices = []) {
 
             if (isCorrect) {
                 knn.addExample(features, pText);
-                knn.addExample(features, pText); // 2x weight
+                knn.addExample(features, pText);
             } else if (isWrong) {
                 knn.addExample(features, negLabel);
-                knn.addExample(features, negLabel); // 2x weight galat ke liye
+                knn.addExample(features, negLabel);
                 knn.addExample(features, negLabel);
             } else {
                 knn.addExample(features, negLabel);
             }
             tfImg.dispose();
+            features.dispose();
         } catch(e) {}
     }
+
+    // FIX #9: Train ke baad prune karo agar cap exceed ho
+    pruneKNNClass(pText);
+    pruneKNNClass(negLabel);
+
     saveKNN();
     console.log(`🧠 Trained: [${pText}] clicks:${task.clicks} wrong:${wrongIndices}`);
     if (autoTrainEnabled) reEvaluatePending();
 }
 
-// Predict — 85% confidence
 async function predictWithAI(task) {
     if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media || task.clicks.length > 0) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
@@ -266,14 +298,13 @@ async function predictWithAI(task) {
 
     let predictedClicks = [];
     for (let m of task.media) {
-        // ✅ FIXED: thumb use karo
         let imgSrc = m.thumb || m.src;
         if (!imgSrc) continue;
         try {
             let img = new Image();
             if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
             img.src = imgSrc;
-            await new Promise((res, rej) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 3000); });
+            await new Promise((res) => { img.onload = res; img.onerror = res; setTimeout(res, 3000); });
             if (!img.complete || img.naturalWidth === 0) continue;
             let tfImg = tf.browser.fromPixels(img);
             let features = aiModel.infer(tfImg, true);
@@ -284,6 +315,7 @@ async function predictWithAI(task) {
                 predictedClicks.push(m.index);
             }
             tfImg.dispose();
+            features.dispose();
         } catch(e) {}
     }
 
@@ -296,7 +328,6 @@ async function predictWithAI(task) {
                 let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
                 if (imgEl) { imgEl.classList.remove('selected'); imgEl.classList.add('ai-pick'); }
             });
-            // Auto Save ON hone par save karo
             if (autoSaveEnabled) {
                 let btn = card.querySelector('.btn-save');
                 if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Auto-Saving...'; }
@@ -323,10 +354,7 @@ function startRetrain(taskId) {
     if (!t) return;
     let card = document.querySelector(`.task-card[data-id="${taskId}"]`);
     if (!card) return;
-
     retrainState[taskId] = { oldClicks: [...(t.clicks || [])], newClicks: [] };
-
-    // Images clickable banao
     card.querySelectorAll('.trained-grid img').forEach(img => {
         img.classList.add('retrain-pick');
         img.onclick = () => {
@@ -341,14 +369,10 @@ function startRetrain(taskId) {
             }
         };
     });
-
-    // Hint + buttons
     let hint = document.createElement('div');
-    hint.className = 'retrain-hint';
-    hint.id = `hint-${taskId}`;
+    hint.className = 'retrain-hint'; hint.id = `hint-${taskId}`;
     hint.textContent = '🟠 Sahi images click karo → Confirm Retrain dabao';
     card.querySelector('.actions').before(hint);
-
     let actions = card.querySelector('.actions');
     actions.innerHTML = `
         <button class="btn btn-confirm" onclick="confirmRetrain('${taskId}')">✅ Confirm</button>
@@ -359,29 +383,18 @@ async function confirmRetrain(taskId) {
     let t = activeTasksStore[taskId];
     let state = retrainState[taskId];
     if (!t || !state) return;
-
     let wrongClicks = (state.oldClicks || []).filter(idx => !state.newClicks.includes(idx));
     t.clicks = state.newClicks;
-
     let card = document.querySelector(`.task-card[data-id="${taskId}"]`);
-    if (card) {
-        let hint = card.querySelector(`#hint-${taskId}`);
-        if (hint) hint.textContent = '🧠 AI seekh raha hai...';
-    }
-
+    if (card) { let hint = card.querySelector(`#hint-${taskId}`); if (hint) hint.textContent = '🧠 AI seekh raha hai...'; }
     await trainAIBrain(t, wrongClicks);
-
     await fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taskId, clicks: state.newClicks })
     }).catch(e => {});
-
     delete retrainState[taskId];
-
     if (card) {
-        let hint = card.querySelector(`#hint-${taskId}`);
-        if (hint) hint.remove();
+        let hint = card.querySelector(`#hint-${taskId}`); if (hint) hint.remove();
         let actions = card.querySelector('.actions');
         actions.innerHTML = `
             <button class="btn btn-save">Update</button>
@@ -395,12 +408,8 @@ function cancelRetrain(taskId) {
     delete retrainState[taskId];
     let card = document.querySelector(`.task-card[data-id="${taskId}"]`);
     if (!card) return;
-    let hint = card.querySelector(`#hint-${taskId}`);
-    if (hint) hint.remove();
-    card.querySelectorAll('.trained-grid img').forEach(img => {
-        img.classList.remove('retrain-pick');
-        img.onclick = null;
-    });
+    let hint = card.querySelector(`#hint-${taskId}`); if (hint) hint.remove();
+    card.querySelectorAll('.trained-grid img').forEach(img => { img.classList.remove('retrain-pick'); img.onclick = null; });
     let actions = card.querySelector('.actions');
     actions.innerHTML = `
         <button class="btn btn-save">Update</button>
@@ -413,7 +422,7 @@ function cancelRetrain(taskId) {
 // ==========================================
 function setTab(tab) {
     currentTab = tab;
-    trainedPage = 0; // ✅ Page reset
+    trainedPage = 0;
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.getElementById('btn-' + tab).classList.add('active');
     document.getElementById('searchInput').value = '';
@@ -429,7 +438,8 @@ function filterTasks() {
 }
 
 // ==========================================
-// FETCH
+// FIX #5: FETCH — rate 800ms → 2500ms
+// Pending tab fast, Trained tab slow (data rarely changes)
 // ==========================================
 let _fetchTimer = null;
 
@@ -448,8 +458,18 @@ async function fetchTasks() {
     isFetching = false;
 }
 
-function startFetch() { if (!_fetchTimer) _fetchTimer = setInterval(fetchTasks, 800); fetchTasks(); }
+function startFetch() {
+    if (_fetchTimer) return;
+    // FIX #5: Pending tab 2s, Trained tab 5s — 800ms se zyada efficient
+    let interval = currentTab === 'pending' ? 2000 : 5000;
+    _fetchTimer = setInterval(fetchTasks, interval);
+    fetchTasks();
+}
 function stopFetch()  { if (_fetchTimer) { clearInterval(_fetchTimer); _fetchTimer = null; } }
+
+// Tab change pe fetch rate update karo
+function restartFetch() { stopFetch(); startFetch(); }
+
 document.addEventListener('visibilitychange', () => document.hidden ? stopFetch() : startFetch());
 
 // ==========================================
@@ -460,24 +480,19 @@ const TRAINED_PAGE_SIZE = 20;
 
 function renderCurrentData() {
     let activeData = currentTab === 'pending' ? serverData.pending : serverData.trained;
-    let taskNum = 1; // Sequential number
 
     document.querySelectorAll('.task-card').forEach(card => {
         let id = card.dataset.id;
         if (!activeData[id] || ghostBlocker.has(id)) { card.remove(); delete activeTasksStore[id]; }
     });
 
-    // Load More button hata do — fresh render karega
     let oldBtn = document.getElementById('loadMoreBtn');
     if (oldBtn) oldBtn.remove();
 
     let frag = document.createDocumentFragment();
-
-    // ✅ Trained tab mein naye tasks upar + pagination
     let ids = Object.keys(activeData);
     if (currentTab === 'trained') {
         ids = ids.reverse();
-        // Sirf pehle PAGE_SIZE dikha
         let toShow = ids.slice(0, (trainedPage + 1) * TRAINED_PAGE_SIZE);
         for (let id of toShow) {
             if (ghostBlocker.has(id) || activeTasksStore[id]) continue;
@@ -490,7 +505,6 @@ function renderCurrentData() {
             if (card) frag.appendChild(card);
         }
         tasksArea.appendChild(frag);
-        // Load More button
         if (ids.length > (trainedPage + 1) * TRAINED_PAGE_SIZE) {
             let btn = document.createElement('button');
             btn.id = 'loadMoreBtn';
@@ -500,7 +514,6 @@ function renderCurrentData() {
             tasksArea.appendChild(btn);
         }
     } else {
-        // Pending — sab dikha
         for (let id of ids) {
             if (ghostBlocker.has(id) || activeTasksStore[id]) continue;
             let td = activeData[id];
@@ -510,29 +523,28 @@ function renderCurrentData() {
             activeTasksStore[id] = { id, clicks, type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
             let card = buildCard(activeTasksStore[id]);
             if (card) frag.appendChild(card);
-            if (isAIReady && autoTrainEnabled && isGrid) {
-                predictWithAI(activeTasksStore[id]);
-            }
+            if (isAIReady && autoTrainEnabled && isGrid) predictWithAI(activeTasksStore[id]);
         }
         tasksArea.appendChild(frag);
     }
     filterTasks();
 }
 
+// ==========================================
+// BUILD CARD
+// FIX #1: _safeUrl — ab top-level function hai (scope issue theek)
+// FIX #12: prompt text — _escapeHtml se sanitize, innerHTML mein safe
+// ==========================================
 function buildCard(t) {
     let card = document.createElement('div');
     card.className = 'task-card'; card.dataset.id = t.id;
     let isPending = currentTab === 'pending';
 
     let parts = t.prompt.split('|||');
-    // XSS fix: sirf https:// ya data:image/ allow karo
-function _safeUrl(u) {
-    if (!u) return '';
-    if (u.startsWith('data:image/') || /^https?:\/\//.test(u))
-        return u.replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    return '';
-}
-let exHtml = parts[1] ? `<img src="${_safeUrl(parts[1])}" class="example-img" loading="lazy" onerror="this.style.display='none'">` : '';
+
+    // FIX #12: XSS — prompt ko escape karo, seedha innerHTML mein mat daalo
+    let safePromptText = _escapeHtml(parts[0]);
+    let exHtml = parts[1] ? `<img src="${_safeUrl(parts[1])}" class="example-img" loading="lazy" onerror="this.style.display='none'">` : '';
 
     let isMediaMissing = t.media.length === 0 || t.media.every(m => !m.thumb && !m.src && !m.frames);
     let mediaHTML = '';
@@ -543,18 +555,15 @@ let exHtml = parts[1] ? `<img src="${_safeUrl(parts[1])}" class="example-img" lo
         if (isPending) {
             mediaHTML = '<div class="img-grid">';
             t.media.forEach(m => {
-                // ✅ thumb pehle, phir src
-                let src = m.thumb || m.src || '';
+                let src = _safeUrl(m.thumb || m.src || '');
                 mediaHTML += `<img src="${src}" class="g-img ${t.clicks.includes(m.index)?'selected':''}" data-index="${m.index}" draggable="false" loading="lazy" onerror="this.style.opacity='0.3'"/>`;
             });
             mediaHTML += '</div>';
         } else {
-            // ✅ Trained tab — images dikhao + green/dim highlight
             mediaHTML = '<div class="trained-grid">';
             t.media.forEach(m => {
                 let wasClicked = t.clicks.includes(m.index);
-                // ✅ thumb pehle
-                let src = m.thumb || m.src || '';
+                let src = _safeUrl(m.thumb || m.src || '');
                 mediaHTML += `<img src="${src}" class="${wasClicked?'was-clicked':''}" data-index="${m.index}" loading="lazy" onerror="this.style.opacity='0.2'" title="${wasClicked?'✅ Clicked':'❌ Not clicked'}"/>`;
             });
             mediaHTML += '</div>';
@@ -562,7 +571,7 @@ let exHtml = parts[1] ? `<img src="${_safeUrl(parts[1])}" class="example-img" lo
     } else {
         let m = t.media[0];
         let isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
-        let src = isVid ? m.frames[0] : (m.src || '');
+        let src = _safeUrl(isVid ? m.frames[0] : (m.src || ''));
         mediaHTML = `<div class="single-box"><img src="${src}" class="s-img ${isVid?'vid-player':''}" data-id="${t.id}" draggable="false" loading="lazy"/>`;
         t.clicks.forEach(pt => { mediaHTML += `<div class="dot" style="left:${pt.px}%;top:${pt.py}%;"></div>`; });
         mediaHTML += '</div>';
@@ -584,10 +593,10 @@ let exHtml = parts[1] ? `<img src="${_safeUrl(parts[1])}" class="example-img" lo
 
     card.innerHTML = `
         <div class="task-head">
-            <span class="task-id">${t.num ? `<span style="color:#888;font-size:12px">#${t.num}</span> ` : ''}#${t.id.substring(0,6)}</span>
+            <span class="task-id">#${t.id.substring(0,10)}</span>
             ${!isPending ? `<span style="font-size:11px;color:#666">${t.clicks.length} clicks</span>` : ''}
         </div>
-        <div class="prompt-container">${exHtml}<div class="task-prompt">${parts[0]}</div></div>
+        <div class="prompt-container">${exHtml}<div class="task-prompt">${safePromptText}</div></div>
         ${mediaHTML}
         <div class="actions">${actionsHtml}</div>`;
     return card;
@@ -636,21 +645,19 @@ tasksArea.addEventListener('click', (e) => {
         card.querySelectorAll('.dot').forEach(d => d.remove());
         card.classList.remove('ai-processing');
     } else if (e.target.classList.contains('btn-del')) {
-        // ✅ Turant UI se hatao — server async
         card.style.opacity = '0.3';
         card.style.pointerEvents = 'none';
         ghostBlocker.add(tid);
         card.remove();
         delete activeTasksStore[tid];
-        fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method:'DELETE' })
-            .catch(e => {});
+        fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method:'DELETE' }).catch(e => {});
     }
 });
 
 const _saving = new Set();
 
 async function sendToServer(taskId, btnEl, card) {
-    if (_saving.has(taskId)) return; // race condition guard
+    if (_saving.has(taskId)) return;
     _saving.add(taskId);
     let t = activeTasksStore[taskId];
     if (!t) { _saving.delete(taskId); return; }
