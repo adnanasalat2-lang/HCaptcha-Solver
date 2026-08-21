@@ -43,7 +43,17 @@
         .trained-grid img.was-clicked { border-color: #00ff88; }
         .trained-grid img.retrain-pick { border-color: #ff8800; cursor: pointer; }
         .single-box { position: relative; width: 100%; cursor: crosshair; }
-        .single-box img { width: 100%; min-height: 250px; object-fit: contain; border: 2px solid #444; border-radius: 4px; background: #222; }
+        .single-box img { width: 100%; min-height: 320px; object-fit: contain; border: 2px solid #444; border-radius: 4px; background: #222; }
+        .video-toolbar { display: flex; justify-content: space-between; align-items: center; margin-top: 4px; margin-bottom: 3px; }
+        .video-toolbar span { font-size: 11px; color: #888; }
+        .btn-popout { padding: 3px 10px; background: #333; color: #00ff88; border: 1px solid #00ff88; border-radius: 3px; cursor: pointer; font-size: 11px; font-weight: bold; }
+        .btn-popout:hover { background: #00ff88; color: #000; }
+        .frame-strip { display: flex; gap: 3px; overflow-x: auto; padding: 4px 0 2px; scrollbar-width: thin; scrollbar-color: #444 #1a1a1a; }
+        .frame-strip::-webkit-scrollbar { height: 4px; }
+        .frame-strip::-webkit-scrollbar-thumb { background: #444; border-radius: 2px; }
+        .frame-strip img { height: 58px; min-width: 40px; max-width: 100px; object-fit: cover; border: 2px solid #333; border-radius: 3px; cursor: pointer; flex-shrink: 0; transition: border-color 0.15s; }
+        .frame-strip img:hover { border-color: #888; }
+        .frame-strip img.fs-active { border-color: #00ff88; }
         .dot { position: absolute; width: 18px; height: 18px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
         .missing-media { background: #111; color: #888; padding: 20px 10px; text-align: center; border-radius: 4px; border: 1px dashed #444; font-size: 13px; line-height: 1.6; }
         .missing-media span { color: #00ff88; font-weight: bold; }
@@ -575,7 +585,25 @@ function buildCard(t) {
         mediaHTML = `<div class="single-box"><img src="${src}" class="s-img ${isVid?'vid-player':''}" data-id="${t.id}" draggable="false" loading="lazy"/>`;
         t.clicks.forEach(pt => { mediaHTML += `<div class="dot" style="left:${pt.px}%;top:${pt.py}%;"></div>`; });
         mediaHTML += '</div>';
-        if (isVid) videoTasks.push({ id: t.id, frames: m.frames, current: 0 });
+        // FIX #video-size: filmstrip + popout button video tasks ke liye
+        if (isVid && m.frames && m.frames.length > 0) {
+            videoTasks.push({ id: t.id, frames: m.frames, current: 0 });
+            mediaHTML += `<div class="video-toolbar">
+                <span>🎞️ ${m.frames.length} frames — click karo frame fix karne ke liye</span>
+                <button class="btn-popout" data-popout-id="${t.id}">🔍 Bada Karo</button>
+            </div>
+            <div class="frame-strip" data-strip-id="${t.id}">`;
+            m.frames.forEach((fr, fi) => {
+                let fsrc = _safeUrl(fr);
+                mediaHTML += `<img src="${fsrc}" class="frame-thumb${fi===0?' fs-active':''}" data-fidx="${fi}" data-strip-for="${t.id}" loading="lazy"/>`;
+            });
+            mediaHTML += '</div>';
+        } else if (!isVid) {
+            // Non-video single image: popout hi kafi hai
+            mediaHTML += `<div class="video-toolbar" style="justify-content:flex-end;">
+                <button class="btn-popout" data-popout-id="${t.id}">🔍 Bada Karo</button>
+            </div>`;
+        }
     }
 
     let actionsHtml = '';
@@ -608,9 +636,28 @@ function buildCard(t) {
 setInterval(() => {
     videoTasks.forEach(vt => {
         let el = document.querySelector(`.vid-player[data-id="${vt.id}"]`);
-        if (el && vt.frames?.length > 0) { vt.current=(vt.current+1)%vt.frames.length; el.src=vt.frames[vt.current]; }
+        if (!el || !vt.frames?.length) return;
+        // FIX #video-size: agar frame frozen hai (user ne filmstrip click kiya) to animate mat karo
+        if (vt._frozen !== undefined) return;
+        vt.current = (vt.current + 1) % vt.frames.length;
+        el.src = _safeUrl(vt.frames[vt.current]);
+        // Filmstrip mein active highlight update karo
+        let strip = document.querySelector(`.frame-strip[data-strip-id="${vt.id}"]`);
+        if (strip) {
+            strip.querySelectorAll('.frame-thumb').forEach((f, i) => {
+                f.classList.toggle('fs-active', i === vt.current);
+            });
+        }
     });
 }, 400);
+
+// Kisi bhi s-img pe click hone par freeze toot jaye (point/drag click ke baad resume)
+document.addEventListener('click', e => {
+    if (!e.target.classList.contains('s-img')) return;
+    let dataId = e.target.dataset.id;
+    let vt = videoTasks.find(v => v.id === dataId);
+    if (vt) delete vt._frozen; // resume animation
+});
 
 // ==========================================
 // CLICK HANDLERS
@@ -651,6 +698,31 @@ tasksArea.addEventListener('click', (e) => {
         card.remove();
         delete activeTasksStore[tid];
         fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method:'DELETE' }).catch(e => {});
+    } else if (e.target.classList.contains('frame-thumb')) {
+        // FIX #video-size: filmstrip frame click — main video us frame pe rok do
+        let fidx = parseInt(e.target.dataset.fidx);
+        let stripId = e.target.dataset.stripFor;
+        let vt = videoTasks.find(v => v.id === stripId);
+        if (vt && vt.frames && vt.frames[fidx]) {
+            let mainImg = card.querySelector(`.vid-player[data-id="${stripId}"]`);
+            if (mainImg) mainImg.src = _safeUrl(vt.frames[fidx]);
+            // active highlight
+            card.querySelectorAll('.frame-thumb').forEach(f => f.classList.remove('fs-active'));
+            e.target.classList.add('fs-active');
+            // Animation ko is frame pe rok do jab tak koi doosra click na ho
+            vt._frozen = fidx;
+        }
+    } else if (e.target.classList.contains('btn-popout')) {
+        // FIX #video-size: main image / current frame nayi tab mein bada karo
+        let popId = e.target.dataset.popoutId;
+        let mainImg = card.querySelector(`.s-img[data-id="${popId}"]`);
+        if (mainImg && mainImg.src) {
+            let w = window.open('', '_blank');
+            w.document.write(`<html><body style="margin:0;background:#111;display:flex;align-items:center;justify-content:center;min-height:100vh;">
+                <img src="${mainImg.src.replace(/"/g,'&quot;')}" style="max-width:100%;max-height:100vh;object-fit:contain;">
+                </body></html>`);
+            w.document.close();
+        }
     }
 });
 
