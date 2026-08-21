@@ -27,7 +27,6 @@
         .search-box input::placeholder { color: #666; font-weight: normal; }
         .grid-container { display: flex; flex-wrap: wrap; gap: 15px; align-items: flex-start; }
         
-        /* FIX 1: Task Card ko bada aur flexible banaya gaya hai */
         .task-card { background: #1e1e1e; min-width: 480px; flex: 1; max-width: 650px; padding: 15px; border: 1px solid #333; border-radius: 6px; }
         .task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 10px rgba(255,0,255,0.4); }
         .task-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
@@ -36,7 +35,6 @@
         .example-img { width: 55px; height: 55px; object-fit: contain; border-radius: 4px; background: #222; border: 1px solid #555; }
         .task-prompt { color: #fff; font-size: 14px; font-weight: bold; margin: 0; line-height: 1.4; flex: 1; }
         
-        /* Grid Images Styling */
         .img-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
         .img-grid img { width: 100%; height: 140px; object-fit: cover; cursor: pointer; border: 4px solid transparent; background: #222; transition: opacity 0.3s; }
         @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
@@ -49,7 +47,6 @@
         .trained-grid img.was-clicked { border-color: #00ff88; }
         .trained-grid img.retrain-pick { border-color: #ff8800; cursor: pointer; }
         
-        /* FIX 2: Video/Single Task ko proper aspect ratio aur height di gayi hai */
         .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; background: #000; border-radius: 4px; border: 2px solid #444; overflow: hidden; }
         .single-box img { width: 100%; height: auto; min-height: 450px; max-height: 600px; object-fit: contain; display: block; }
         
@@ -57,7 +54,6 @@
         .missing-media { background: #111; color: #888; padding: 20px 10px; text-align: center; border-radius: 4px; border: 1px dashed #444; font-size: 13px; line-height: 1.6; }
         .missing-media span { color: #00ff88; font-weight: bold; }
         
-        /* Action Buttons */
         .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
         .btn { flex: 1; padding: 12px; border: none; font-weight: bold; cursor: pointer; color: #fff; font-size: 14px; border-radius: 4px; }
         .btn-save { background: #00ff88; color: #000; }
@@ -469,12 +465,13 @@ function buildCard(t) {
     return card;
 }
 
+// FIX: Yahan 400 ki jagah 200 kar diya gaya hai taake video apni natural speed mein play ho
 setInterval(() => {
     videoTasks.forEach(vt => {
         let el = document.querySelector(`.vid-player[data-id="${vt.id}"]`);
         if (el && vt.frames?.length > 0) { vt.current=(vt.current+1)%vt.frames.length; el.src=vt.frames[vt.current]; }
     });
-}, 400);
+}, 200); 
 
 tasksArea.addEventListener('click', (e) => {
     let card = e.target.closest('.task-card'); if (!card) return;
