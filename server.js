@@ -58,11 +58,22 @@ function rebuildConceptBank() {
 function _addToConceptBank(tr) {
     let cKey = getCleanKey(tr);
     if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
-    (tr.clicks || []).forEach(idx => {
-        if (tr.media && tr.media[idx] && tr.media[idx].dhash && tr.media[idx].dhash !== "0000000000000000") {
-            conceptBank[cKey].add(tr.media[idx].dhash);
-        }
-    });
+    if (!tr.media || tr.media.length === 0) return;
+
+    if (tr.media.length === 1) {
+        // Single-media task (canvas / point click / drag): sirf ek item hai — uska dhash daalo
+        // Clicks yahan coordinate objects hain ({px,py}), index nahi — isliye tr.media[idx] kaam nahi karta tha
+        let d = tr.media[0].dhash;
+        if (d && d !== "0000000000000000") conceptBank[cKey].add(d);
+    } else {
+        // Grid task: sirf clicked images ke dhash daalo
+        (tr.clicks || []).forEach(idx => {
+            if (typeof idx !== 'number') return; // coordinate objects skip karo
+            if (tr.media[idx] && tr.media[idx].dhash && tr.media[idx].dhash !== "0000000000000000") {
+                conceptBank[cKey].add(tr.media[idx].dhash);
+            }
+        });
+    }
 }
 
 // FIX #7: Incremental remove — sirf us conceptKey ki entries rebuild karo
@@ -127,34 +138,62 @@ function evaluateAutoSolve(task) {
 
     let cKey = getCleanKey(task);
     let targetDhashes = conceptBank[cKey];
+    if (!targetDhashes || targetDhashes.size === 0 || !task.media || task.media.length === 0) {
+        return { solved: false };
+    }
 
-    if (targetDhashes && targetDhashes.size > 0 && task.media && task.media.length > 1) {
-        let matchedClicks = [];
-
-        task.media.forEach((item, idx) => {
-            if (!item.dhash || item.dhash === "0000000000000000") return;
+    // ── SINGLE-MEDIA TASKS (canvas / point click / drag & drop) ───────────
+    // media.length === 1 → clicks coordinate objects hain, index nahi
+    // Matching task ko conceptBank se dhundho, phir uske actual coordinate clicks return karo
+    if (task.media.length === 1) {
+        let itemDhash = task.media[0].dhash;
+        if (itemDhash && itemDhash !== "0000000000000000") {
             for (let savedHash of targetDhashes) {
-                if (getHammingDistance(item.dhash, savedHash) <= 3) {
-                    matchedClicks.push(idx);
-                    break;
+                if (getHammingDistance(itemDhash, savedHash) <= 3) {
+                    // Matching trained task dhundho — uske original coordinate clicks chahiye
+                    for (let id in hcaptchaTrained) {
+                        let tr = hcaptchaTrained[id];
+                        if (getCleanKey(tr) !== cKey) continue;
+                        if (!tr.media || !tr.media[0]) continue;
+                        if (getHammingDistance(tr.media[0].dhash || "", itemDhash) <= 3) {
+                            if (tr.clicks && tr.clicks.length > 0) {
+                                console.log(`[AutoSolve] Single-media match → taskId: ${id}`);
+                                return { solved: true, clicks: tr.clicks };
+                            }
+                        }
+                    }
                 }
             }
-        });
-
-        if (matchedClicks.length >= 1 && matchedClicks.length <= 5) {
-            let lightMedia = task.media.map(m => ({ dhash: m.dhash, type: m.type, index: m.index }));
-            hcaptchaTrained[task.taskId] = {
-                id: task.taskId,
-                prompt: task.prompt,
-                refHash: task.refHash || "",
-                media: lightMedia,
-                clicks: matchedClicks,
-                trainedAt: new Date().toISOString()
-            };
-            _addToConceptBank(hcaptchaTrained[task.taskId]);
-            return { solved: true, clicks: matchedClicks };
         }
+        return { solved: false };
     }
+
+    // ── GRID TASKS (multiple images) ──────────────────────────────────────
+    let matchedClicks = [];
+    task.media.forEach((item, idx) => {
+        if (!item.dhash || item.dhash === "0000000000000000") return;
+        for (let savedHash of targetDhashes) {
+            if (getHammingDistance(item.dhash, savedHash) <= 3) {
+                matchedClicks.push(idx);
+                break;
+            }
+        }
+    });
+
+    if (matchedClicks.length >= 1 && matchedClicks.length <= 5) {
+        let lightMedia = task.media.map(m => ({ dhash: m.dhash, type: m.type, index: m.index }));
+        hcaptchaTrained[task.taskId] = {
+            id: task.taskId,
+            prompt: task.prompt,
+            refHash: task.refHash || "",
+            media: lightMedia,
+            clicks: matchedClicks,
+            trainedAt: new Date().toISOString()
+        };
+        _addToConceptBank(hcaptchaTrained[task.taskId]);
+        return { solved: true, clicks: matchedClicks };
+    }
+
     return { solved: false };
 }
 
@@ -220,11 +259,19 @@ app.post('/api/submit-hcaptcha', (req, res) => {
         let cKey = getCleanKey(source);
         if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
 
-        (clicks || []).forEach(idx => {
-            if (lightMedia[idx] && lightMedia[idx].dhash && lightMedia[idx].dhash !== "0000000000000000") {
-                conceptBank[cKey].add(lightMedia[idx].dhash);
-            }
-        });
+        if (lightMedia.length === 1) {
+            // Single-media task: clicks coordinate objects hain — sirf media[0] ka dhash daalo
+            let d = lightMedia[0].dhash;
+            if (d && d !== "0000000000000000") conceptBank[cKey].add(d);
+        } else {
+            // Grid task: clicked image indices se dhash daalo
+            (clicks || []).forEach(idx => {
+                if (typeof idx !== 'number') return;
+                if (lightMedia[idx] && lightMedia[idx].dhash && lightMedia[idx].dhash !== "0000000000000000") {
+                    conceptBank[cKey].add(lightMedia[idx].dhash);
+                }
+            });
+        }
 
         hcaptchaTrained[taskId] = {
             id: taskId,
