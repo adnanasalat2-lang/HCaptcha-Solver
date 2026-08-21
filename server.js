@@ -56,7 +56,6 @@ function _addToConceptBank(tr) {
     let cKey = getCleanKey(tr);
     if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
     (tr.clicks || []).forEach(idx => {
-        // Sirf index based clicks (grid) ke liye set me dalo
         if (typeof idx === 'number' && tr.media && tr.media[idx] && tr.media[idx].dhash && tr.media[idx].dhash !== "0000000000000000") {
             conceptBank[cKey].add(tr.media[idx].dhash);
         }
@@ -104,7 +103,7 @@ function persistDatabase() {
 }
 
 function evaluateAutoSolve(task) {
-    // 1. Exact Match Check
+    // 1. Exact Match Check (Now heavily relied upon since Task ID is deterministic)
     if (hcaptchaTrained[task.taskId]) {
         return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
     }
@@ -147,13 +146,14 @@ function evaluateAutoSolve(task) {
             for (let id in hcaptchaTrained) {
                 let tr = hcaptchaTrained[id];
                 if (tr.media && tr.media.length === 1 && getCleanKey(tr) === cKey) {
-                    if (getHammingDistance(item.dhash, tr.media[0].dhash) <= 3) {
+                    // FIX: Increased distance to 5 for video frame variations
+                    if (getHammingDistance(item.dhash, tr.media[0].dhash) <= 5) {
                         hcaptchaTrained[task.taskId] = {
                             id: task.taskId,
                             prompt: task.prompt,
                             refHash: task.refHash,
                             media: [ { dhash: item.dhash, type: item.type, index: 0 } ],
-                            clicks: tr.clicks, // coordinate array return karega
+                            clicks: tr.clicks, 
                             trainedAt: new Date().toISOString()
                         };
                         return { solved: true, clicks: tr.clicks };
