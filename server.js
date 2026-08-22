@@ -109,17 +109,21 @@ function persistDatabase() {
     }, 1500);
 }
 
-// ── EXACT & STRICT AUTO SOLVE (No Wrong Predictions) ──
 function evaluateAutoSolve(task) {
-    // 1. Direct Exact Task Match (100% Safe)
+    // 1. Direct Exact Task ID Match (Grid & Video Tasks)
     if (hcaptchaTrained[task.taskId]) {
         return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
     }
 
+    // 2. Video Tasks: Do not fuzzy-match. Video tasks must have exact Task ID match.
+    if (task.media && task.media.length === 1 && (task.media[0].type === 'video_frames' || task.media[0].frames)) {
+        return { solved: false };
+    }
+
+    // 3. Grid Tasks: Strict Concept Bank Match (Hamming distance <= 2)
     let cKey = getCleanKey(task);
     let targetDhashes = conceptBank[cKey];
 
-    // 2. Strict Grid Concept Match (Distance <= 2 strictly)
     if (targetDhashes && targetDhashes.size > 0 && task.media && task.media.length > 1) {
         let matchedClicks = [];
         task.media.forEach((item, idx) => {
@@ -132,24 +136,8 @@ function evaluateAutoSolve(task) {
             }
         });
 
-        // Grid mein clicks strictly 2 se 5 hone chahiye
         if (matchedClicks.length >= 2 && matchedClicks.length <= 5) {
             return { solved: true, clicks: matchedClicks };
-        }
-    }
-
-    // 3. Coordinate/Video Exact Task Match
-    if (task.media && task.media.length === 1) {
-        let item = task.media[0];
-        if (item.dhash && item.dhash !== "0000000000000000") {
-            for (let id in hcaptchaTrained) {
-                let tr = hcaptchaTrained[id];
-                if (tr.media && tr.media.length === 1 && getCleanKey(tr) === cKey) {
-                    if (getHammingDistance(item.dhash, tr.media[0].dhash) <= 2) {
-                        return { solved: true, clicks: tr.clicks };
-                    }
-                }
-            }
         }
     }
     
@@ -234,7 +222,8 @@ app.post('/api/submit-hcaptcha', (req, res) => {
             stableHash: m.stableHash || "",
             type: m.type || "image",
             index: m.index !== undefined ? m.index : 0,
-            thumb: m.thumb || ""
+            thumb: m.thumb || "",
+            frames: m.frames || undefined
         }));
 
         let cKey = getCleanKey(source);
@@ -309,4 +298,4 @@ app.get('/', (req, res) => {
 app.get('/dashboard', (req, res) => res.redirect('/'));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Exact Precision Engine Running on Port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Master Engine Live on Port ${PORT}`));
