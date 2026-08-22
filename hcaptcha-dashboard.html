@@ -1,290 +1,558 @@
-const express = require('express');
-const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
-const app = express();
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- FIX: Referrer policy add ki hai taake hCaptcha images 403 Forbidden na hon -->
+    <meta name="referrer" content="no-referrer">
+    <title>hCaptcha Master - AI Edition</title>
+    <!-- FIX: defer lagaya hai taake scripts background me load hon aur UI freeze na karein -->
+    <script defer src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body { background-color: #121212; color: #ffffff; font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        .header { background: #1e1e1e; padding: 15px 20px; border-bottom: 3px solid #00ff88; margin-bottom: 20px; display: flex; flex-direction: column; gap: 15px; }
+        .header-top { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+        .header h1 { margin: 0; font-size: 20px; color: #00ff88; }
+        .ai-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .sync-status { font-size: 13px; color: #ffaa00; font-weight: bold; transition: color 0.3s; }
+        .sync-status.active { color: #00ff88; }
+        .btn-toggle { padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: bold; border: 2px solid #555; transition: all 0.2s; background: #333; color: #888; }
+        .btn-toggle.on { background: #00ff88; color: #000; border-color: #00ff88; }
+        .tabs { display: flex; gap: 10px; }
+        .tab-btn { background: #333; color: #ccc; border: 2px solid #444; padding: 10px 20px; font-size: 16px; font-weight: bold; cursor: pointer; border-radius: 4px; outline: none; }
+        .tab-btn.active { background: #00ff88; color: #000; border-color: #00ff88; }
+        .count { background: #000; color: #fff; padding: 2px 8px; border-radius: 10px; margin-left: 8px; font-size: 14px; }
+        .search-box input { width: 100%; padding: 12px; background: #222; border: 1px solid #444; color: #00ff88; border-radius: 4px; font-size: 16px; font-weight: bold; outline: none; }
+        .search-box input::placeholder { color: #666; font-weight: normal; }
+        .grid-container { display: flex; flex-wrap: wrap; gap: 15px; align-items: flex-start; }
+        
+        .task-card { background: #1e1e1e; min-width: 480px; flex: 1; max-width: 650px; padding: 15px; border: 1px solid #333; border-radius: 6px; }
+        .task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 10px rgba(255,0,255,0.4); }
+        .task-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .task-id { color: #ff4444; font-family: monospace; font-size: 16px; font-weight: bold; }
+        .prompt-container { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; background: #222; padding: 8px; border-radius: 6px; border: 1px solid #333; }
+        .example-wrap { flex-shrink: 0; width: 55px; height: 55px; }
+        .example-img { width: 55px; height: 55px; object-fit: cover; border-radius: 4px; background: #222; border: 1px solid #555; display: block; }
+        .example-img-placeholder { width: 55px; height: 55px; border-radius: 4px; background: #2a2a2a; border: 1px dashed #555; display: flex; align-items: center; justify-content: center; font-size: 20px; }
+        .task-prompt { color: #fff; font-size: 14px; font-weight: bold; margin: 0; line-height: 1.4; flex: 1; }
+        
+        .img-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+        .img-grid img { width: 100%; height: 140px; object-fit: cover; cursor: pointer; border: 4px solid transparent; background: #222; transition: opacity 0.3s; }
+        @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+        .img-grid img[src=""], .img-grid img:not([src]) { background: linear-gradient(90deg,#1a1a1a 25%,#2d2d2d 50%,#1a1a1a 75%); background-size:200% 100%; animation:shimmer 1.2s infinite; }
+        .img-grid img.selected { border-color: #00ff88; opacity: 0.7; }
+        .img-grid img.ai-pick { border-color: #ff00ff; }
+        
+        .trained-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
+        .trained-grid img { width: 100%; height: 100px; object-fit: cover; border: 3px solid #333; background: #222; }
+        .trained-grid img.was-clicked { border-color: #00ff88; }
+        .trained-grid img.retrain-pick { border-color: #ff8800; cursor: pointer; }
+        
+        .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; background: #000; border-radius: 4px; border: 2px solid #444; overflow: hidden; }
+        .single-box img { width: 100%; height: auto; min-height: 450px; max-height: 600px; object-fit: contain; display: block; }
+        
+        .dot { position: absolute; width: 18px; height: 18px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+        .missing-media { background: #111; color: #888; padding: 20px 10px; text-align: center; border-radius: 4px; border: 1px dashed #444; font-size: 13px; line-height: 1.6; }
+        .missing-media span { color: #00ff88; font-weight: bold; }
+        
+        .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+        .btn { flex: 1; padding: 12px; border: none; font-weight: bold; cursor: pointer; color: #fff; font-size: 14px; border-radius: 4px; }
+        .btn-save { background: #00ff88; color: #000; }
+        .btn-reset { background: #555; }
+        .btn-del { background: #ff4444; flex: 0.3; }
+        .btn-retrain { background: #ff8800; color: #000; }
+        .btn-confirm { background: #ff8800; color: #000; }
+        .btn-cancel { background: #555; }
+        .btn-disabled { background: #222; color: #555; cursor: not-allowed; }
+        .retrain-hint { font-size: 12px; color: #ff8800; margin-top: 6px; padding: 6px 10px; background: #1a0f00; border-radius: 4px; }
+    </style>
+</head>
+<body>
+<div class="header">
+    <div class="header-top">
+        <h1>hCaptcha Master 🤖</h1>
+        <div class="tabs">
+            <button class="tab-btn active" id="btn-pending" onclick="setTab('pending')">Pending <span class="count" id="c-pending">0</span></button>
+            <button class="tab-btn" id="btn-trained" onclick="setTab('trained')">Trained <span class="count" id="c-trained">0</span></button>
+        </div>
+    </div>
+    <div class="ai-bar">
+        <span class="sync-status" id="syncStatus">🧠 AI Loading...</span>
+        <button id="btnAutoTrain" class="btn-toggle" onclick="toggleAutoTrain()">🧠 Auto Train: OFF</button>
+        <button id="btnAutoSave" class="btn-toggle" onclick="toggleAutoSave()">💾 Auto Save: OFF</button>
+    </div>
+    <div class="search-box"><input type="text" id="searchInput" oninput="filterTasks()" placeholder="🔍 Task ID search karein..."/></div>
+</div>
+<div class="grid-container" id="tasksArea"></div>
 
-app.use(cors());
-app.use(express.json({ limit: '60mb' }));
+<script>
+const SERVER_URL = location.protocol === 'file:'
+    ? (localStorage.getItem('hcm_server') || "https://hcaptcha-solver-production.up.railway.app")
+    : location.origin;
+const tasksArea = document.getElementById('tasksArea');
+const syncStatus = document.getElementById('syncStatus');
+let currentTab = 'pending', serverData = { pending:{}, trained:{} }, activeTasksStore = {}, videoTasks = [];
+let ghostBlocker = new Set();
+let isFetching = false;
 
-const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
-const DB_FILE = path.join(DATA_DIR, 'database.json');
+let isAIReady = false, aiModel, knn;
+let autoTrainEnabled = false, autoSaveEnabled = false;
+let retrainState = {};
 
-const MAX_PENDING = 80;
-const MAX_TRAINED = 5000;
-
-let hcaptchaPending = {};
-let hcaptchaTrained = {};
-let conceptBank = {};
-
-function getCleanKey(task) {
-    let p = (task.prompt || "").split("|||")[0].trim().toLowerCase();
-    return "TXT_" + p;
-}
-
-function dhashToBigInt(hexOrBin) {
-    if (!hexOrBin || hexOrBin === "0000000000000000") return null;
-    if (/^[01]+$/.test(hexOrBin)) {
-        return BigInt('0b' + hexOrBin);
+async function initAI() {
+    syncStatus.innerHTML = "🧠 AI Loading...";
+    try {
+        await new Promise(r => setTimeout(r, 500));
+        aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
+        knn = knnClassifier.create();
+        loadKNN();
+        isAIReady = true;
+        syncStatus.innerHTML = "🤖 AI Ready ✅";
+        syncStatus.classList.add('active');
+        if (autoTrainEnabled) reEvaluatePending();
+    } catch(e) {
+        syncStatus.innerHTML = "⚠️ AI Failed — Reload karo";
     }
-    try { return BigInt('0x' + hexOrBin); } catch(e) { return null; }
 }
 
-function getHammingDistance(h1, h2) {
-    if (!h1 || !h2 || h1.length !== h2.length) return 999;
-    const b1 = dhashToBigInt(h1);
-    const b2 = dhashToBigInt(h2);
-    if (b1 !== null && b2 !== null) {
-        let xor = b1 ^ b2;
-        let diff = 0;
-        while (xor > 0n) { diff += Number(xor & 1n); xor >>= 1n; }
-        return diff;
-    }
-    let diff = 0;
-    for (let i = 0; i < h1.length; i++) { if (h1[i] !== h2[i]) diff++; }
-    return diff;
+const IDB = { name:'hcm_knn', store:'knn', key:'model_v3' };
+function idbOpen() {
+    return new Promise((res,rej)=>{
+        let r = indexedDB.open(IDB.name,1);
+        r.onupgradeneeded = e => e.target.result.createObjectStore(IDB.store);
+        r.onsuccess = e => res(e.target.result);
+        r.onerror   = () => rej(r.error);
+    });
 }
-
-function rebuildConceptBank() {
-    conceptBank = {};
-    for (let id in hcaptchaTrained) {
-        _addToConceptBank(hcaptchaTrained[id]);
-    }
+async function idbSet(val) {
+    let db = await idbOpen();
+    return new Promise((res,rej)=>{
+        let tx = db.transaction(IDB.store,'readwrite');
+        tx.objectStore(IDB.store).put(val, IDB.key);
+        tx.oncomplete = res; tx.onerror = ()=>rej(tx.error);
+    });
 }
-
-function _addToConceptBank(tr) {
-    let cKey = getCleanKey(tr);
-    if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
-    (tr.clicks || []).forEach(idx => {
-        if (typeof idx === 'number' && tr.media && tr.media[idx] && tr.media[idx].dhash && tr.media[idx].dhash !== "0000000000000000") {
-            conceptBank[cKey].add(tr.media[idx].dhash);
-        }
+async function idbGet() {
+    let db = await idbOpen();
+    return new Promise((res,rej)=>{
+        let tx  = db.transaction(IDB.store,'readonly');
+        let req = tx.objectStore(IDB.store).get(IDB.key);
+        req.onsuccess = () => res(req.result||null);
+        req.onerror   = () => rej(req.error);
     });
 }
 
-function _removeFromConceptBank(tr) {
-    rebuildConceptBank();
+async function saveKNN() {
+    if (!knn) return;
+    try {
+        let ds = knn.getClassifierDataset();
+        let ser = {};
+        for (let k in ds) { ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape }; }
+        await idbSet(ser);
+        try { localStorage.setItem('hcaptcha_knn_v3', JSON.stringify(ser)); } catch(e) {}
+        let concepts = Object.keys(ser).filter(k => !k.startsWith('negative_')).length;
+        syncStatus.innerHTML = `🤖 AI Ready ✅ (${concepts} concepts)`;
+    } catch(e) {}
 }
 
-function initDB() {
-    if (fs.existsSync(DB_FILE)) {
+async function loadKNN() {
+    try {
+        let ser = await idbGet();
+        if (!ser) {
+            let ls = localStorage.getItem('hcaptcha_knn_v3');
+            if (ls) ser = JSON.parse(ls);
+        }
+        if (!ser) return;
+        let ds = {};
+        for (let k in ser) { ds[k] = tf.tensor(ser[k].data, ser[k].shape); }
+        knn.setClassifierDataset(ds);
+        let concepts = Object.keys(ser).filter(k => !k.startsWith('negative_')).length;
+        syncStatus.innerHTML = `🤖 AI Ready ✅ (${concepts} concepts)`;
+    } catch(e) {}
+}
+
+function toggleAutoTrain() {
+    autoTrainEnabled = !autoTrainEnabled;
+    let btn = document.getElementById('btnAutoTrain');
+    btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
+    btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
+    if (autoTrainEnabled) {
+        if (isAIReady) reEvaluatePending();
+        else { syncStatus.innerHTML = "🧠 AI Loading..."; loadTFScripts(() => initAI()); }
+    }
+}
+
+function loadTFScripts(callback) {
+    if (typeof tf !== 'undefined' && typeof mobilenet !== 'undefined' && typeof knnClassifier !== 'undefined') { callback(); return; }
+    let loaded = 0;
+    const scripts = [
+        'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js',
+        'https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js',
+        'https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js'
+    ];
+    scripts.forEach(src => {
+        let s = document.createElement('script'); s.src = src;
+        s.onload = () => { loaded++; if (loaded === scripts.length) callback(); };
+        document.head.appendChild(s);
+    });
+}
+
+function toggleAutoSave() {
+    autoSaveEnabled = !autoSaveEnabled;
+    let btn = document.getElementById('btnAutoSave');
+    btn.className = 'btn-toggle' + (autoSaveEnabled ? ' on' : '');
+    btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
+}
+
+async function trainAIBrain(task, wrongIndices = []) {
+    if (!isAIReady || task.type !== 'grid' || !task.media) return;
+    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
+    let negLabel = 'negative_' + pText;
+
+    for (let m of task.media) {
+        let imgSrc = m.thumb || m.src;
+        if (!imgSrc) continue;
         try {
-            const raw = fs.readFileSync(DB_FILE, 'utf8');
-            const data = JSON.parse(raw);
-            hcaptchaPending = {};
-            hcaptchaTrained = data.trained || {};
+            let img = new Image();
+            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
+            img.src = imgSrc;
+            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 3000); });
+            if (!img.complete || img.naturalWidth === 0) continue;
+            let tfImg = tf.browser.fromPixels(img);
+            let features = aiModel.infer(tfImg, true);
+            let isCorrect = task.clicks.includes(m.index);
+            let isWrong = wrongIndices.includes(m.index);
 
-            const trainedKeys = Object.keys(hcaptchaTrained);
-            if (trainedKeys.length > MAX_TRAINED) {
-                const toDelete = trainedKeys.slice(0, trainedKeys.length - MAX_TRAINED);
-                toDelete.forEach(k => delete hcaptchaTrained[k]);
-                console.log(`[DB] Trimmed ${toDelete.length} old trained entries to enforce limit`);
-            }
-
-            rebuildConceptBank();
-            console.log(`[DB] Engine Loaded. Trained: ${Object.keys(hcaptchaTrained).length} | Concepts: ${Object.keys(conceptBank).length}`);
-        } catch (e) {
-            console.error("[DB] Error loading database:", e.message);
-        }
+            if (isCorrect) { knn.addExample(features, pText); knn.addExample(features, pText); } 
+            else if (isWrong) { knn.addExample(features, negLabel); knn.addExample(features, negLabel); knn.addExample(features, negLabel); } 
+            else { knn.addExample(features, negLabel); }
+            tfImg.dispose();
+        } catch(e) {}
     }
+    saveKNN();
+    if (autoTrainEnabled) reEvaluatePending();
 }
-initDB();
 
-let saveTimeout = null;
-function persistDatabase() {
-    if (saveTimeout) clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(() => {
+async function predictWithAI(task) {
+    if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media || task.clicks.length > 0) return;
+    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
+    let dataset = knn.getClassExampleCount();
+    if (!dataset[pText]) return;
+
+    let predictedClicks = [];
+    for (let m of task.media) {
+        let imgSrc = m.thumb || m.src;
+        if (!imgSrc) continue;
         try {
-            fs.writeFileSync(DB_FILE, JSON.stringify({ trained: hcaptchaTrained }), 'utf8');
-        } catch(err) {
-            console.error('[DB] PERSIST ERROR:', err.message);
-        }
-    }, 1000);
-}
-
-function evaluateAutoSolve(task) {
-    // 1. Exact Match Check (Now heavily relied upon since Task ID is deterministic)
-    if (hcaptchaTrained[task.taskId]) {
-        return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
-    }
-
-    let cKey = getCleanKey(task);
-    
-    // 2. Grid Match Logic
-    let targetDhashes = conceptBank[cKey];
-    if (targetDhashes && targetDhashes.size > 0 && task.media && task.media.length > 1) {
-        let matchedClicks = [];
-        task.media.forEach((item, idx) => {
-            if (!item.dhash || item.dhash === "0000000000000000") return;
-            for (let savedHash of targetDhashes) {
-                if (getHammingDistance(item.dhash, savedHash) <= 3) {
-                    matchedClicks.push(idx);
-                    break;
-                }
+            let img = new Image();
+            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
+            img.src = imgSrc;
+            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 3000); });
+            if (!img.complete || img.naturalWidth === 0) continue;
+            let tfImg = tf.browser.fromPixels(img);
+            let features = aiModel.infer(tfImg, true);
+            let res = await knn.predictClass(features);
+            let conf = res.confidences[pText] || 0;
+            let negConf = res.confidences['negative_' + pText] || 0;
+            if (res.label === pText && conf > 0.85 && negConf < 0.30) {
+                predictedClicks.push(m.index);
             }
-        });
-
-        // FIX: Auto-save hata diya — galat match database pollute karta tha (snowball effect)
-        // FIX: Minimum 2 matches chahiye — sirf 1 match coincidental ho sakta hai
-        if (matchedClicks.length >= 2 && matchedClicks.length <= 5) {
-            return { solved: true, clicks: matchedClicks };
-        }
+            tfImg.dispose();
+        } catch(e) {}
     }
 
-    // 3. Single Image / Canvas (Drag & Drop) Match Logic
-    if (task.media && task.media.length === 1) {
-        let item = task.media[0];
-        if (item.dhash && item.dhash !== "0000000000000000") {
-            for (let id in hcaptchaTrained) {
-                let tr = hcaptchaTrained[id];
-                if (tr.media && tr.media.length === 1 && getCleanKey(tr) === cKey) {
-                    // FIX: Auto-save hata diya — same reason as Strategy 2
-                    if (getHammingDistance(item.dhash, tr.media[0].dhash) <= 5) {
-                        return { solved: true, clicks: tr.clicks };
-                    }
-                }
+    if (predictedClicks.length > 0 && predictedClicks.length <= 6) {
+        task.clicks = predictedClicks;
+        let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
+        if (card) {
+            card.classList.add('ai-processing');
+            predictedClicks.forEach(idx => {
+                let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
+                if (imgEl) { imgEl.classList.remove('selected'); imgEl.classList.add('ai-pick'); }
+            });
+            if (autoSaveEnabled) {
+                let btn = card.querySelector('.btn-save');
+                if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Auto-Saving...'; }
+                setTimeout(() => sendToServer(task.id, btn, card), 600);
             }
         }
     }
-    
-    return { solved: false };
 }
 
-// ==========================================
-// ROUTES
-// ==========================================
-
-app.post('/api/new-hcaptcha', (req, res) => {
-    const task = req.body;
-    if (!task || !task.taskId) return res.json({ success: false, error: 'Missing taskId' });
-
-    let autoRes = evaluateAutoSolve(task);
-    if (autoRes.solved) {
-        persistDatabase();
-        return res.json({ success: true, autoSolved: true, clicks: autoRes.clicks });
+async function reEvaluatePending() {
+    for (let id in activeTasksStore) {
+        let t = activeTasksStore[id];
+        if (currentTab === 'pending' && t.type === 'grid' && t.clicks.length === 0) {
+            await predictWithAI(t);
+        }
     }
+}
 
-    const keys = Object.keys(hcaptchaPending);
-    if (keys.length >= MAX_PENDING) {
-        keys.slice(0, 10).forEach(k => delete hcaptchaPending[k]);
+function startRetrain(taskId) {
+    let t = activeTasksStore[taskId];
+    if (!t) return;
+    let card = document.querySelector(`.task-card[data-id="${taskId}"]`);
+    if (!card) return;
+    retrainState[taskId] = { oldClicks: [...(t.clicks || [])], newClicks: [] };
+    card.querySelectorAll('.trained-grid img').forEach(img => {
+        img.classList.add('retrain-pick');
+        img.onclick = () => {
+            let idx = parseInt(img.dataset.index);
+            let state = retrainState[taskId];
+            if (state.newClicks.includes(idx)) {
+                state.newClicks = state.newClicks.filter(x => x !== idx);
+                img.classList.remove('was-clicked');
+            } else {
+                state.newClicks.push(idx);
+                img.classList.add('was-clicked');
+            }
+        };
+    });
+    let hint = document.createElement('div');
+    hint.className = 'retrain-hint'; hint.id = `hint-${taskId}`;
+    hint.textContent = '🟠 Sahi images click karo → Confirm Retrain dabao';
+    card.querySelector('.actions').before(hint);
+    let actions = card.querySelector('.actions');
+    actions.innerHTML = `
+        <button class="btn btn-confirm" onclick="confirmRetrain('${taskId}')">✅ Confirm</button>
+        <button class="btn btn-cancel" onclick="cancelRetrain('${taskId}')">❌ Cancel</button>`;
+}
+
+async function confirmRetrain(taskId) {
+    let t = activeTasksStore[taskId], state = retrainState[taskId];
+    if (!t || !state) return;
+    let wrongClicks = (state.oldClicks || []).filter(idx => !state.newClicks.includes(idx));
+    t.clicks = state.newClicks;
+    let card = document.querySelector(`.task-card[data-id="${taskId}"]`);
+    if (card) { let hint = card.querySelector(`#hint-${taskId}`); if (hint) hint.textContent = '🧠 AI seekh raha hai...'; }
+    await trainAIBrain(t, wrongClicks);
+    await fetch(`${SERVER_URL}/api/submit-hcaptcha`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ taskId, clicks: state.newClicks }) }).catch(e => {});
+    delete retrainState[taskId];
+    if (card) {
+        let hint = card.querySelector(`#hint-${taskId}`); if (hint) hint.remove();
+        let actions = card.querySelector('.actions');
+        actions.innerHTML = `<button class="btn btn-save">Update</button> <button class="btn btn-retrain" onclick="startRetrain('${taskId}')">🔧 Retrain</button> <button class="btn btn-del">❌</button>`;
     }
+}
 
-    hcaptchaPending[task.taskId] = {
-        id: task.taskId,
-        prompt: task.prompt,
-        media: task.media,
-        timestamp: task.timestamp
-    };
+function cancelRetrain(taskId) {
+    delete retrainState[taskId];
+    let card = document.querySelector(`.task-card[data-id="${taskId}"]`);
+    if (!card) return;
+    let hint = card.querySelector(`#hint-${taskId}`); if (hint) hint.remove();
+    card.querySelectorAll('.trained-grid img').forEach(img => { img.classList.remove('retrain-pick'); img.onclick = null; });
+    let actions = card.querySelector('.actions');
+    actions.innerHTML = `<button class="btn btn-save">Update</button> <button class="btn btn-retrain" onclick="startRetrain('${taskId}')">🔧 Retrain</button> <button class="btn btn-del">❌</button>`;
+}
 
-    res.json({ success: true, autoSolved: false });
-});
+function setTab(tab) {
+    currentTab = tab; trainedPage = 0;
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('btn-' + tab).classList.add('active');
+    document.getElementById('searchInput').value = '';
+    tasksArea.innerHTML = ''; activeTasksStore = {}; videoTasks = [];
+    renderCurrentData();
+}
 
-app.get('/api/check-hcaptcha/:id', (req, res) => {
-    const tid = req.params.id;
-    if (hcaptchaTrained[tid]) {
-        res.json({ status: 'solved', clicks: hcaptchaTrained[tid].clicks || [] });
+function filterTasks() {
+    let f = document.getElementById('searchInput').value.toLowerCase().replace('#', '');
+    document.querySelectorAll('.task-card').forEach(c => { c.style.display = c.dataset.id.toLowerCase().includes(f) ? "" : "none"; });
+}
+
+let _fetchTimer = null;
+async function fetchTasks() {
+    if (document.hidden || isFetching) return;
+    isFetching = true;
+    try {
+        let res = await fetch(`${SERVER_URL}/api/get-hcaptcha?t=${Date.now()}`, { cache:'no-store' });
+        if (res.ok) {
+            serverData = await res.json();
+            document.getElementById('c-pending').innerText = Object.keys(serverData.pending).length;
+            document.getElementById('c-trained').innerText = Object.keys(serverData.trained).length;
+            renderCurrentData();
+        }
+    } catch(e) {}
+    isFetching = false;
+}
+
+// FIX: Interval 800ms se 1500ms kiya hai taake lightweight rahe
+function startFetch() { if (!_fetchTimer) _fetchTimer = setInterval(fetchTasks, 1500); fetchTasks(); }
+function stopFetch()  { if (_fetchTimer) { clearInterval(_fetchTimer); _fetchTimer = null; } }
+document.addEventListener('visibilitychange', () => document.hidden ? stopFetch() : startFetch());
+
+let trainedPage = 0; const TRAINED_PAGE_SIZE = 20;
+function renderCurrentData() {
+    let activeData = currentTab === 'pending' ? serverData.pending : serverData.trained;
+    document.querySelectorAll('.task-card').forEach(card => {
+        let id = card.dataset.id;
+        if (!activeData[id] || ghostBlocker.has(id)) { card.remove(); delete activeTasksStore[id]; }
+    });
+    let oldBtn = document.getElementById('loadMoreBtn'); if (oldBtn) oldBtn.remove();
+    let frag = document.createDocumentFragment();
+    let ids = Object.keys(activeData);
+    
+    if (currentTab === 'trained') {
+        ids = ids.reverse();
+        let toShow = ids.slice(0, (trainedPage + 1) * TRAINED_PAGE_SIZE);
+        for (let id of toShow) {
+            if (ghostBlocker.has(id) || activeTasksStore[id]) continue;
+            let td = activeData[id], media = td.media || [], isGrid = media.length > 1, clicks = td.clicks || [];
+            activeTasksStore[id] = { id, clicks, type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
+            let card = buildCard(activeTasksStore[id]);
+            if (card) frag.appendChild(card);
+        }
+        tasksArea.appendChild(frag);
+        if (ids.length > (trainedPage + 1) * TRAINED_PAGE_SIZE) {
+            let btn = document.createElement('button'); btn.id = 'loadMoreBtn';
+            btn.textContent = `⬇️ Load More (${ids.length - (trainedPage + 1) * TRAINED_PAGE_SIZE} remaining)`;
+            btn.style = 'width:100%;padding:12px;margin-top:10px;background:#333;color:#00ff88;border:2px solid #00ff88;border-radius:6px;cursor:pointer;font-size:15px;font-weight:bold;';
+            btn.onclick = () => { trainedPage++; renderCurrentData(); };
+            tasksArea.appendChild(btn);
+        }
     } else {
-        res.json({ status: 'pending' });
-    }
-});
-
-app.get('/api/get-hcaptcha', (req, res) => {
-    // FIX: Dashboard ko sirf latest 100 trained items bhejen taake Bandwidth/RAM bache
-    let trainedKeys = Object.keys(hcaptchaTrained);
-    let recentTrained = {};
-    
-    trainedKeys.slice(-100).forEach(k => recentTrained[k] = hcaptchaTrained[k]);
-    
-    res.json({ pending: hcaptchaPending, trained: recentTrained });
-});
-
-app.post('/api/submit-hcaptcha', (req, res) => {
-    const { taskId, clicks } = req.body;
-    if (!taskId) return res.json({ success: false, error: 'Missing taskId' });
-
-    let source = hcaptchaPending[taskId] || hcaptchaTrained[taskId];
-
-    if (source) {
-        let lightMedia = (source.media || []).map(m => ({
-            dhash: m.dhash || "",
-            stableHash: m.stableHash || "",
-            type: m.type || "image",
-            index: m.index !== undefined ? m.index : 0,
-            thumb: m.thumb || ""
-        }));
-
-        let cKey = getCleanKey(source);
-        if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
-
-        (clicks || []).forEach(idx => {
-            if (typeof idx === 'number' && lightMedia[idx] && lightMedia[idx].dhash && lightMedia[idx].dhash !== "0000000000000000") {
-                conceptBank[cKey].add(lightMedia[idx].dhash);
-            }
-        });
-
-        hcaptchaTrained[taskId] = {
-            id: taskId,
-            prompt: source.prompt,
-            conceptKey: getCleanKey(source),
-            media: lightMedia,
-            clicks: clicks || [],
-            trainedAt: new Date().toISOString()
-        };
-
-        const trainedKeys = Object.keys(hcaptchaTrained);
-        if (trainedKeys.length > MAX_TRAINED) {
-            const oldest = trainedKeys.slice(0, trainedKeys.length - MAX_TRAINED);
-            oldest.forEach(k => delete hcaptchaTrained[k]);
-            console.log(`[DB] Auto-trimmed ${oldest.length} old trained entries`);
+        for (let id of ids) {
+            if (ghostBlocker.has(id) || activeTasksStore[id]) continue;
+            let td = activeData[id], media = td.media || [], isGrid = media.length > 1;
+            activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
+            let card = buildCard(activeTasksStore[id]);
+            if (card) frag.appendChild(card);
+            if (isAIReady && autoTrainEnabled && isGrid) predictWithAI(activeTasksStore[id]);
         }
-
-        delete hcaptchaPending[taskId];
-        persistDatabase();
+        tasksArea.appendChild(frag);
     }
-    res.json({ success: true });
-});
+    filterTasks();
+}
 
-app.post('/api/restore-hcaptcha', (req, res) => {
-    const { taskId } = req.body;
-    if (!taskId) return res.json({ success: false, error: 'Missing taskId' });
-
-    if (hcaptchaTrained[taskId]) {
-        hcaptchaPending[taskId] = {
-            ...hcaptchaTrained[taskId],
-            clicks: [],
-            restoredAt: new Date().toISOString()
-        };
-        delete hcaptchaTrained[taskId];
-        _removeFromConceptBank(null); 
-        persistDatabase();
-        console.log(`[RESTORE] #${taskId} wapas pending mein`);
+function buildCard(t) {
+    let card = document.createElement('div'); card.className = 'task-card'; card.dataset.id = t.id;
+    let isPending = currentTab === 'pending', parts = t.prompt.split('|||');
+    
+    function _safeUrl(u) {
+        if (!u) return '';
+        u = u.trim();
+        if (u.startsWith('data:image/')) return u;
+        if (/^https?:\/\//.test(u)) return u.replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        return '';
     }
-    res.json({ success: true });
-});
+    
+    let _exSrc = parts[1] ? _safeUrl(parts[1]) : '';
+    
+    if (!_exSrc && t.media && t.media.length > 0) {
+        let firstThumb = t.media[0]?.thumb || t.media[0]?.src || '';
+        if (firstThumb) _exSrc = _safeUrl(firstThumb);
+    }
+    
+    let exHtml = _exSrc
+        ? `<img src="${_exSrc}" class="example-img" style="display:block">
+           <div class="example-img-placeholder" style="display:none">🖼️</div>`
+        : `<div class="example-img-placeholder">🖼️</div>`;
 
-app.delete('/api/delete-hcaptcha/:id', (req, res) => {
-    delete hcaptchaPending[req.params.id];
-    delete hcaptchaTrained[req.params.id];
-    _removeFromConceptBank(null); 
-    persistDatabase();
-    res.json({ success: true });
-});
+    let isMediaMissing = t.media.length === 0 || t.media.every(m => !m.thumb && !m.src && !m.frames);
+    let mediaHTML = '';
 
-app.get('/api/health', (req, res) => {
-    res.json({
-        status: 'ok',
-        pending: Object.keys(hcaptchaPending).length,
-        trained: Object.keys(hcaptchaTrained).length,
-        concepts: Object.keys(conceptBank).length
+    if (isMediaMissing) {
+        mediaHTML = `<div class="missing-media">⚠️ <b>Images nahi hain</b><br><span>Clicks: ${t.clicks.length}</span></div>`;
+    } else if (t.type === 'grid') {
+        if (isPending) {
+            mediaHTML = '<div class="img-grid">';
+            t.media.forEach(m => { mediaHTML += `<img src="${m.thumb || m.src || ''}" class="g-img ${t.clicks.includes(m.index)?'selected':''}" data-index="${m.index}" draggable="false" loading="lazy" onerror="this.style.opacity='0.3'"/>`; });
+            mediaHTML += '</div>';
+        } else {
+            mediaHTML = '<div class="trained-grid">';
+            t.media.forEach(m => { mediaHTML += `<img src="${m.thumb || m.src || ''}" class="${t.clicks.includes(m.index)?'was-clicked':''}" data-index="${m.index}" loading="lazy" onerror="this.style.opacity='0.2'" title="${t.clicks.includes(m.index)?'✅ Clicked':'❌ Not clicked'}"/>`; });
+            mediaHTML += '</div>';
+        }
+    } else {
+        let m = t.media[0], isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
+        let src = isVid ? m.frames[0] : (m.src || '');
+        mediaHTML = `<div class="single-box"><img src="${src}" class="s-img ${isVid?'vid-player':''}" data-id="${t.id}" draggable="false" loading="lazy"/>`;
+        t.clicks.forEach(pt => { mediaHTML += `<div class="dot" style="left:${pt.px}%;top:${pt.py}%;"></div>`; });
+        mediaHTML += '</div>';
+        if (isVid) videoTasks.push({ id: t.id, frames: m.frames, current: 0 });
+    }
+
+    let actionsHtml = isPending ? 
+        `<button class="btn btn-save">Save Task</button> ${!isMediaMissing ? `<button class="btn btn-reset">Clear</button>` : ''} <button class="btn btn-del">❌</button>` : 
+        `${!isMediaMissing ? `<button class="btn btn-save">Update</button> <button class="btn btn-retrain" onclick="startRetrain('${t.id}')">🔧 Retrain</button>` : `<button class="btn btn-disabled" disabled>No Update</button>`} <button class="btn btn-del">❌</button>`;
+
+    card.innerHTML = `
+        <div class="task-head">
+            <span class="task-id">${t.num ? `<span style="color:#888;font-size:12px">#${t.num}</span> ` : ''}#${t.id.substring(0,6)}</span>
+            ${!isPending ? `<span style="font-size:11px;color:#666">${t.clicks.length} clicks</span>` : ''}
+        </div>
+        <div class="prompt-container"><div class="example-wrap" style="flex-shrink:0;width:55px;height:55px;position:relative">${exHtml}</div><div class="task-prompt">${parts[0]}</div></div>
+        ${mediaHTML}
+        <div class="actions">${actionsHtml}</div>`;
+    return card;
+}
+
+// Yahan 400 ki jagah 200 hi rakha hai taake video apni natural speed mein play ho
+setInterval(() => {
+    videoTasks.forEach(vt => {
+        let el = document.querySelector(`.vid-player[data-id="${vt.id}"]`);
+        if (el && vt.frames?.length > 0) { vt.current=(vt.current+1)%vt.frames.length; el.src=vt.frames[vt.current]; }
     });
+}, 200); 
+
+tasksArea.addEventListener('click', (e) => {
+    let card = e.target.closest('.task-card'); if (!card) return;
+    let tid = card.dataset.id, t = activeTasksStore[tid]; if (!t) return;
+    if (retrainState[tid] && !e.target.classList.contains('btn-confirm') && !e.target.classList.contains('btn-cancel')) return;
+
+    if (e.target.classList.contains('g-img')) {
+        let idx = parseInt(e.target.dataset.index);
+        if (e.target.classList.contains('selected') || e.target.classList.contains('ai-pick')) {
+            e.target.classList.remove('selected', 'ai-pick'); t.clicks = t.clicks.filter(i => i !== idx);
+        } else { e.target.classList.add('selected'); t.clicks.push(idx); }
+    } else if (e.target.classList.contains('s-img')) {
+        let rect = e.target.getBoundingClientRect();
+        let x = ((e.clientX-rect.left)/rect.width)*100, y = ((e.clientY-rect.top)/rect.height)*100;
+        t.clicks.push({px:x, py:y});
+        let dot = document.createElement('div'); dot.className='dot'; dot.style.left=`${x}%`; dot.style.top=`${y}%`;
+        e.target.parentElement.appendChild(dot);
+    } else if (e.target.classList.contains('btn-save')) { sendToServer(tid, e.target, card);
+    } else if (e.target.classList.contains('btn-reset')) {
+        t.clicks = []; card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected','ai-pick'));
+        card.querySelectorAll('.dot').forEach(d => d.remove()); card.classList.remove('ai-processing');
+    } else if (e.target.classList.contains('btn-del')) {
+        card.style.opacity = '0.3'; card.style.pointerEvents = 'none'; ghostBlocker.add(tid);
+        card.remove(); delete activeTasksStore[tid];
+        fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method:'DELETE' }).catch(e => {});
+    }
 });
 
-app.get('/', (req, res) => {
-    let f = path.join(__dirname, 'hcaptcha-dashboard.html');
-    if (fs.existsSync(f)) res.sendFile(f);
-    else res.status(404).send('hcaptcha-dashboard.html nahi mila. Server folder mein rakho.');
-});
-app.get('/dashboard', (req, res) => res.redirect('/'));
+const _saving = new Set();
+async function sendToServer(taskId, btnEl, card) {
+    if (_saving.has(taskId)) return;
+    _saving.add(taskId); let t = activeTasksStore[taskId]; if (!t) { _saving.delete(taskId); return; }
+    try {
+        if (isAIReady && currentTab === 'pending' && t.clicks.length > 0) {
+            if (btnEl) { btnEl.textContent = '🧠 Learning...'; btnEl.disabled = true; }
+            await trainAIBrain(t);
+        }
+        if (currentTab === 'pending') {
+            ghostBlocker.add(taskId); setTimeout(() => ghostBlocker.delete(taskId), 4000);
+            if (card) card.remove(); delete activeTasksStore[taskId];
+        } else { if (btnEl) { btnEl.textContent='Updated!'; setTimeout(()=>{ if(btnEl){btnEl.textContent='Update';btnEl.disabled=false;} },1000); } }
+        await fetch(`${SERVER_URL}/api/submit-hcaptcha`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ taskId, clicks: t.clicks }) });
+    } catch(e) { if (btnEl) { btnEl.textContent='❌ Retry'; btnEl.disabled = false; }
+    } finally { _saving.delete(taskId); }
+}
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 hCaptcha Engine Running on Port ${PORT}`));
+// FIX: Global error listener add kiya hai taake CSP error handler ko block na kare
+window.addEventListener('error', function(e) {
+    if (e.target && e.target.tagName === 'IMG' && e.target.classList.contains('example-img')) {
+        e.target.style.display = 'none';
+        if (e.target.nextElementSibling) {
+            e.target.nextElementSibling.style.display = 'flex';
+        }
+    }
+}, true);
+
+setTimeout(startFetch, 200); setTimeout(initAI, 500);
+</script>
+</body>
+</html>
