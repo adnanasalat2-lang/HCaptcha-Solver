@@ -6,10 +6,10 @@
     <!-- FIX: Referrer policy add ki hai taake hCaptcha images 403 Forbidden na hon -->
     <meta name="referrer" content="no-referrer">
     <title>hCaptcha Master - AI Edition</title>
-    <!-- TF Models — page load hote hi -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
+    <!-- FIX: defer lagaya hai taake scripts background me load hon aur UI freeze na karein -->
+    <script defer src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
     <style>
         * { box-sizing: border-box; }
         body { background-color: #121212; color: #ffffff; font-family: Arial, sans-serif; margin: 0; padding: 20px; }
@@ -377,7 +377,9 @@ async function fetchTasks() {
     } catch(e) {}
     isFetching = false;
 }
-function startFetch() { if (!_fetchTimer) _fetchTimer = setInterval(fetchTasks, 800); fetchTasks(); }
+
+// FIX: Interval 800ms se 1500ms kiya hai taake lightweight rahe
+function startFetch() { if (!_fetchTimer) _fetchTimer = setInterval(fetchTasks, 1500); fetchTasks(); }
 function stopFetch()  { if (_fetchTimer) { clearInterval(_fetchTimer); _fetchTimer = null; } }
 document.addEventListener('visibilitychange', () => document.hidden ? stopFetch() : startFetch());
 
@@ -430,23 +432,18 @@ function buildCard(t) {
     
     function _safeUrl(u) {
         if (!u) return '';
-        u = u.trim(); // FIX: Extra spaces remove karne ke liye
-        if (u.startsWith('data:image/')) return u;
-        if (/^https?:\/\//.test(u)) return u.replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        u = u.trim();
+        // FIX: Allow blob URLs and protocol-relative URLs
+        if (u.startsWith('data:image/') || u.startsWith('blob:')) return u;
+        if (/^(https?:)?\/\//.test(u)) return u.replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
         return '';
     }
     
     let _exSrc = parts[1] ? _safeUrl(parts[1]) : '';
     
-    // FIX: Fallback logic better ki hai taake agar pehli media image `https` ho to wo bhi accept ho
-    if (!_exSrc && t.media && t.media.length > 0) {
-        let firstThumb = t.media[0]?.thumb || t.media[0]?.src || '';
-        if (firstThumb) _exSrc = _safeUrl(firstThumb);
-    }
-    
-    // FIX: Inline onerror CSP (security block) ki wajah se run nahi ho raha tha, isay neechay global listener se handle kiya hai
+    // FIX: Inline onerror handler aur strict referrerpolicy add kiya
     let exHtml = _exSrc
-        ? `<img src="${_exSrc}" class="example-img" style="display:block">
+        ? `<img src="${_exSrc}" class="example-img" style="display:block" referrerpolicy="no-referrer" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
            <div class="example-img-placeholder" style="display:none">🖼️</div>`
         : `<div class="example-img-placeholder">🖼️</div>`;
 
@@ -488,8 +485,9 @@ function buildCard(t) {
         <div class="actions">${actionsHtml}</div>`;
     return card;
 }
+}
 
-// FIX: Yahan 400 ki jagah 200 kar diya gaya hai taake video apni natural speed mein play ho
+// Yahan 400 ki jagah 200 hi rakha hai taake video apni natural speed mein play ho
 setInterval(() => {
     videoTasks.forEach(vt => {
         let el = document.querySelector(`.vid-player[data-id="${vt.id}"]`);
