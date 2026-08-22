@@ -109,37 +109,43 @@ function persistDatabase() {
     }, 1500);
 }
 
+// ── EXACT & STRICT AUTO SOLVE (No Wrong Predictions) ──
 function evaluateAutoSolve(task) {
+    // 1. Direct Exact Task Match (100% Safe)
     if (hcaptchaTrained[task.taskId]) {
         return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
     }
 
     let cKey = getCleanKey(task);
     let targetDhashes = conceptBank[cKey];
+
+    // 2. Strict Grid Concept Match (Distance <= 2 strictly)
     if (targetDhashes && targetDhashes.size > 0 && task.media && task.media.length > 1) {
         let matchedClicks = [];
         task.media.forEach((item, idx) => {
             if (!item.dhash || item.dhash === "0000000000000000") return;
             for (let savedHash of targetDhashes) {
-                if (getHammingDistance(item.dhash, savedHash) <= 3) {
+                if (getHammingDistance(item.dhash, savedHash) <= 2) {
                     matchedClicks.push(idx);
                     break;
                 }
             }
         });
 
+        // Grid mein clicks strictly 2 se 5 hone chahiye
         if (matchedClicks.length >= 2 && matchedClicks.length <= 5) {
             return { solved: true, clicks: matchedClicks };
         }
     }
 
+    // 3. Coordinate/Video Exact Task Match
     if (task.media && task.media.length === 1) {
         let item = task.media[0];
         if (item.dhash && item.dhash !== "0000000000000000") {
             for (let id in hcaptchaTrained) {
                 let tr = hcaptchaTrained[id];
                 if (tr.media && tr.media.length === 1 && getCleanKey(tr) === cKey) {
-                    if (getHammingDistance(item.dhash, tr.media[0].dhash) <= 5) {
+                    if (getHammingDistance(item.dhash, tr.media[0].dhash) <= 2) {
                         return { solved: true, clicks: tr.clicks };
                     }
                 }
@@ -303,4 +309,4 @@ app.get('/', (req, res) => {
 app.get('/dashboard', (req, res) => res.redirect('/'));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Ultra Engine Running on Port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Exact Precision Engine Running on Port ${PORT}`));
