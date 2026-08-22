@@ -436,8 +436,7 @@ function buildCard(t) {
         return '';
     }
     
-    // parts[1] mein real example image (base64) hoti hai — grid media se KABHI fallback mat karo
-    // Grid ki index-0 image example nahi hoti, isliye wo fallback hata diya gaya
+    // parts[1] = real example image (base64). Grid ki koi bhi image yahan KABHI use nahi hogi.
     let _exSrc = parts[1] ? _safeUrl(parts[1]) : '';
     
     // FIX: Inline onerror CSP (security block) ki wajah se run nahi ho raha tha, isay neechay global listener se handle kiya hai
