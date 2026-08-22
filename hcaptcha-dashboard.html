@@ -3,15 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- FIX: Referrer policy add ki hai taake hCaptcha images 403 Forbidden na hon -->
     <meta name="referrer" content="no-referrer">
     <title>hCaptcha Master - AI Edition</title>
+    <!-- TF Models — page load hote hi -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
     <style>
         * { box-sizing: border-box; }
         body { background-color: #121212; color: #ffffff; font-family: Arial, sans-serif; margin: 0; padding: 20px; }
-        .header { background: #1e1e1e; padding: 15px 20px; border-bottom: 3px solid #00ff88; margin-bottom: 20px; display: flex; flex-direction: column; gap: 15px; position: sticky; top: 0; z-index: 100; }
+        .header { background: #1e1e1e; padding: 15px 20px; border-bottom: 3px solid #00ff88; margin-bottom: 20px; display: flex; flex-direction: column; gap: 15px; }
         .header-top { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
         .header h1 { margin: 0; font-size: 20px; color: #00ff88; }
         .ai-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -26,17 +28,6 @@
         .search-box input { width: 100%; padding: 12px; background: #222; border: 1px solid #444; color: #00ff88; border-radius: 4px; font-size: 16px; font-weight: bold; outline: none; }
         .search-box input::placeholder { color: #666; font-weight: normal; }
         .grid-container { display: flex; flex-wrap: wrap; gap: 15px; align-items: flex-start; }
-        
-        /* Worker ID badge */
-        .worker-bar { display:flex; align-items:center; gap:8px; }
-        .worker-badge { background:#1a3a2a; border:1px solid #00ff88; color:#00ff88; padding:4px 10px; border-radius:20px; font-size:12px; font-weight:bold; cursor:pointer; }
-        
-        /* Pagination controls */
-        .pagination { display:flex; align-items:center; gap:10px; justify-content:center; margin:16px 0; flex-wrap:wrap; }
-        .page-btn { background:#333; color:#ccc; border:1px solid #555; padding:8px 16px; border-radius:4px; cursor:pointer; font-size:14px; }
-        .page-btn:hover { background:#444; }
-        .page-btn.active-page { background:#00ff88; color:#000; border-color:#00ff88; font-weight:bold; }
-        .page-info { color:#888; font-size:13px; }
         
         .task-card { background: #1e1e1e; min-width: 480px; flex: 1; max-width: 650px; padding: 15px; border: 1px solid #333; border-radius: 6px; }
         .task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 10px rgba(255,0,255,0.4); }
@@ -77,13 +68,6 @@
         .btn-cancel { background: #555; }
         .btn-disabled { background: #222; color: #555; cursor: not-allowed; }
         .retrain-hint { font-size: 12px; color: #ff8800; margin-top: 6px; padding: 6px 10px; background: #1a0f00; border-radius: 4px; }
-        
-        /* Worker claim badge on card */
-        .claim-badge { font-size:11px; padding:2px 6px; border-radius:3px; background:#1a2a1a; color:#00cc66; border:1px solid #00cc66; }
-        .claim-badge.mine { background:#002200; color:#00ff88; border-color:#00ff88; }
-        
-        /* Empty state */
-        .empty-state { text-align:center; padding:60px 20px; color:#555; font-size:18px; width:100%; }
     </style>
 </head>
 <body>
@@ -99,117 +83,21 @@
         <span class="sync-status" id="syncStatus">🧠 AI Loading...</span>
         <button id="btnAutoTrain" class="btn-toggle" onclick="toggleAutoTrain()">🧠 Auto Train: OFF</button>
         <button id="btnAutoSave" class="btn-toggle" onclick="toggleAutoSave()">💾 Auto Save: OFF</button>
-        <div class="worker-bar">
-            <span class="worker-badge" id="workerBadge" onclick="changeWorker()" title="Worker ID (click to change)">👤 W-?</span>
-        </div>
     </div>
-    <div class="search-box"><input type="text" id="searchInput" oninput="onSearch()" placeholder="🔍 Task ID ya prompt search karein..."/></div>
+    <div class="search-box"><input type="text" id="searchInput" oninput="filterTasks()" placeholder="🔍 Task ID search karein..."/></div>
 </div>
-<div id="paginationTop" class="pagination" style="display:none"></div>
 <div class="grid-container" id="tasksArea"></div>
-<div id="paginationBottom" class="pagination" style="display:none"></div>
 
 <script>
-// ══════════════════════════════════════
-// CONFIG
-// ══════════════════════════════════════
 const SERVER_URL = location.protocol === 'file:'
     ? (localStorage.getItem('hcm_server') || "https://hcaptcha-solver-production.up.railway.app")
     : location.origin;
-
-const PAGE_SIZE = 20;   // Har page mein kitne cards
-// Polling: pending tab mein naye tasks ke liye
-// "since" timestamp se sirf naye tasks aate hain — poora data nahi
-const POLL_INTERVAL_PENDING = 2500; // ms — 5 tabs = 5 × 2.5s requests (acceptable)
-const POLL_INTERVAL_COUNTS  = 5000; // ms — sirf counts update
-
-// ══════════════════════════════════════
-// WORKER ID — multi-worker support
-// Har window ka alag ID — ek task sirf ek worker claim kare
-// ══════════════════════════════════════
-let WORKER_ID = localStorage.getItem('hcm_worker_id');
-if (!WORKER_ID) {
-    WORKER_ID = 'W' + Math.random().toString(36).slice(2,6).toUpperCase();
-    localStorage.setItem('hcm_worker_id', WORKER_ID);
-}
-document.getElementById('workerBadge').textContent = '👤 ' + WORKER_ID;
-
-function changeWorker() {
-    let n = prompt('Worker ID dalo (e.g. W-A, W-B):', WORKER_ID);
-    if (n && n.trim()) {
-        WORKER_ID = n.trim().toUpperCase();
-        localStorage.setItem('hcm_worker_id', WORKER_ID);
-        document.getElementById('workerBadge').textContent = '👤 ' + WORKER_ID;
-    }
-}
-
-// ══════════════════════════════════════
-// STATE
-// ══════════════════════════════════════
 const tasksArea = document.getElementById('tasksArea');
 const syncStatus = document.getElementById('syncStatus');
-
-let currentTab = 'pending';
-let currentPage = 0;
-let totalPages = 1;
-let totalTasks = 0;
-// Sirf current page ke tasks store hote hain — memory ka khayal
-let activeTasksStore = {};
-let videoTasks = [];
+let currentTab = 'pending', serverData = { pending:{}, trained:{} }, activeTasksStore = {}, videoTasks = [];
 let ghostBlocker = new Set();
-
-// Pending tab: last fetch timestamp — sirf naye tasks aayenge
-let lastPendingSince = 0;
-// Pending tasks ka local cache — poore hain, pages nahi (pending 80 max hai)
-let pendingCache = {};
-
 let isFetching = false;
-let countsTimer = null, pendingTimer = null;
-let searchQuery = '';
 
-// Claimed tasks — is window ne kaunse tasks "le liye" hain
-// Doosri tab nahi dikhayegi agar same task hai
-let claimedTasks = new Set();
-// BroadcastChannel — same origin pe tabs ke beech communication
-let bc = null;
-try { bc = new BroadcastChannel('hcm_tasks'); } catch(e) {}
-
-if (bc) {
-    bc.onmessage = (ev) => {
-        let { type, taskId, workerId } = ev.data || {};
-        if (type === 'claimed' && workerId !== WORKER_ID) {
-            // Doosre worker ne claim kiya — is tab mein hide karo
-            let card = document.querySelector(`.task-card[data-id="${taskId}"]`);
-            if (card && currentTab === 'pending') {
-                card.style.opacity = '0.3';
-                card.style.pointerEvents = 'none';
-                let badge = card.querySelector('.claim-badge');
-                if (badge) { badge.textContent = workerId; badge.className = 'claim-badge'; }
-            }
-        }
-        if (type === 'saved' || type === 'deleted') {
-            // Koi tab ne save/delete kiya — pending cache se nikalo
-            delete pendingCache[taskId];
-            let card = document.querySelector(`.task-card[data-id="${taskId}"]`);
-            if (card) { card.remove(); delete activeTasksStore[taskId]; }
-        }
-    };
-}
-
-function broadcastClaim(taskId) {
-    claimedTasks.add(taskId);
-    if (bc) bc.postMessage({ type: 'claimed', taskId, workerId: WORKER_ID });
-}
-function broadcastSaved(taskId) {
-    if (bc) bc.postMessage({ type: 'saved', taskId, workerId: WORKER_ID });
-}
-function broadcastDeleted(taskId) {
-    if (bc) bc.postMessage({ type: 'deleted', taskId, workerId: WORKER_ID });
-}
-
-// ══════════════════════════════════════
-// AI
-// ══════════════════════════════════════
 let isAIReady = false, aiModel, knn;
 let autoTrainEnabled = false, autoSaveEnabled = false;
 let retrainState = {};
@@ -293,8 +181,23 @@ function toggleAutoTrain() {
     btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
     if (autoTrainEnabled) {
         if (isAIReady) reEvaluatePending();
-        else { syncStatus.innerHTML = "🧠 AI Loading..."; initAI(); }
+        else { syncStatus.innerHTML = "🧠 AI Loading..."; loadTFScripts(() => initAI()); }
     }
+}
+
+function loadTFScripts(callback) {
+    if (typeof tf !== 'undefined' && typeof mobilenet !== 'undefined' && typeof knnClassifier !== 'undefined') { callback(); return; }
+    let loaded = 0;
+    const scripts = [
+        'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js',
+        'https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js',
+        'https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js'
+    ];
+    scripts.forEach(src => {
+        let s = document.createElement('script'); s.src = src;
+        s.onload = () => { loaded++; if (loaded === scripts.length) callback(); };
+        document.head.appendChild(s);
+    });
 }
 
 function toggleAutoSave() {
@@ -388,12 +291,11 @@ async function reEvaluatePending() {
     }
 }
 
-// ══════════════════════════════════════
-// RETRAIN
-// ══════════════════════════════════════
 function startRetrain(taskId) {
-    let t = activeTasksStore[taskId]; if (!t) return;
-    let card = document.querySelector(`.task-card[data-id="${taskId}"]`); if (!card) return;
+    let t = activeTasksStore[taskId];
+    if (!t) return;
+    let card = document.querySelector(`.task-card[data-id="${taskId}"]`);
+    if (!card) return;
     retrainState[taskId] = { oldClicks: [...(t.clicks || [])], newClicks: [] };
     card.querySelectorAll('.trained-grid img').forEach(img => {
         img.classList.add('retrain-pick');
@@ -414,11 +316,14 @@ function startRetrain(taskId) {
     hint.textContent = '🟠 Sahi images click karo → Confirm Retrain dabao';
     card.querySelector('.actions').before(hint);
     let actions = card.querySelector('.actions');
-    actions.innerHTML = `<button class="btn btn-confirm" onclick="confirmRetrain('${taskId}')">✅ Confirm</button><button class="btn btn-cancel" onclick="cancelRetrain('${taskId}')">❌ Cancel</button>`;
+    actions.innerHTML = `
+        <button class="btn btn-confirm" onclick="confirmRetrain('${taskId}')">✅ Confirm</button>
+        <button class="btn btn-cancel" onclick="cancelRetrain('${taskId}')">❌ Cancel</button>`;
 }
 
 async function confirmRetrain(taskId) {
-    let t = activeTasksStore[taskId], state = retrainState[taskId]; if (!t || !state) return;
+    let t = activeTasksStore[taskId], state = retrainState[taskId];
+    if (!t || !state) return;
     let wrongClicks = (state.oldClicks || []).filter(idx => !state.newClicks.includes(idx));
     t.clicks = state.newClicks;
     let card = document.querySelector(`.task-card[data-id="${taskId}"]`);
@@ -435,262 +340,109 @@ async function confirmRetrain(taskId) {
 
 function cancelRetrain(taskId) {
     delete retrainState[taskId];
-    let card = document.querySelector(`.task-card[data-id="${taskId}"]`); if (!card) return;
+    let card = document.querySelector(`.task-card[data-id="${taskId}"]`);
+    if (!card) return;
     let hint = card.querySelector(`#hint-${taskId}`); if (hint) hint.remove();
     card.querySelectorAll('.trained-grid img').forEach(img => { img.classList.remove('retrain-pick'); img.onclick = null; });
     let actions = card.querySelector('.actions');
     actions.innerHTML = `<button class="btn btn-save">Update</button> <button class="btn btn-retrain" onclick="startRetrain('${taskId}')">🔧 Retrain</button> <button class="btn btn-del">❌</button>`;
 }
 
-// ══════════════════════════════════════
-// DATA FETCHING — optimized
-// ══════════════════════════════════════
-
-// Sirf counts fetch karo (header badges ke liye)
-async function fetchCounts() {
-    if (document.hidden) return;
-    try {
-        let res = await fetch(`${SERVER_URL}/api/counts?t=${Date.now()}`, { cache:'no-store' });
-        if (res.ok) {
-            let d = await res.json();
-            document.getElementById('c-pending').innerText = d.pending || 0;
-            document.getElementById('c-trained').innerText = d.trained || 0;
-        }
-    } catch(e) {}
-}
-
-// Pending tab: sirf naye tasks fetch karo (since=lastTimestamp)
-async function fetchNewPending() {
-    if (document.hidden || isFetching || currentTab !== 'pending') return;
-    isFetching = true;
-    try {
-        let url = `${SERVER_URL}/api/tasks?tab=pending&since=${lastPendingSince}&t=${Date.now()}`;
-        let res = await fetch(url, { cache:'no-store' });
-        if (res.ok) {
-            let d = await res.json();
-            let tasks = d.tasks || {};
-            let newOnes = 0;
-            for (let id in tasks) {
-                if (!pendingCache[id] && !ghostBlocker.has(id)) {
-                    pendingCache[id] = tasks[id];
-                    newOnes++;
-                    // DOM mein add karo — sirf naye
-                    appendPendingCard(id, tasks[id]);
-                    // Timestamp update
-                    let ts = tasks[id].timestamp ? new Date(tasks[id].timestamp).getTime() : 0;
-                    if (ts > lastPendingSince) lastPendingSince = ts;
-                }
-            }
-            // Count badge
-            document.getElementById('c-pending').innerText = Object.keys(pendingCache).length;
-        }
-    } catch(e) {}
-    isFetching = false;
-}
-
-// Trained tab: page fetch
-async function fetchTrainedPage(page) {
-    if (isFetching) return;
-    isFetching = true;
-    try {
-        let url = `${SERVER_URL}/api/tasks?tab=trained&page=${page}&size=${PAGE_SIZE}&t=${Date.now()}`;
-        let res = await fetch(url, { cache:'no-store' });
-        if (res.ok) {
-            let d = await res.json();
-            currentPage = d.page || 0;
-            totalPages = d.pages || 1;
-            totalTasks = d.total || 0;
-            document.getElementById('c-trained').innerText = totalTasks;
-            renderTrainedPage(d.tasks || {});
-            renderPagination();
-        }
-    } catch(e) {}
-    isFetching = false;
-}
-
-// Initial pending load (pehli baar — last 80 tasks)
-async function fetchInitialPending() {
-    if (isFetching) return;
-    isFetching = true;
-    try {
-        let url = `${SERVER_URL}/api/tasks?tab=pending&page=0&size=80&t=${Date.now()}`;
-        let res = await fetch(url, { cache:'no-store' });
-        if (res.ok) {
-            let d = await res.json();
-            pendingCache = {};
-            tasksArea.innerHTML = '';
-            activeTasksStore = {};
-            videoTasks = [];
-            let tasks = d.tasks || {};
-            for (let id in tasks) {
-                if (!ghostBlocker.has(id)) {
-                    pendingCache[id] = tasks[id];
-                    let ts = tasks[id].timestamp ? new Date(tasks[id].timestamp).getTime() : 0;
-                    if (ts > lastPendingSince) lastPendingSince = ts;
-                }
-            }
-            renderAllPending();
-            document.getElementById('c-pending').innerText = Object.keys(pendingCache).length;
-        }
-    } catch(e) {}
-    isFetching = false;
-}
-
-// ══════════════════════════════════════
-// RENDER
-// ══════════════════════════════════════
-
-function renderAllPending() {
-    tasksArea.innerHTML = '';
-    activeTasksStore = {};
-    videoTasks = [];
-    let frag = document.createDocumentFragment();
-    let query = searchQuery.toLowerCase();
-    let ids = Object.keys(pendingCache);
-    let count = 0;
-    for (let id of ids) {
-        if (ghostBlocker.has(id)) continue;
-        if (query && !id.toLowerCase().includes(query) && !(pendingCache[id].prompt||'').toLowerCase().includes(query)) continue;
-        let td = pendingCache[id], media = td.media || [], isGrid = media.length > 1;
-        activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
-        let card = buildCard(activeTasksStore[id]);
-        if (card) { frag.appendChild(card); count++; }
-        if (isAIReady && autoTrainEnabled && isGrid) predictWithAI(activeTasksStore[id]);
-    }
-    tasksArea.appendChild(frag);
-    if (!count) tasksArea.innerHTML = '<div class="empty-state">✅ Koi pending task nahi — sab theek hai!</div>';
-    hidePagination();
-}
-
-function appendPendingCard(id, td) {
-    if (ghostBlocker.has(id) || activeTasksStore[id]) return;
-    if (searchQuery) {
-        let q = searchQuery.toLowerCase();
-        if (!id.toLowerCase().includes(q) && !(td.prompt||'').toLowerCase().includes(q)) return;
-    }
-    let media = td.media || [], isGrid = media.length > 1;
-    activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
-    let card = buildCard(activeTasksStore[id]);
-    if (card) {
-        // Empty state hatao agar tha
-        let es = tasksArea.querySelector('.empty-state');
-        if (es) es.remove();
-        tasksArea.prepend(card);
-    }
-    if (isAIReady && autoTrainEnabled && isGrid) predictWithAI(activeTasksStore[id]);
-}
-
-function renderTrainedPage(tasks) {
-    tasksArea.innerHTML = '';
-    activeTasksStore = {};
-    videoTasks = [];
-    let frag = document.createDocumentFragment();
-    let count = 0;
-    for (let id in tasks) {
-        if (ghostBlocker.has(id)) continue;
-        let td = tasks[id], media = td.media || [], isGrid = media.length > 1, clicks = td.clicks || [];
-        activeTasksStore[id] = { id, clicks, type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
-        let card = buildCard(activeTasksStore[id]);
-        if (card) { frag.appendChild(card); count++; }
-    }
-    tasksArea.appendChild(frag);
-    if (!count) tasksArea.innerHTML = '<div class="empty-state">📭 Is page mein koi trained task nahi</div>';
-}
-
-function renderPagination() {
-    if (totalPages <= 1) { hidePagination(); return; }
-    let html = '';
-    // Prev
-    html += `<button class="page-btn" onclick="goToPage(${currentPage-1})" ${currentPage===0?'disabled':''}>← Prev</button>`;
-    // Pages — max 7 buttons
-    let start = Math.max(0, currentPage - 3);
-    let end   = Math.min(totalPages - 1, currentPage + 3);
-    if (start > 0) html += `<button class="page-btn" onclick="goToPage(0)">1</button><span class="page-info">…</span>`;
-    for (let p = start; p <= end; p++) {
-        html += `<button class="page-btn ${p===currentPage?'active-page':''}" onclick="goToPage(${p})">${p+1}</button>`;
-    }
-    if (end < totalPages - 1) html += `<span class="page-info">…</span><button class="page-btn" onclick="goToPage(${totalPages-1})">${totalPages}</button>`;
-    // Next
-    html += `<button class="page-btn" onclick="goToPage(${currentPage+1})" ${currentPage>=totalPages-1?'disabled':''}>Next →</button>`;
-    html += `<span class="page-info">(${totalTasks} total)</span>`;
-    
-    ['paginationTop','paginationBottom'].forEach(id => {
-        let el = document.getElementById(id);
-        el.innerHTML = html; el.style.display = 'flex';
-    });
-}
-
-function hidePagination() {
-    document.getElementById('paginationTop').style.display = 'none';
-    document.getElementById('paginationBottom').style.display = 'none';
-}
-
-function goToPage(p) {
-    if (p < 0 || p >= totalPages) return;
-    window.scrollTo(0, 0);
-    fetchTrainedPage(p);
-}
-
-// ══════════════════════════════════════
-// TAB & SEARCH
-// ══════════════════════════════════════
 function setTab(tab) {
-    currentTab = tab;
-    currentPage = 0;
-    searchQuery = '';
-    document.getElementById('searchInput').value = '';
+    currentTab = tab; trainedPage = 0;
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.getElementById('btn-' + tab).classList.add('active');
+    document.getElementById('searchInput').value = '';
     tasksArea.innerHTML = ''; activeTasksStore = {}; videoTasks = [];
-    hidePagination();
-
-    if (tab === 'pending') {
-        renderAllPending();
-    } else {
-        fetchTrainedPage(0);
-    }
+    renderCurrentData();
 }
 
-let _searchTimer = null;
-function onSearch() {
-    searchQuery = document.getElementById('searchInput').value.trim();
-    clearTimeout(_searchTimer);
-    _searchTimer = setTimeout(() => {
-        if (currentTab === 'pending') {
-            renderAllPending();
-        } else {
-            // Trained tab — server side search nahi hai yet, client side filter
-            document.querySelectorAll('.task-card').forEach(c => {
-                let q = searchQuery.toLowerCase().replace('#','');
-                c.style.display = (!q || c.dataset.id.toLowerCase().includes(q) || (c.dataset.prompt||'').toLowerCase().includes(q)) ? "" : "none";
-            });
+function filterTasks() {
+    let f = document.getElementById('searchInput').value.toLowerCase().replace('#', '');
+    document.querySelectorAll('.task-card').forEach(c => { c.style.display = c.dataset.id.toLowerCase().includes(f) ? "" : "none"; });
+}
+
+let _fetchTimer = null;
+async function fetchTasks() {
+    if (document.hidden || isFetching) return;
+    isFetching = true;
+    try {
+        let res = await fetch(`${SERVER_URL}/api/get-hcaptcha?t=${Date.now()}`, { cache:'no-store' });
+        if (res.ok) {
+            serverData = await res.json();
+            document.getElementById('c-pending').innerText = Object.keys(serverData.pending).length;
+            document.getElementById('c-trained').innerText = Object.keys(serverData.trained).length;
+            renderCurrentData();
         }
-    }, 300);
+    } catch(e) {}
+    isFetching = false;
+}
+function startFetch() { if (!_fetchTimer) _fetchTimer = setInterval(fetchTasks, 800); fetchTasks(); }
+function stopFetch()  { if (_fetchTimer) { clearInterval(_fetchTimer); _fetchTimer = null; } }
+document.addEventListener('visibilitychange', () => document.hidden ? stopFetch() : startFetch());
+
+let trainedPage = 0; const TRAINED_PAGE_SIZE = 20;
+function renderCurrentData() {
+    let activeData = currentTab === 'pending' ? serverData.pending : serverData.trained;
+    document.querySelectorAll('.task-card').forEach(card => {
+        let id = card.dataset.id;
+        if (!activeData[id] || ghostBlocker.has(id)) { card.remove(); delete activeTasksStore[id]; }
+    });
+    let oldBtn = document.getElementById('loadMoreBtn'); if (oldBtn) oldBtn.remove();
+    let frag = document.createDocumentFragment();
+    let ids = Object.keys(activeData);
+    
+    if (currentTab === 'trained') {
+        ids = ids.reverse();
+        let toShow = ids.slice(0, (trainedPage + 1) * TRAINED_PAGE_SIZE);
+        for (let id of toShow) {
+            if (ghostBlocker.has(id) || activeTasksStore[id]) continue;
+            let td = activeData[id], media = td.media || [], isGrid = media.length > 1, clicks = td.clicks || [];
+            activeTasksStore[id] = { id, clicks, type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
+            let card = buildCard(activeTasksStore[id]);
+            if (card) frag.appendChild(card);
+        }
+        tasksArea.appendChild(frag);
+        if (ids.length > (trainedPage + 1) * TRAINED_PAGE_SIZE) {
+            let btn = document.createElement('button'); btn.id = 'loadMoreBtn';
+            btn.textContent = `⬇️ Load More (${ids.length - (trainedPage + 1) * TRAINED_PAGE_SIZE} remaining)`;
+            btn.style = 'width:100%;padding:12px;margin-top:10px;background:#333;color:#00ff88;border:2px solid #00ff88;border-radius:6px;cursor:pointer;font-size:15px;font-weight:bold;';
+            btn.onclick = () => { trainedPage++; renderCurrentData(); };
+            tasksArea.appendChild(btn);
+        }
+    } else {
+        for (let id of ids) {
+            if (ghostBlocker.has(id) || activeTasksStore[id]) continue;
+            let td = activeData[id], media = td.media || [], isGrid = media.length > 1;
+            activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
+            let card = buildCard(activeTasksStore[id]);
+            if (card) frag.appendChild(card);
+            if (isAIReady && autoTrainEnabled && isGrid) predictWithAI(activeTasksStore[id]);
+        }
+        tasksArea.appendChild(frag);
+    }
+    filterTasks();
 }
 
-// ══════════════════════════════════════
-// CARD BUILDER
-// ══════════════════════════════════════
 function buildCard(t) {
-    let isPending = currentTab === 'pending';
-    let card = document.createElement('div');
-    card.className = 'task-card';
-    card.dataset.id = t.id;
-    card.dataset.prompt = (t.prompt||'').split('|||')[0].substring(0,50);
-
-    let parts = t.prompt.split('|||');
-
+    let card = document.createElement('div'); card.className = 'task-card'; card.dataset.id = t.id;
+    let isPending = currentTab === 'pending', parts = t.prompt.split('|||');
+    
     function _safeUrl(u) {
         if (!u) return '';
-        u = u.trim();
+        u = u.trim(); // FIX: Extra spaces remove karne ke liye
         if (u.startsWith('data:image/')) return u;
         if (/^https?:\/\//.test(u)) return u.replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
         return '';
     }
     
+    // parts[1] = real example (base64). Grid image kabhi example nahi hoti.
     let _exSrc = parts[1] ? _safeUrl(parts[1]) : '';
+    
+    // FIX: Inline onerror CSP (security block) ki wajah se run nahi ho raha tha, isay neechay global listener se handle kiya hai
     let exHtml = _exSrc
-        ? `<img src="${_exSrc}" class="example-img" style="display:block"><div class="example-img-placeholder" style="display:none">🖼️</div>`
+        ? `<img src="${_exSrc}" class="example-img" style="display:block">
+           <div class="example-img-placeholder" style="display:none">🖼️</div>`
         : `<div class="example-img-placeholder">🖼️</div>`;
 
     let isMediaMissing = t.media.length === 0 || t.media.every(m => !m.thumb && !m.src && !m.frames);
@@ -717,22 +469,14 @@ function buildCard(t) {
         if (isVid) videoTasks.push({ id: t.id, frames: m.frames, current: 0 });
     }
 
-    // Worker claim badge
-    let claimBadge = isPending 
-        ? `<span class="claim-badge ${claimedTasks.has(t.id)?'mine':''}" id="cb-${t.id}">${claimedTasks.has(t.id)?WORKER_ID:'---'}</span>`
-        : '';
-
     let actionsHtml = isPending ? 
         `<button class="btn btn-save">Save Task</button> ${!isMediaMissing ? `<button class="btn btn-reset">Clear</button>` : ''} <button class="btn btn-del">❌</button>` : 
         `${!isMediaMissing ? `<button class="btn btn-save">Update</button> <button class="btn btn-retrain" onclick="startRetrain('${t.id}')">🔧 Retrain</button>` : `<button class="btn btn-disabled" disabled>No Update</button>`} <button class="btn btn-del">❌</button>`;
 
     card.innerHTML = `
         <div class="task-head">
-            <span class="task-id">#${t.id.substring(0,8)}</span>
-            <div style="display:flex;gap:6px;align-items:center">
-                ${claimBadge}
-                ${!isPending ? `<span style="font-size:11px;color:#666">${t.clicks.length} clicks</span>` : ''}
-            </div>
+            <span class="task-id">${t.num ? `<span style="color:#888;font-size:12px">#${t.num}</span> ` : ''}#${t.id.substring(0,6)}</span>
+            ${!isPending ? `<span style="font-size:11px;color:#666">${t.clicks.length} clicks</span>` : ''}
         </div>
         <div class="prompt-container"><div class="example-wrap" style="flex-shrink:0;width:55px;height:55px;position:relative">${exHtml}</div><div class="task-prompt">${parts[0]}</div></div>
         ${mediaHTML}
@@ -740,9 +484,7 @@ function buildCard(t) {
     return card;
 }
 
-// ══════════════════════════════════════
-// VIDEO PLAYER
-// ══════════════════════════════════════
+// FIX: Yahan 400 ki jagah 200 kar diya gaya hai taake video apni natural speed mein play ho
 setInterval(() => {
     videoTasks.forEach(vt => {
         let el = document.querySelector(`.vid-player[data-id="${vt.id}"]`);
@@ -750,20 +492,10 @@ setInterval(() => {
     });
 }, 200); 
 
-// ══════════════════════════════════════
-// CLICK HANDLER
-// ══════════════════════════════════════
 tasksArea.addEventListener('click', (e) => {
     let card = e.target.closest('.task-card'); if (!card) return;
     let tid = card.dataset.id, t = activeTasksStore[tid]; if (!t) return;
     if (retrainState[tid] && !e.target.classList.contains('btn-confirm') && !e.target.classList.contains('btn-cancel')) return;
-
-    // Pehli click par claim karo (pending tab)
-    if (currentTab === 'pending' && !claimedTasks.has(tid)) {
-        broadcastClaim(tid);
-        let badge = document.getElementById('cb-' + tid);
-        if (badge) { badge.textContent = WORKER_ID; badge.className = 'claim-badge mine'; }
-    }
 
     if (e.target.classList.contains('g-img')) {
         let idx = parseInt(e.target.dataset.index);
@@ -782,8 +514,7 @@ tasksArea.addEventListener('click', (e) => {
         card.querySelectorAll('.dot').forEach(d => d.remove()); card.classList.remove('ai-processing');
     } else if (e.target.classList.contains('btn-del')) {
         card.style.opacity = '0.3'; card.style.pointerEvents = 'none'; ghostBlocker.add(tid);
-        card.remove(); delete activeTasksStore[tid]; delete pendingCache[tid];
-        broadcastDeleted(tid);
+        card.remove(); delete activeTasksStore[tid];
         fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method:'DELETE' }).catch(e => {});
     }
 });
@@ -799,44 +530,24 @@ async function sendToServer(taskId, btnEl, card) {
         }
         if (currentTab === 'pending') {
             ghostBlocker.add(taskId); setTimeout(() => ghostBlocker.delete(taskId), 4000);
-            if (card) card.remove(); delete activeTasksStore[taskId]; delete pendingCache[taskId];
-            broadcastSaved(taskId);
-        } else {
-            if (btnEl) { btnEl.textContent='Updated!'; setTimeout(()=>{ if(btnEl){btnEl.textContent='Update';btnEl.disabled=false;} },1000); }
-        }
+            if (card) card.remove(); delete activeTasksStore[taskId];
+        } else { if (btnEl) { btnEl.textContent='Updated!'; setTimeout(()=>{ if(btnEl){btnEl.textContent='Update';btnEl.disabled=false;} },1000); } }
         await fetch(`${SERVER_URL}/api/submit-hcaptcha`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ taskId, clicks: t.clicks }) });
     } catch(e) { if (btnEl) { btnEl.textContent='❌ Retry'; btnEl.disabled = false; }
     } finally { _saving.delete(taskId); }
 }
 
-// ══════════════════════════════════════
-// ERROR HANDLER
-// ══════════════════════════════════════
+// FIX: Global error listener add kiya hai taake CSP error handler ko block na kare
 window.addEventListener('error', function(e) {
     if (e.target && e.target.tagName === 'IMG' && e.target.classList.contains('example-img')) {
         e.target.style.display = 'none';
-        if (e.target.nextElementSibling) e.target.nextElementSibling.style.display = 'flex';
+        if (e.target.nextElementSibling) {
+            e.target.nextElementSibling.style.display = 'flex';
+        }
     }
 }, true);
 
-// ══════════════════════════════════════
-// TIMERS START — visibility aware
-// ══════════════════════════════════════
-function startTimers() {
-    if (countsTimer) return;
-    countsTimer  = setInterval(fetchCounts, POLL_INTERVAL_COUNTS);
-    pendingTimer = setInterval(fetchNewPending, POLL_INTERVAL_PENDING);
-}
-function stopTimers() {
-    clearInterval(countsTimer); clearInterval(pendingTimer);
-    countsTimer = null; pendingTimer = null;
-}
-document.addEventListener('visibilitychange', () => document.hidden ? stopTimers() : startTimers());
-
-// ── INIT ──
-fetchInitialPending().then(() => startTimers());
-fetchCounts();
-setTimeout(initAI, 600);
+setTimeout(startFetch, 200); setTimeout(initAI, 500);
 </script>
 </body>
 </html>
