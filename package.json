@@ -1,17 +1,13 @@
 {
   "name": "hcaptcha-master-server",
-  "version": "3.0.0",
-  "description": "Enterprise Backend for hCaptcha training with Server-side AI",
+  "version": "1.0.0",
+  "description": "Backend for hCaptcha training",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "socket.io": "^4.7.5",
-    "@tensorflow/tfjs-node": "^4.20.0",
-    "@tensorflow-models/mobilenet": "^2.1.1",
-    "@tensorflow-models/knn-classifier": "^1.2.4"
+    "express": "^4.19.2"
   }
 }
