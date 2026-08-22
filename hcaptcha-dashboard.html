@@ -10,7 +10,6 @@
         * { box-sizing: border-box; }
         body { background-color: #121212; color: #ffffff; font-family: Arial, sans-serif; margin: 0; padding: 20px; }
         
-        /* Mode Selection Overlay */
         #modeOverlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #121212; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px; }
         .mode-btn { padding: 20px 40px; font-size: 20px; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; transition: transform 0.2s; }
         .mode-btn:hover { transform: scale(1.05); }
@@ -114,7 +113,7 @@ function startApp(mode) {
         document.getElementById('appTitle').innerHTML = 'Master AI Node 👑';
         document.getElementById('btnAutoTrain').style.display = 'inline-block';
         document.getElementById('btnAutoSave').style.display = 'inline-block';
-        loadAILibraries(); // Sirf Master mode me TensorFlow load hoga!
+        loadAILibraries();
     } else {
         document.getElementById('appTitle').innerHTML = 'Worker Node 👨‍💻';
         document.getElementById('syncStatus').innerHTML = "🟢 Connected (Worker Mode)";
@@ -141,13 +140,17 @@ function loadAILibraries() {
 
 async function initAI() {
     try {
+        await tf.ready(); // 🔴 FIX: AI loading se pehle wait lazmi hai
         aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
         knn = knnClassifier.create();
-        await loadKNN(); // IndexedDB se load karega
+        await loadKNN(); 
         isAIReady = true;
         document.getElementById('syncStatus').innerHTML = "🤖 Master AI Active ✅";
         document.getElementById('syncStatus').classList.add('active');
-    } catch(e) { document.getElementById('syncStatus').innerHTML = "⚠️ AI Failed to load"; }
+    } catch(e) { 
+        console.error("AI Init Error:", e);
+        document.getElementById('syncStatus').innerHTML = "⚠️ AI Failed: " + e.message; 
+    }
 }
 
 const IDB = { name:'hcm_knn', store:'knn', key:'model_v3' };
@@ -171,10 +174,10 @@ async function loadKNN() {
     }
 }
 
-// Master AI Predictor
+// Predictor
 async function predictWithAI(task) {
     if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
-    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
+    let pText = (task.prompt || "").split('|||')[0].trim().toLowerCase();
     let dataset = knn.getClassExampleCount();
     if (!dataset[pText]) return;
 
@@ -194,9 +197,7 @@ async function predictWithAI(task) {
     }
 
     if (predictedClicks.length >= 2 && predictedClicks.length <= 6) {
-        // Send prediction back to server to broadcast to all workers
         socket.emit('aiPredictionResult', { taskId: task.id, clicks: predictedClicks });
-        
         if (autoSaveEnabled) {
             setTimeout(() => {
                 fetch('/api/submit-hcaptcha', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ taskId: task.id, clicks: predictedClicks, wrongIndices: [] }) });
@@ -205,10 +206,10 @@ async function predictWithAI(task) {
     }
 }
 
-// Master AI Trainer (Runs when ANY worker submits a task)
+// Trainer
 async function trainAIBrain(task, wrongIndices = []) {
     if (!isAIReady || task.type !== 'grid' || !task.media) return;
-    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
+    let pText = (task.prompt || "").split('|||')[0].trim().toLowerCase();
     let negLabel = 'negative_' + pText;
     let learned = false;
 
@@ -221,7 +222,7 @@ async function trainAIBrain(task, wrongIndices = []) {
             if (!img.complete || img.naturalWidth === 0) continue;
             let tfImg = tf.browser.fromPixels(img);
             let features = aiModel.infer(tfImg, true);
-            let isCorrect = task.clicks.includes(m.index);
+            let isCorrect = (task.clicks||[]).includes(m.index);
             let isWrong = wrongIndices.includes(m.index);
 
             if (isCorrect) { knn.addExample(features, pText); knn.addExample(features, pText); } 
@@ -235,7 +236,7 @@ async function trainAIBrain(task, wrongIndices = []) {
 }
 
 // -----------------------------------------
-// UI & SOCKET LOGIC (For BOTH Master & Worker)
+// UI & SOCKET LOGIC 
 // -----------------------------------------
 socket.on('initialState', (data) => { serverData = data; renderTasks(); });
 
@@ -245,7 +246,6 @@ socket.on('newTask', async (task) => {
     if (isMaster && autoTrainEnabled) await predictWithAI(task);
 });
 
-// Server received a prediction from Master and sent it to everyone
 socket.on('updateTask', (task) => {
     serverData.pending[task.id] = task;
     renderTasks();
@@ -255,11 +255,7 @@ socket.on('taskCompleted', async (data) => {
     delete serverData.pending[data.task.id];
     serverData.trained[data.task.id] = data.task;
     renderTasks();
-    
-    // Master Node alone takes responsibility to learn from the submission!
-    if (isMaster && isAIReady) {
-        await trainAIBrain(data.task, data.wrongIndices);
-    }
+    if (isMaster && isAIReady) await trainAIBrain(data.task, data.wrongIndices);
 });
 
 socket.on('taskDeleted', (taskId) => {
@@ -305,7 +301,10 @@ function renderTasks() {
     else if (currentTab === 'workers') list = Object.values(serverData.pending).filter(t => t.type !== 'grid');
     else list = Object.values(serverData.trained).reverse().slice(0, 50);
 
-    list.forEach(t => tasksArea.appendChild(buildCard(t)));
+    // 🔴 FIX: try-catch for extra safety
+    list.forEach(t => {
+        try { tasksArea.appendChild(buildCard(t)); } catch(e) { console.error("Error building card:", e); }
+    });
 }
 
 function buildCard(t) {
@@ -314,8 +313,11 @@ function buildCard(t) {
     card.className = `task-card ${showAI ? 'ai-processing' : ''}`; 
     card.dataset.id = t.id;
     
+    // 🔴 FIX: Null safety checks added
+    let taskIdStr = t.id || "000000";
+    let promptStr = t.prompt || "";
     let isPending = !!serverData.pending[t.id];
-    let parts = t.prompt.split('|||');
+    let parts = promptStr.split('|||');
     let exHtml = parts[1] ? `<img src="${parts[1]}" class="example-img">` : `🖼️`;
     let isMediaMissing = !t.media || t.media.length === 0 || t.media.every(m => !m.thumb && !m.src && !m.frames);
     let mediaHTML = '';
@@ -333,7 +335,8 @@ function buildCard(t) {
         });
         mediaHTML += '</div>';
     } else {
-        let m = t.media[0], isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
+        let m = t.media[0] || {};
+        let isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
         let src = isVid ? m.frames[0] : (m.src || '');
         mediaHTML = `<div class="single-box"><img src="${src}" class="s-img ${isVid?'vid-player':''}" data-id="${t.id}">`;
         (t.clicks||[]).forEach(pt => { mediaHTML += `<div class="dot" style="left:${pt.px}%;top:${pt.py}%;"></div>`; });
@@ -346,7 +349,7 @@ function buildCard(t) {
         `<button class="btn btn-retrain" onclick="startRetrain('${t.id}')">🔧 Retrain AI</button> <button class="btn btn-del" onclick="deleteTask('${t.id}')">❌</button>`;
 
     card.innerHTML = `
-        <div class="task-head"><span class="task-id">#${t.id.substring(0,6)}</span></div>
+        <div class="task-head"><span class="task-id">#${taskIdStr.substring(0,6)}</span></div>
         <div class="prompt-container"><div class="example-wrap">${exHtml}</div><div class="task-prompt">${parts[0]}</div></div>
         ${mediaHTML}
         <div class="actions" id="act-${t.id}">${actionsHtml}</div>`;
@@ -365,7 +368,7 @@ document.getElementById('tasksArea').addEventListener('click', (e) => {
 
     if (e.target.classList.contains('g-img')) {
         let idx = parseInt(e.target.dataset.index);
-        t.aiPredicted = false; // Manual click breaks AI assumption
+        t.aiPredicted = false; 
         card.classList.remove('ai-processing');
         
         if (e.target.classList.contains('selected') || e.target.classList.contains('ai-pick') || e.target.classList.contains('retrain-pick')) {
