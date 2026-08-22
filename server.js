@@ -26,7 +26,6 @@ function initDB() {
         try {
             const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
             hcaptchaTrained = data.trained || {};
-            console.log(`[DB] Engine Loaded. Trained: ${Object.keys(hcaptchaTrained).length}`);
         } catch (e) {}
     }
 }
@@ -40,19 +39,20 @@ app.post('/api/new-hcaptcha', (req, res) => {
     const task = req.body;
     if (!task || !task.taskId) return res.json({ success: false });
 
-    // Exact Match (DB check)
     if (hcaptchaTrained[task.taskId]) {
         return res.json({ success: true, autoSolved: true, clicks: hcaptchaTrained[task.taskId].clicks });
     }
 
+    // 🔴 FIX: Yahan task.id assign karna zaroori tha taake UI crash na ho!
+    task.id = task.taskId; 
+    task.prompt = task.prompt || "";
     task.type = (task.media && task.media.length > 1) ? 'grid' : 'coord';
     task.clicks = [];
     task.aiPredicted = false;
 
-    hcaptchaPending[task.taskId] = task;
+    hcaptchaPending[task.id] = task;
 
-    // Send to all Dashboards (Master will predict, Workers will display)
-    io.emit('newTask', hcaptchaPending[task.taskId]);
+    io.emit('newTask', hcaptchaPending[task.id]);
 
     const keys = Object.keys(hcaptchaPending);
     if (keys.length >= MAX_PENDING) delete hcaptchaPending[keys[0]];
@@ -69,7 +69,6 @@ app.post('/api/submit-hcaptcha', (req, res) => {
         delete hcaptchaPending[taskId];
         persistDatabase();
         
-        // Broadcast completion (Master Node will catch this and Train the AI)
         io.emit('taskCompleted', { task: hcaptchaTrained[taskId], wrongIndices });
     }
     res.json({ success: true });
@@ -87,13 +86,11 @@ app.delete('/api/delete-hcaptcha/:id', (req, res) => {
 io.on('connection', (socket) => {
     socket.emit('initialState', { pending: hcaptchaPending, trained: hcaptchaTrained });
 
-    // Receive Prediction from Master Node
     socket.on('aiPredictionResult', (data) => {
         const { taskId, clicks } = data;
         if (hcaptchaPending[taskId]) {
             hcaptchaPending[taskId].clicks = clicks;
             hcaptchaPending[taskId].aiPredicted = true;
-            // Send updated task (with pink borders) to all Workers
             io.emit('updateTask', hcaptchaPending[taskId]);
         }
     });
