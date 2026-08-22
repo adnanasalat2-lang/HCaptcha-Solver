@@ -189,13 +189,7 @@ app.get('/api/check-hcaptcha/:id', (req, res) => {
 });
 
 app.get('/api/get-hcaptcha', (req, res) => {
-    // FIX: Dashboard ko sirf latest 100 trained items bhejen taake Bandwidth/RAM bache
-    let trainedKeys = Object.keys(hcaptchaTrained);
-    let recentTrained = {};
-    
-    trainedKeys.slice(-100).forEach(k => recentTrained[k] = hcaptchaTrained[k]);
-    
-    res.json({ pending: hcaptchaPending, trained: recentTrained });
+    res.json({ pending: hcaptchaPending, trained: hcaptchaTrained });
 });
 
 app.post('/api/submit-hcaptcha', (req, res) => {
