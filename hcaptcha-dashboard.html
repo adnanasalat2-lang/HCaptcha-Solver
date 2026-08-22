@@ -3,200 +3,434 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>hCaptcha Master - Smart Dashboard</title>
+    <meta name="referrer" content="no-referrer">
+    <title>hCaptcha Master - AI Edition</title>
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
     <style>
-        /* Tumhari original styling wesi hi rakhi hai, code chota rakhne ke liye sirf main layout likha hai */
-        body { background-color: #121212; color: #ffffff; font-family: Arial, sans-serif; padding: 20px; }
-        .header { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; border-bottom: 2px solid #00ff88; padding-bottom: 10px; }
+        * { box-sizing: border-box; }
+        body { background-color: #121212; color: #ffffff; font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        .header { background: #1e1e1e; padding: 15px 20px; border-bottom: 3px solid #00ff88; margin-bottom: 20px; display: flex; flex-direction: column; gap: 15px; }
+        .header-top { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+        .header h1 { margin: 0; font-size: 20px; color: #00ff88; }
+        .ai-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .sync-status { font-size: 13px; color: #ffaa00; font-weight: bold; transition: color 0.3s; }
+        .sync-status.active { color: #00ff88; }
+        .btn-toggle { padding: 6px 14px; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: bold; border: 2px solid #555; transition: all 0.2s; background: #333; color: #888; }
+        .btn-toggle.on { background: #00ff88; color: #000; border-color: #00ff88; }
         .tabs { display: flex; gap: 10px; }
-        .tab-btn { background: #333; color: #ccc; padding: 10px; cursor: pointer; border: none; font-weight: bold; }
-        .tab-btn.active { background: #00ff88; color: #000; }
-        .grid-container { display: flex; flex-wrap: wrap; gap: 15px; }
-        .task-card { background: #1e1e1e; padding: 15px; border: 1px solid #333; min-width: 400px; }
+        .tab-btn { background: #333; color: #ccc; border: 2px solid #444; padding: 10px 20px; font-size: 16px; font-weight: bold; cursor: pointer; border-radius: 4px; outline: none; }
+        .tab-btn.active { background: #00ff88; color: #000; border-color: #00ff88; }
+        .count { background: #000; color: #fff; padding: 2px 8px; border-radius: 10px; margin-left: 8px; font-size: 14px; }
+        .grid-container { display: flex; flex-wrap: wrap; gap: 15px; align-items: flex-start; }
+        
+        .task-card { background: #1e1e1e; min-width: 480px; flex: 1; max-width: 650px; padding: 15px; border: 1px solid #333; border-radius: 6px; }
         .task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 10px rgba(255,0,255,0.4); }
+        .task-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .task-id { color: #ff4444; font-family: monospace; font-size: 16px; font-weight: bold; }
+        .prompt-container { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; background: #222; padding: 8px; border-radius: 6px; border: 1px solid #333; }
+        .example-wrap { flex-shrink: 0; width: 55px; height: 55px; }
+        .example-img { width: 55px; height: 55px; object-fit: cover; border-radius: 4px; background: #222; border: 1px solid #555; display: block; }
+        .example-img-placeholder { width: 55px; height: 55px; border-radius: 4px; background: #2a2a2a; border: 1px dashed #555; display: flex; align-items: center; justify-content: center; font-size: 20px; }
+        .task-prompt { color: #fff; font-size: 14px; font-weight: bold; margin: 0; line-height: 1.4; flex: 1; }
+        
         .img-grid, .trained-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
-        .img-grid img, .trained-grid img { width: 100%; height: 120px; object-fit: cover; cursor: pointer; border: 3px solid transparent; }
-        .img-grid img.selected, .trained-grid img.was-clicked { border-color: #00ff88; }
+        .img-grid img, .trained-grid img { width: 100%; height: 140px; object-fit: cover; cursor: pointer; border: 4px solid transparent; background: #222; transition: opacity 0.3s; }
+        .img-grid img.selected { border-color: #00ff88; opacity: 0.7; }
         .img-grid img.ai-pick { border-color: #ff00ff; }
-        .trained-grid img.retrain-pick { border-color: #ff8800; }
-        .btn { padding: 10px; cursor: pointer; margin-top: 10px; font-weight: bold; border: none; }
-        .btn-save { background: #00ff88; } .btn-retrain { background: #ff8800; } .btn-del { background: #ff4444; }
+        .trained-grid img { border: 3px solid #333; height: 100px; }
+        .trained-grid img.was-clicked { border-color: #00ff88; }
+        .trained-grid img.retrain-pick { border-color: #ff8800; cursor: pointer; }
+        
+        .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; background: #000; border-radius: 4px; border: 2px solid #444; overflow: hidden; }
+        .single-box img { width: 100%; height: auto; min-height: 450px; max-height: 600px; object-fit: contain; display: block; }
+        .dot { position: absolute; width: 18px; height: 18px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+        .missing-media { background: #111; color: #888; padding: 20px 10px; text-align: center; border-radius: 4px; border: 1px dashed #444; font-size: 13px; line-height: 1.6; }
+        
+        .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+        .btn { flex: 1; padding: 12px; border: none; font-weight: bold; cursor: pointer; color: #fff; font-size: 14px; border-radius: 4px; }
+        .btn-save { background: #00ff88; color: #000; }
+        .btn-reset { background: #555; }
+        .btn-del { background: #ff4444; flex: 0.3; }
+        .btn-retrain, .btn-confirm { background: #ff8800; color: #000; }
+        .btn-cancel { background: #555; }
+        .btn-disabled { background: #222; color: #555; cursor: not-allowed; }
+        .retrain-hint { font-size: 12px; color: #ff8800; margin-top: 6px; padding: 6px 10px; background: #1a0f00; border-radius: 4px; }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h2>Dashboard 🤖 <span id="ai-status">Loading AI...</span></h2>
-        <div>
-            <button id="btnAutoTrain" onclick="autoTrainEnabled = !autoTrainEnabled; this.style.background = autoTrainEnabled ? '#00ff88' : '#333';">🧠 Auto Train: OFF</button>
-            <button id="btnAutoSave" onclick="autoSaveEnabled = !autoSaveEnabled; this.style.background = autoSaveEnabled ? '#00ff88' : '#333';">💾 Auto Save: OFF</button>
-        </div>
+<div class="header">
+    <div class="header-top">
+        <h1>hCaptcha Master 🤖</h1>
         <div class="tabs">
-            <button class="tab-btn active" onclick="setTab('ai-grids')">AI Grids</button>
-            <button class="tab-btn" onclick="setTab('workers')">Worker Tasks (Coords)</button>
-            <button class="tab-btn" onclick="setTab('trained')">Trained (Retrain)</button>
+            <button class="tab-btn active" onclick="setTab('ai-grids')">AI Grids <span class="count" id="c-grids">0</span></button>
+            <button class="tab-btn" onclick="setTab('workers')">Worker Tasks <span class="count" id="c-workers">0</span></button>
+            <button class="tab-btn" onclick="setTab('trained')">Trained <span class="count" id="c-trained">0</span></button>
         </div>
     </div>
-    
-    <div class="grid-container" id="tasksArea"></div>
+    <div class="ai-bar">
+        <span class="sync-status" id="syncStatus">🧠 AI Loading...</span>
+        <button id="btnAutoTrain" class="btn-toggle" onclick="toggleAutoTrain()">🧠 Auto Train: OFF</button>
+        <button id="btnAutoSave" class="btn-toggle" onclick="toggleAutoSave()">💾 Auto Save: OFF</button>
+    </div>
+</div>
+<div class="grid-container" id="tasksArea"></div>
 
 <script>
-    const socket = io();
-    let currentTab = 'ai-grids';
-    let dataStore = { pending: {}, trained: {} };
-    let isAIReady = false, aiModel, knn;
-    let autoTrainEnabled = false, autoSaveEnabled = false;
-    let retrainState = {};
+const socket = io();
+let currentTab = 'ai-grids';
+let serverData = { pending: {}, trained: {} };
+let videoTasks = [];
 
-    // 1. AI Initialization (Original Flow)
-    async function initAI() {
+// --- AI Initialization (Original Logic) ---
+let isAIReady = false, aiModel, knn;
+let autoTrainEnabled = false, autoSaveEnabled = false;
+let retrainState = {};
+
+async function initAI() {
+    try {
         aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
         knn = knnClassifier.create();
+        await loadKNN();
         isAIReady = true;
-        document.getElementById('ai-status').innerText = '✅ AI Ready';
-        // Yahan local storage / IndexedDB load karne ka function call karlena jo tumhare purane code mein tha
-    }
-    initAI();
+        document.getElementById('syncStatus').innerHTML = "🤖 AI Ready ✅";
+        document.getElementById('syncStatus').classList.add('active');
+    } catch(e) { document.getElementById('syncStatus').innerHTML = "⚠️ AI Failed — Reload karo"; }
+}
 
-    // 2. WebSockets for instant tasks
-    socket.on('initialState', (data) => { dataStore = data; renderTasks(); });
-    socket.on('taskCompleted', (task) => { delete dataStore.pending[task.id]; dataStore.trained[task.id] = task; renderTasks(); });
-    
-    socket.on('newTask', async (task) => {
-        dataStore.pending[task.id] = task;
-        renderTasks(); // Update UI if visible
+const IDB = { name:'hcm_knn', store:'knn', key:'model_v3' };
+function idbOpen() { return new Promise((res,rej)=>{ let r=indexedDB.open(IDB.name,1); r.onupgradeneeded=e=>e.target.result.createObjectStore(IDB.store); r.onsuccess=e=>res(e.target.result); r.onerror=()=>rej(r.error); }); }
+async function idbSet(val) { let db=await idbOpen(); return new Promise((res,rej)=>{ let tx=db.transaction(IDB.store,'readwrite'); tx.objectStore(IDB.store).put(val, IDB.key); tx.oncomplete=res; tx.onerror=()=>rej(tx.error); }); }
+async function idbGet() { let db=await idbOpen(); return new Promise((res,rej)=>{ let tx=db.transaction(IDB.store,'readonly'); let req=tx.objectStore(IDB.store).get(IDB.key); req.onsuccess=()=>res(req.result||null); req.onerror=()=>rej(req.error); }); }
 
-        // 3. BACKGROUND AI PROCESSING
-        // Tab koi bhi open ho, grid task aate hi AI background mein predict karega
-        if (isAIReady && autoTrainEnabled && task.type === 'grid') {
-            await predictWithAI(task);
+async function saveKNN() {
+    if (!knn) return;
+    try {
+        let ds = knn.getClassifierDataset(), ser = {};
+        for (let k in ds) { ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape }; }
+        await idbSet(ser);
+        let concepts = Object.keys(ser).filter(k => !k.startsWith('negative_')).length;
+        document.getElementById('syncStatus').innerHTML = `🤖 AI Ready ✅ (${concepts} concepts)`;
+    } catch(e) {}
+}
+
+async function loadKNN() {
+    try {
+        let ser = await idbGet();
+        if (ser) {
+            let ds = {};
+            for (let k in ser) ds[k] = tf.tensor(ser[k].data, ser[k].shape);
+            knn.setClassifierDataset(ds);
+            let concepts = Object.keys(ser).filter(k => !k.startsWith('negative_')).length;
+            document.getElementById('syncStatus').innerHTML = `🤖 AI Ready ✅ (${concepts} concepts)`;
         }
-    });
+    } catch(e) {}
+}
 
-    function setTab(tab) {
-        currentTab = tab;
-        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-        event.target.classList.add('active');
-        renderTasks();
-    }
+function toggleAutoTrain() {
+    autoTrainEnabled = !autoTrainEnabled;
+    let btn = document.getElementById('btnAutoTrain');
+    btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
+    btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
+}
 
-    function renderTasks() {
-        const area = document.getElementById('tasksArea');
-        area.innerHTML = '';
-        let list = [];
-        
-        if (currentTab === 'ai-grids') list = Object.values(dataStore.pending).filter(t => t.type === 'grid');
-        else if (currentTab === 'workers') list = Object.values(dataStore.pending).filter(t => t.type !== 'grid');
-        else list = Object.values(dataStore.trained).reverse().slice(0, 50);
+function toggleAutoSave() {
+    autoSaveEnabled = !autoSaveEnabled;
+    let btn = document.getElementById('btnAutoSave');
+    btn.className = 'btn-toggle' + (autoSaveEnabled ? ' on' : '');
+    btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
+}
 
-        list.forEach(t => area.appendChild(buildCard(t)));
-    }
+// --- Background AI Training & Prediction ---
+async function trainAIBrain(task, wrongIndices = []) {
+    if (!isAIReady || task.type !== 'grid' || !task.media) return;
+    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
+    let negLabel = 'negative_' + pText;
 
-    function buildCard(t) {
-        let card = document.createElement('div'); card.className = `task-card ${t.clicks?.length > 0 && currentTab !== 'trained' ? 'ai-processing' : ''}`; card.dataset.id = t.id;
-        let isPending = !!dataStore.pending[t.id];
-        let pText = t.prompt.split('|||')[0];
-        
-        let mediaHtml = `<div class="${isPending ? 'img-grid' : 'trained-grid'}">`;
-        (t.media || []).forEach(m => {
-            let cl = '';
-            if (t.clicks?.includes(m.index)) {
-                if (currentTab === 'trained') cl = 'was-clicked';
-                else cl = t.aiPredicted ? 'ai-pick' : 'selected';
-            }
-            mediaHtml += `<img src="${m.thumb || m.src}" class="g-img ${cl}" data-index="${m.index}">`;
-        });
-        mediaHtml += `</div>`;
-
-        let actions = isPending ? 
-            `<button class="btn btn-save" onclick="saveTask('${t.id}')">Save Task</button>` :
-            `<button class="btn btn-retrain" onclick="startRetrain('${t.id}')">🔧 Retrain AI</button>`;
-
-        card.innerHTML = `<div><b>#${t.id.substring(0,6)}</b> - ${pText}</div> ${mediaHtml} <div id="act-${t.id}">${actions}</div>`;
-        return card;
-    }
-
-    // Task Interaction & Retrain Logic
-    document.getElementById('tasksArea').addEventListener('click', (e) => {
-        let card = e.target.closest('.task-card'); if (!card) return;
-        let tid = card.dataset.id;
-        let t = dataStore.pending[tid] || dataStore.trained[tid];
-        if (!t) return;
-
-        if (e.target.classList.contains('g-img')) {
-            let idx = parseInt(e.target.dataset.index);
-            if (e.target.classList.contains('selected') || e.target.classList.contains('ai-pick') || e.target.classList.contains('retrain-pick')) {
-                e.target.classList.remove('selected', 'ai-pick', 'retrain-pick');
-                t.clicks = (t.clicks || []).filter(i => i !== idx);
-                if(retrainState[tid]) retrainState[tid].newClicks = retrainState[tid].newClicks.filter(i => i !== idx);
-            } else {
-                e.target.classList.add(currentTab === 'trained' ? 'retrain-pick' : 'selected');
-                if(!t.clicks) t.clicks = []; t.clicks.push(idx);
-                if(retrainState[tid]) retrainState[tid].newClicks.push(idx);
-            }
-        }
-    });
-
-    async function predictWithAI(task) {
-        if (!isAIReady) return;
-        let pText = task.prompt.split('|||')[0].trim().toLowerCase();
-        let dataset = knn.getClassExampleCount();
-        if (!dataset[pText]) return; // AI ko abhi ye class nahi pata
-
-        let predicted = [];
-        for (let m of task.media) {
-            let img = new Image(); img.crossOrigin = "anonymous"; img.src = m.thumb || m.src;
-            await new Promise(r => img.onload = r);
+    for (let m of task.media) {
+        let imgSrc = m.thumb || m.src;
+        if (!imgSrc) continue;
+        try {
+            let img = new Image();
+            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
+            img.src = imgSrc;
+            await new Promise((res) => { img.onload = res; img.onerror = res; setTimeout(res, 3000); });
+            if (!img.complete || img.naturalWidth === 0) continue;
             let tfImg = tf.browser.fromPixels(img);
-            let res = await knn.predictClass(aiModel.infer(tfImg, true));
-            if (res.label === pText && res.confidences[pText] > 0.85) predicted.push(m.index);
+            let features = aiModel.infer(tfImg, true);
+            let isCorrect = task.clicks.includes(m.index);
+            let isWrong = wrongIndices.includes(m.index);
+
+            if (isCorrect) { knn.addExample(features, pText); knn.addExample(features, pText); } 
+            else if (isWrong) { knn.addExample(features, negLabel); knn.addExample(features, negLabel); knn.addExample(features, negLabel); } 
+            else { knn.addExample(features, negLabel); }
             tfImg.dispose();
-        }
+        } catch(e) {}
+    }
+    saveKNN();
+}
 
-        if (predicted.length > 0) {
-            task.clicks = predicted;
-            task.aiPredicted = true;
-            renderTasks(); // DOM update agar visible hai
-            if (autoSaveEnabled) saveTask(task.id);
-        }
+async function predictWithAI(task) {
+    if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media || (task.clicks && task.clicks.length > 0)) return;
+    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
+    let dataset = knn.getClassExampleCount();
+    if (!dataset[pText]) return;
+
+    let predictedClicks = [];
+    for (let m of task.media) {
+        let imgSrc = m.thumb || m.src;
+        if (!imgSrc) continue;
+        try {
+            let img = new Image();
+            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
+            img.src = imgSrc;
+            await new Promise((res) => { img.onload = res; img.onerror = res; setTimeout(res, 3000); });
+            if (!img.complete || img.naturalWidth === 0) continue;
+            let tfImg = tf.browser.fromPixels(img);
+            let features = aiModel.infer(tfImg, true);
+            let res = await knn.predictClass(features);
+            let conf = res.confidences[pText] || 0;
+            let negConf = res.confidences['negative_' + pText] || 0;
+            if (res.label === pText && conf > 0.85 && negConf < 0.30) {
+                predictedClicks.push(m.index);
+            }
+            tfImg.dispose();
+        } catch(e) {}
     }
 
-    function saveTask(id) {
-        let t = dataStore.pending[id];
-        if(!t || !t.clicks || t.clicks.length === 0) return;
+    if (predictedClicks.length > 0 && predictedClicks.length <= 6) {
+        task.clicks = predictedClicks;
+        task.aiPredicted = true;
         
-        // Tumhara purana trainAIBrain(t) yahan call karna
-        // trainAIBrain(t); 
+        let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
+        if (card && currentTab === 'ai-grids') {
+            card.classList.add('ai-processing');
+            predictedClicks.forEach(idx => {
+                let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
+                if (imgEl) { imgEl.classList.add('ai-pick'); }
+            });
+            if (autoSaveEnabled) {
+                let btn = card.querySelector('.btn-save');
+                if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Auto-Saving...'; }
+                setTimeout(() => submitData(task.id, btn, card), 600);
+            }
+        } else if (autoSaveEnabled) {
+            // Agar tab change hai, phir bhi background me save kardo
+            submitData(task.id, null, null);
+        }
+    }
+}
 
-        fetch('/api/submit-hcaptcha', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ taskId: id, clicks: t.clicks })
+// --- Socket Data Handling ---
+socket.on('initialState', (data) => {
+    serverData = data;
+    renderCurrentData();
+});
+
+socket.on('newTask', async (task) => {
+    task.clicks = [];
+    serverData.pending[task.id] = task;
+    renderCurrentData();
+    if (isAIReady && autoTrainEnabled && task.type === 'grid') {
+        await predictWithAI(task);
+    }
+});
+
+socket.on('taskCompleted', (task) => {
+    delete serverData.pending[task.id];
+    serverData.trained[task.id] = task;
+    renderCurrentData();
+});
+
+socket.on('taskDeleted', (taskId) => {
+    delete serverData.pending[taskId];
+    delete serverData.trained[taskId];
+    renderCurrentData();
+});
+
+function setTab(tab) {
+    currentTab = tab;
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    event.target.classList.add('active');
+    renderCurrentData();
+}
+
+function renderCurrentData() {
+    let grids = 0, workers = 0;
+    Object.values(serverData.pending).forEach(t => t.type === 'grid' ? grids++ : workers++);
+    document.getElementById('c-grids').innerText = grids;
+    document.getElementById('c-workers').innerText = workers;
+    document.getElementById('c-trained').innerText = Object.keys(serverData.trained).length;
+
+    const tasksArea = document.getElementById('tasksArea');
+    tasksArea.innerHTML = '';
+    videoTasks = [];
+
+    let list = [];
+    if (currentTab === 'ai-grids') {
+        list = Object.values(serverData.pending).filter(t => t.type === 'grid');
+    } else if (currentTab === 'workers') {
+        list = Object.values(serverData.pending).filter(t => t.type !== 'grid');
+    } else {
+        list = Object.values(serverData.trained).reverse().slice(0, 50);
+    }
+
+    list.forEach(t => {
+        if (!t.clicks) t.clicks = [];
+        let card = buildCard(t);
+        tasksArea.appendChild(card);
+    });
+}
+
+function buildCard(t) {
+    let card = document.createElement('div'); card.className = `task-card ${t.aiPredicted && currentTab !== 'trained' ? 'ai-processing' : ''}`; card.dataset.id = t.id;
+    let isPending = !!serverData.pending[t.id];
+    let parts = t.prompt.split('|||');
+    
+    function _safeUrl(u) {
+        if (!u) return '';
+        u = u.trim();
+        if (u.startsWith('data:image/')) return u;
+        if (/^https?:\/\//.test(u)) return u.replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        return '';
+    }
+    
+    let _exSrc = parts[1] ? _safeUrl(parts[1]) : '';
+    let exHtml = _exSrc ? `<img src="${_exSrc}" class="example-img">` : `<div class="example-img-placeholder">🖼️</div>`;
+
+    let isMediaMissing = !t.media || t.media.length === 0 || t.media.every(m => !m.thumb && !m.src && !m.frames);
+    let mediaHTML = '';
+
+    if (isMediaMissing) {
+        mediaHTML = `<div class="missing-media">⚠️ <b>Images nahi hain</b><br><span>Clicks: ${t.clicks.length}</span></div>`;
+    } else if (t.type === 'grid') {
+        mediaHTML = `<div class="${isPending ? 'img-grid' : 'trained-grid'}">`;
+        t.media.forEach(m => {
+            let cl = '';
+            if (t.clicks.includes(m.index)) cl = isPending ? (t.aiPredicted ? 'ai-pick' : 'selected') : 'was-clicked';
+            mediaHTML += `<img src="${m.thumb || m.src || ''}" class="g-img ${cl}" data-index="${m.index}">`;
         });
+        mediaHTML += '</div>';
+    } else {
+        let m = t.media[0], isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
+        let src = isVid ? m.frames[0] : (m.src || '');
+        mediaHTML = `<div class="single-box"><img src="${src}" class="s-img ${isVid?'vid-player':''}" data-id="${t.id}">`;
+        t.clicks.forEach(pt => { mediaHTML += `<div class="dot" style="left:${pt.px}%;top:${pt.py}%;"></div>`; });
+        mediaHTML += '</div>';
+        if (isVid) videoTasks.push({ id: t.id, frames: m.frames, current: 0 });
     }
 
-    function startRetrain(id) {
-        let t = dataStore.trained[id];
-        retrainState[id] = { oldClicks: [...(t.clicks||[])], newClicks: [...(t.clicks||[])] };
-        document.getElementById(`act-${id}`).innerHTML = `<button class="btn btn-save" onclick="confirmRetrain('${id}')">✅ Confirm Retrain</button>`;
-    }
+    let actionsHtml = isPending ? 
+        `<button class="btn btn-save">Save Task</button> ${!isMediaMissing ? `<button class="btn btn-reset">Clear</button>` : ''} <button class="btn btn-del">❌</button>` : 
+        `${!isMediaMissing ? `<button class="btn btn-save">Update</button> <button class="btn btn-retrain" onclick="startRetrain('${t.id}')">🔧 Retrain</button>` : `<button class="btn btn-disabled" disabled>No Update</button>`} <button class="btn btn-del">❌</button>`;
 
-    function confirmRetrain(id) {
-        let state = retrainState[id];
-        let t = dataStore.trained[id];
-        t.clicks = state.newClicks;
-        // Yahan tumhara trainAIBrain function wrongIndices ke sath call hoga
-        // let wrong = state.oldClicks.filter(x => !state.newClicks.includes(x));
-        // trainAIBrain(t, wrong);
+    card.innerHTML = `
+        <div class="task-head"><span class="task-id">#${t.id.substring(0,6)}</span></div>
+        <div class="prompt-container"><div class="example-wrap">${exHtml}</div><div class="task-prompt">${parts[0]}</div></div>
+        ${mediaHTML}
+        <div class="actions" id="act-${t.id}">${actionsHtml}</div>`;
+    return card;
+}
 
-        fetch('/api/submit-hcaptcha', {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ taskId: id, clicks: t.clicks })
-        });
-        delete retrainState[id];
+// Video Player Loop
+setInterval(() => {
+    videoTasks.forEach(vt => {
+        let el = document.querySelector(`.vid-player[data-id="${vt.id}"]`);
+        if (el && vt.frames?.length > 0) { vt.current=(vt.current+1)%vt.frames.length; el.src=vt.frames[vt.current]; }
+    });
+}, 200);
+
+// UI Interactions
+document.getElementById('tasksArea').addEventListener('click', (e) => {
+    let card = e.target.closest('.task-card'); if (!card) return;
+    let tid = card.dataset.id;
+    let t = serverData.pending[tid] || serverData.trained[tid];
+    if (!t) return;
+    
+    if (retrainState[tid] && !e.target.classList.contains('btn-confirm') && !e.target.classList.contains('btn-cancel') && !e.target.classList.contains('g-img')) return;
+
+    if (e.target.classList.contains('g-img')) {
+        let idx = parseInt(e.target.dataset.index);
+        if (e.target.classList.contains('selected') || e.target.classList.contains('ai-pick') || e.target.classList.contains('retrain-pick')) {
+            e.target.classList.remove('selected', 'ai-pick', 'retrain-pick'); 
+            t.clicks = t.clicks.filter(i => i !== idx);
+            if(retrainState[tid]) retrainState[tid].newClicks = retrainState[tid].newClicks.filter(i => i !== idx);
+        } else { 
+            e.target.classList.add(currentTab === 'trained' ? 'retrain-pick' : 'selected'); 
+            t.clicks.push(idx); 
+            if(retrainState[tid]) retrainState[tid].newClicks.push(idx);
+        }
+    } else if (e.target.classList.contains('s-img') && currentTab !== 'trained') {
+        let rect = e.target.getBoundingClientRect();
+        let x = ((e.clientX-rect.left)/rect.width)*100, y = ((e.clientY-rect.top)/rect.height)*100;
+        t.clicks.push({px:x, py:y});
+        let dot = document.createElement('div'); dot.className='dot'; dot.style.left=`${x}%`; dot.style.top=`${y}%`;
+        e.target.parentElement.appendChild(dot);
+    } else if (e.target.classList.contains('btn-save') && !e.target.classList.contains('btn-confirm')) { 
+        submitData(tid, e.target, card);
+    } else if (e.target.classList.contains('btn-reset')) {
+        t.clicks = []; card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected','ai-pick'));
+        card.querySelectorAll('.dot').forEach(d => d.remove()); card.classList.remove('ai-processing');
+    } else if (e.target.classList.contains('btn-del')) {
+        fetch(`/api/delete-hcaptcha/${tid}`, { method:'DELETE' });
     }
+});
+
+async function submitData(taskId, btnEl, card) {
+    let t = serverData.pending[taskId] || serverData.trained[taskId];
+    if (!t) return;
+    
+    if (isAIReady && currentTab !== 'trained' && t.clicks.length > 0) {
+        if (btnEl) { btnEl.textContent = '🧠 Learning...'; btnEl.disabled = true; }
+        await trainAIBrain(t);
+    }
+    
+    fetch('/api/submit-hcaptcha', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId, clicks: t.clicks })
+    });
+}
+
+function startRetrain(taskId) {
+    let t = serverData.trained[taskId];
+    if (!t) return;
+    retrainState[taskId] = { oldClicks: [...(t.clicks || [])], newClicks: [...(t.clicks || [])] };
+    
+    let actions = document.getElementById(`act-${taskId}`);
+    actions.innerHTML = `
+        <button class="btn btn-confirm" onclick="confirmRetrain('${taskId}')">✅ Confirm Retrain</button>
+        <button class="btn btn-cancel" onclick="cancelRetrain('${taskId}')">❌ Cancel</button>`;
+}
+
+async function confirmRetrain(taskId) {
+    let t = serverData.trained[taskId], state = retrainState[taskId];
+    if (!t || !state) return;
+    let wrongClicks = (state.oldClicks || []).filter(idx => !state.newClicks.includes(idx));
+    t.clicks = state.newClicks;
+    
+    await trainAIBrain(t, wrongClicks);
+    fetch('/api/submit-hcaptcha', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId, clicks: t.clicks })
+    });
+    delete retrainState[taskId];
+}
+
+function cancelRetrain(taskId) {
+    delete retrainState[taskId];
+    renderCurrentData();
+}
+
+window.addEventListener('error', function(e) {
+    if (e.target && e.target.tagName === 'IMG' && e.target.classList.contains('example-img')) {
+        e.target.style.display = 'none';
+        if (e.target.nextElementSibling) e.target.nextElementSibling.style.display = 'flex';
+    }
+}, true);
+
+setTimeout(initAI, 500);
 </script>
 </body>
 </html>
