@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master - High Performance Dashboard</title>
+    <title>hCaptcha Master - Ultra Engine</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -45,7 +45,8 @@
         .trained-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
         .trained-grid img { width: 100%; height: 100px; object-fit: cover; border: 3px solid #333; background: #222; }
         .trained-grid img.was-clicked { border-color: #00ff88; }
-        .trained-grid img.retrain-pick { border-color: #ff8800; cursor: pointer; }
+        .trained-grid img.retrain-pick { border-color: #555; cursor: pointer; }
+        .trained-grid img.retrain-pick.was-clicked { border-color: #ff8800 !important; }
         
         .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; background: #000; border-radius: 4px; border: 2px solid #444; overflow: hidden; }
         .single-box img { width: 100%; height: auto; min-height: 450px; max-height: 600px; object-fit: contain; display: block; }
@@ -62,7 +63,7 @@
         .btn-confirm { background: #ff8800; color: #000; }
         .btn-cancel { background: #555; }
         .btn-disabled { background: #222; color: #555; cursor: not-allowed; }
-        .retrain-hint { font-size: 12px; color: #ff8800; margin-top: 6px; padding: 6px 10px; background: #1a0f00; border-radius: 4px; }
+        .retrain-hint { font-size: 12px; color: #ff8800; margin-top: 6px; padding: 6px 10px; background: #1a0f00; border-radius: 4px; width: 100%; }
     </style>
 </head>
 <body>
@@ -100,7 +101,7 @@ let retrainState = {};
 async function initAI() {
     syncStatus.innerHTML = "🧠 AI Loading...";
     try {
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 400));
         aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
         knn = knnClassifier.create();
         loadKNN();
@@ -191,7 +192,7 @@ async function trainAIBrain(task, wrongIndices = []) {
             let img = new Image();
             if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
             img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 2500); });
+            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 2000); });
             if (!img.complete || img.naturalWidth === 0) continue;
             let tfImg = tf.browser.fromPixels(img);
             let features = aiModel.infer(tfImg, true);
@@ -222,7 +223,7 @@ async function predictWithAI(task) {
             let img = new Image();
             if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
             img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 2500); });
+            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 2000); });
             if (!img.complete || img.naturalWidth === 0) continue;
             let tfImg = tf.browser.fromPixels(img);
             let features = aiModel.infer(tfImg, true);
@@ -248,32 +249,43 @@ async function predictWithAI(task) {
             if (autoSaveEnabled) {
                 let btn = card.querySelector('.btn-save');
                 if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Auto-Saving...'; }
-                setTimeout(() => sendToServer(task.id, btn, card), 400);
+                setTimeout(() => sendToServer(task.id, btn, card), 300);
             }
+        } else if (autoSaveEnabled) {
+            // If in trained tab / background, auto-save pending directly
+            fetch(`${SERVER_URL}/api/submit-hcaptcha`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ taskId: task.id, clicks: predictedClicks }) }).catch(()=>{});
         }
     }
 }
 
 async function reEvaluatePending() {
-    for (let id in activeTasksStore) {
-        let t = activeTasksStore[id];
-        if (currentTab === 'pending' && t.type === 'grid' && t.clicks.length === 0) {
-            await predictWithAI(t);
+    for (let id in serverData.pending) {
+        let t = serverData.pending[id];
+        if (t && (!t.clicks || t.clicks.length === 0)) {
+            let media = t.media || [];
+            let isGrid = media.length > 1;
+            if (isGrid) {
+                await predictWithAI({ id, clicks: [], type: 'grid', media, prompt: t.prompt || '' });
+            }
         }
     }
 }
 
 function startRetrain(taskId) {
-    let t = activeTasksStore[taskId];
+    let t = activeTasksStore[taskId] || serverData.trained[taskId];
     if (!t) return;
     let card = document.querySelector(`.task-card[data-id="${taskId}"]`);
     if (!card) return;
-    retrainState[taskId] = { oldClicks: [...(t.clicks || [])], newClicks: [] };
+    
+    retrainState[taskId] = { oldClicks: [...(t.clicks || [])], newClicks: [...(t.clicks || [])] };
+    
     card.querySelectorAll('.trained-grid img').forEach(img => {
         img.classList.add('retrain-pick');
-        img.onclick = () => {
+        img.onclick = (ev) => {
+            ev.stopPropagation();
             let idx = parseInt(img.dataset.index);
             let state = retrainState[taskId];
+            if (!state) return;
             if (state.newClicks.includes(idx)) {
                 state.newClicks = state.newClicks.filter(x => x !== idx);
                 img.classList.remove('was-clicked');
@@ -283,28 +295,39 @@ function startRetrain(taskId) {
             }
         };
     });
+    
+    let existingHint = card.querySelector(`#hint-${taskId}`);
+    if (existingHint) existingHint.remove();
+
     let hint = document.createElement('div');
     hint.className = 'retrain-hint'; hint.id = `hint-${taskId}`;
     hint.textContent = '🟠 Sahi images click karo → Confirm Retrain dabao';
     card.querySelector('.actions').before(hint);
+    
     let actions = card.querySelector('.actions');
     actions.innerHTML = `
-        <button class="btn btn-confirm" onclick="confirmRetrain('${taskId}')">✅ Confirm</button>
+        <button class="btn btn-confirm" onclick="confirmRetrain('${taskId}')">✅ Confirm Retrain</button>
         <button class="btn btn-cancel" onclick="cancelRetrain('${taskId}')">❌ Cancel</button>`;
 }
 
 async function confirmRetrain(taskId) {
-    let t = activeTasksStore[taskId], state = retrainState[taskId];
+    let t = activeTasksStore[taskId] || serverData.trained[taskId];
+    let state = retrainState[taskId];
     if (!t || !state) return;
+    
     let wrongClicks = (state.oldClicks || []).filter(idx => !state.newClicks.includes(idx));
     t.clicks = state.newClicks;
+    
     let card = document.querySelector(`.task-card[data-id="${taskId}"]`);
     if (card) { let hint = card.querySelector(`#hint-${taskId}`); if (hint) hint.textContent = '🧠 AI seekh raha hai...'; }
+    
     await trainAIBrain(t, wrongClicks);
-    await fetch(`${SERVER_URL}/api/submit-hcaptcha`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ taskId, clicks: state.newClicks }) }).catch(e => {});
+    await fetch(`${SERVER_URL}/api/submit-hcaptcha`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ taskId, clicks: state.newClicks }) }).catch(()=>{});
+    
     delete retrainState[taskId];
     if (card) {
         let hint = card.querySelector(`#hint-${taskId}`); if (hint) hint.remove();
+        card.querySelectorAll('.trained-grid img').forEach(img => { img.classList.remove('retrain-pick'); img.onclick = null; });
         let actions = card.querySelector('.actions');
         actions.innerHTML = `<button class="btn btn-save">Update</button> <button class="btn btn-retrain" onclick="startRetrain('${taskId}')">🔧 Retrain</button> <button class="btn btn-del">❌</button>`;
     }
@@ -315,7 +338,14 @@ function cancelRetrain(taskId) {
     let card = document.querySelector(`.task-card[data-id="${taskId}"]`);
     if (!card) return;
     let hint = card.querySelector(`#hint-${taskId}`); if (hint) hint.remove();
-    card.querySelectorAll('.trained-grid img').forEach(img => { img.classList.remove('retrain-pick'); img.onclick = null; });
+    let t = activeTasksStore[taskId] || serverData.trained[taskId];
+    card.querySelectorAll('.trained-grid img').forEach(img => { 
+        img.classList.remove('retrain-pick'); 
+        img.onclick = null;
+        let idx = parseInt(img.dataset.index);
+        if (t && t.clicks && t.clicks.includes(idx)) img.classList.add('was-clicked');
+        else img.classList.remove('was-clicked');
+    });
     let actions = card.querySelector('.actions');
     actions.innerHTML = `<button class="btn btn-save">Update</button> <button class="btn btn-retrain" onclick="startRetrain('${taskId}')">🔧 Retrain</button> <button class="btn btn-del">❌</button>`;
 }
@@ -336,34 +366,38 @@ function filterTasks() {
 
 let _fetchTimer = null;
 async function fetchTasks() {
-    if (document.hidden || isFetching) return;
+    if (isFetching) return;
     isFetching = true;
     try {
-        const pageToFetch = currentTab === 'trained' ? trainedPage : 0;
-        const res = await fetch(`${SERVER_URL}/api/tasks?tab=${currentTab}&page=${pageToFetch}&size=${PAGE_SIZE}&t=${Date.now()}`, { cache: 'no-store' });
-        
-        if (res.ok) {
-            const data = await res.json();
-            if (currentTab === 'pending') {
-                serverData.pending = data.tasks || {};
-            } else {
-                serverData.trained = data.tasks || {};
-            }
-
-            fetch(`${SERVER_URL}/api/counts`).then(r => r.json()).then(counts => {
-                document.getElementById('c-pending').innerText = counts.pending;
-                document.getElementById('c-trained').innerText = counts.trained;
-            }).catch(()=>{});
-
-            renderCurrentData();
+        // HAMESHA pending aur counts background mein fetch karein
+        const resPending = await fetch(`${SERVER_URL}/api/tasks?tab=pending&page=0&size=50&t=${Date.now()}`, { cache: 'no-store' });
+        if (resPending.ok) {
+            const dPending = await resPending.json();
+            serverData.pending = dPending.tasks || {};
+            // Background AI process if trained tab active
+            if (isAIReady && autoTrainEnabled) reEvaluatePending();
         }
+
+        if (currentTab === 'trained') {
+            const resTrained = await fetch(`${SERVER_URL}/api/tasks?tab=trained&page=${trainedPage}&size=${PAGE_SIZE}&t=${Date.now()}`, { cache: 'no-store' });
+            if (resTrained.ok) {
+                const dTrained = await resTrained.json();
+                serverData.trained = dTrained.tasks || {};
+            }
+        }
+
+        fetch(`${SERVER_URL}/api/counts`).then(r => r.json()).then(counts => {
+            document.getElementById('c-pending').innerText = counts.pending;
+            document.getElementById('c-trained').innerText = counts.trained;
+        }).catch(()=>{});
+
+        renderCurrentData();
     } catch(e) {}
     isFetching = false;
 }
 
-function startFetch() { if (!_fetchTimer) _fetchTimer = setInterval(fetchTasks, 1200); fetchTasks(); }
-function stopFetch()  { if (_fetchTimer) { clearInterval(_fetchTimer); _fetchTimer = null; } }
-document.addEventListener('visibilitychange', () => document.hidden ? stopFetch() : startFetch());
+function startFetch() { if (!_fetchTimer) _fetchTimer = setInterval(fetchTasks, 600); fetchTasks(); }
+// Page hidden hone par polling band nahi hogi taake background tasks process hote rahein
 
 function renderCurrentData() {
     let activeData = currentTab === 'pending' ? serverData.pending : serverData.trained;
@@ -458,7 +492,7 @@ setInterval(() => {
         let el = document.querySelector(`.vid-player[data-id="${vt.id}"]`);
         if (el && vt.frames?.length > 0) { vt.current=(vt.current+1)%vt.frames.length; el.src=vt.frames[vt.current]; }
     });
-}, 250); 
+}, 200); 
 
 tasksArea.addEventListener('click', (e) => {
     let card = e.target.closest('.task-card'); if (!card) return;
@@ -513,7 +547,8 @@ window.addEventListener('error', function(e) {
     }
 }, true);
 
-setTimeout(startFetch, 300); setTimeout(initAI, 500);
+startFetch();
+setTimeout(initAI, 300);
 </script>
 </body>
 </html>
