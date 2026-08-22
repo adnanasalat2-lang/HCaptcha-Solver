@@ -11,7 +11,7 @@ app.use(express.json({ limit: '60mb' }));
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE = path.join(DATA_DIR, 'database.json');
 
-const MAX_PENDING = 200;
+const MAX_PENDING = 300;
 const MAX_TRAINED = 10000;
 const DASHBOARD_PAGE_SIZE = 20;
 
@@ -88,7 +88,6 @@ function initDB() {
             if (trainedKeys.length > MAX_TRAINED) {
                 const toDelete = trainedKeys.slice(0, trainedKeys.length - MAX_TRAINED);
                 toDelete.forEach(k => delete hcaptchaTrained[k]);
-                console.log(`[DB] Trimmed ${toDelete.length} old trained entries`);
             }
 
             rebuildConceptBank();
@@ -107,7 +106,7 @@ function persistDatabase() {
         fs.writeFile(DB_FILE, JSON.stringify({ trained: hcaptchaTrained }), 'utf8', (err) => {
             if (err) console.error('[DB] PERSIST ERROR:', err.message);
         });
-    }, 1000);
+    }, 1500);
 }
 
 function evaluateAutoSolve(task) {
@@ -254,7 +253,6 @@ app.post('/api/submit-hcaptcha', (req, res) => {
         if (trainedKeys.length > MAX_TRAINED) {
             const oldest = trainedKeys.slice(0, trainedKeys.length - MAX_TRAINED);
             oldest.forEach(k => delete hcaptchaTrained[k]);
-            console.log(`[DB] Auto-trimmed ${oldest.length} old trained entries`);
         }
 
         delete hcaptchaPending[taskId];
@@ -305,4 +303,4 @@ app.get('/', (req, res) => {
 app.get('/dashboard', (req, res) => res.redirect('/'));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Original Precise Engine Running on Port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Ultra Engine Running on Port ${PORT}`));
