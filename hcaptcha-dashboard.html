@@ -436,13 +436,9 @@ function buildCard(t) {
         return '';
     }
     
+    // parts[1] mein real example image (base64) hoti hai — grid media se KABHI fallback mat karo
+    // Grid ki index-0 image example nahi hoti, isliye wo fallback hata diya gaya
     let _exSrc = parts[1] ? _safeUrl(parts[1]) : '';
-    
-    // FIX: Fallback logic better ki hai taake agar pehli media image `https` ho to wo bhi accept ho
-    if (!_exSrc && t.media && t.media.length > 0) {
-        let firstThumb = t.media[0]?.thumb || t.media[0]?.src || '';
-        if (firstThumb) _exSrc = _safeUrl(firstThumb);
-    }
     
     // FIX: Inline onerror CSP (security block) ki wajah se run nahi ho raha tha, isay neechay global listener se handle kiya hai
     let exHtml = _exSrc
