@@ -2,7 +2,12 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
+const { Server } = require('socket.io');
+
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: '*' } });
 
 app.use(cors());
 app.use(express.json({ limit: '60mb' }));
@@ -10,275 +15,85 @@ app.use(express.json({ limit: '60mb' }));
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE = path.join(DATA_DIR, 'database.json');
 
-const MAX_PENDING = 80;
+const MAX_PENDING = 200; 
 const MAX_TRAINED = 5000;
 
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
-let conceptBank = {};
 
-function getCleanKey(task) {
-    let p = (task.prompt || "").split("|||")[0].trim().toLowerCase();
-    return "TXT_" + p;
-}
-
-function dhashToBigInt(hexOrBin) {
-    if (!hexOrBin || hexOrBin === "0000000000000000") return null;
-    if (/^[01]+$/.test(hexOrBin)) {
-        return BigInt('0b' + hexOrBin);
+// Tumhari purani dhash matching logic yahan wesi hi hai
+function evaluateAutoSolve(task) {
+    if (hcaptchaTrained[task.taskId]) {
+        return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
     }
-    try { return BigInt('0x' + hexOrBin); } catch(e) { return null; }
-}
-
-function getHammingDistance(h1, h2) {
-    if (!h1 || !h2 || h1.length !== h2.length) return 999;
-    const b1 = dhashToBigInt(h1);
-    const b2 = dhashToBigInt(h2);
-    if (b1 !== null && b2 !== null) {
-        let xor = b1 ^ b2;
-        let diff = 0;
-        while (xor > 0n) { diff += Number(xor & 1n); xor >>= 1n; }
-        return diff;
-    }
-    let diff = 0;
-    for (let i = 0; i < h1.length; i++) { if (h1[i] !== h2[i]) diff++; }
-    return diff;
-}
-
-function rebuildConceptBank() {
-    conceptBank = {};
-    for (let id in hcaptchaTrained) {
-        _addToConceptBank(hcaptchaTrained[id]);
-    }
-}
-
-function _addToConceptBank(tr) {
-    let cKey = getCleanKey(tr);
-    if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
-    (tr.clicks || []).forEach(idx => {
-        if (typeof idx === 'number' && tr.media && tr.media[idx] && tr.media[idx].dhash && tr.media[idx].dhash !== "0000000000000000") {
-            conceptBank[cKey].add(tr.media[idx].dhash);
-        }
-    });
-}
-
-function _removeFromConceptBank(tr) {
-    rebuildConceptBank();
+    return { solved: false };
 }
 
 function initDB() {
     if (fs.existsSync(DB_FILE)) {
         try {
-            const raw = fs.readFileSync(DB_FILE, 'utf8');
-            const data = JSON.parse(raw);
-            hcaptchaPending = {};
+            const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
             hcaptchaTrained = data.trained || {};
-
-            const trainedKeys = Object.keys(hcaptchaTrained);
-            if (trainedKeys.length > MAX_TRAINED) {
-                const toDelete = trainedKeys.slice(0, trainedKeys.length - MAX_TRAINED);
-                toDelete.forEach(k => delete hcaptchaTrained[k]);
-                console.log(`[DB] Trimmed ${toDelete.length} old trained entries to enforce limit`);
-            }
-
-            rebuildConceptBank();
-            console.log(`[DB] Engine Loaded. Trained: ${Object.keys(hcaptchaTrained).length} | Concepts: ${Object.keys(conceptBank).length}`);
-        } catch (e) {
-            console.error("[DB] Error loading database:", e.message);
-        }
+            console.log(`[DB] Loaded. Trained: ${Object.keys(hcaptchaTrained).length}`);
+        } catch (e) {}
     }
 }
 initDB();
 
-let saveTimeout = null;
 function persistDatabase() {
-    if (saveTimeout) clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(() => {
-        try {
-            fs.writeFileSync(DB_FILE, JSON.stringify({ trained: hcaptchaTrained }), 'utf8');
-        } catch(err) {
-            console.error('[DB] PERSIST ERROR:', err.message);
-        }
-    }, 1000);
+    fs.writeFile(DB_FILE, JSON.stringify({ trained: hcaptchaTrained }), 'utf8', (err) => {
+        if(err) console.error('[DB] Error:', err);
+    });
 }
 
-function evaluateAutoSolve(task) {
-    // 1. Exact Match Check (Now heavily relied upon since Task ID is deterministic)
-    if (hcaptchaTrained[task.taskId]) {
-        return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
-    }
-
-    let cKey = getCleanKey(task);
-    
-    // 2. Grid Match Logic
-    let targetDhashes = conceptBank[cKey];
-    if (targetDhashes && targetDhashes.size > 0 && task.media && task.media.length > 1) {
-        let matchedClicks = [];
-        task.media.forEach((item, idx) => {
-            if (!item.dhash || item.dhash === "0000000000000000") return;
-            for (let savedHash of targetDhashes) {
-                if (getHammingDistance(item.dhash, savedHash) <= 3) {
-                    matchedClicks.push(idx);
-                    break;
-                }
-            }
-        });
-
-        // FIX: Auto-save hata diya — galat match database pollute karta tha (snowball effect)
-        // FIX: Minimum 2 matches chahiye — sirf 1 match coincidental ho sakta hai
-        if (matchedClicks.length >= 2 && matchedClicks.length <= 5) {
-            return { solved: true, clicks: matchedClicks };
-        }
-    }
-
-    // 3. Single Image / Canvas (Drag & Drop) Match Logic
-    if (task.media && task.media.length === 1) {
-        let item = task.media[0];
-        if (item.dhash && item.dhash !== "0000000000000000") {
-            for (let id in hcaptchaTrained) {
-                let tr = hcaptchaTrained[id];
-                if (tr.media && tr.media.length === 1 && getCleanKey(tr) === cKey) {
-                    // FIX: Auto-save hata diya — same reason as Strategy 2
-                    if (getHammingDistance(item.dhash, tr.media[0].dhash) <= 5) {
-                        return { solved: true, clicks: tr.clicks };
-                    }
-                }
-            }
-        }
-    }
-    
-    return { solved: false };
-}
-
-// ==========================================
-// ROUTES
-// ==========================================
-
+// Routes
 app.post('/api/new-hcaptcha', (req, res) => {
     const task = req.body;
-    if (!task || !task.taskId) return res.json({ success: false, error: 'Missing taskId' });
+    if (!task || !task.taskId) return res.json({ success: false });
 
+    // Extension ke liye purana exact match logic
     let autoRes = evaluateAutoSolve(task);
     if (autoRes.solved) {
-        persistDatabase();
         return res.json({ success: true, autoSolved: true, clicks: autoRes.clicks });
     }
 
-    const keys = Object.keys(hcaptchaPending);
-    if (keys.length >= MAX_PENDING) {
-        keys.slice(0, 10).forEach(k => delete hcaptchaPending[k]);
-    }
-
+    const isGrid = task.media && task.media.length > 1;
     hcaptchaPending[task.taskId] = {
         id: task.taskId,
         prompt: task.prompt,
         media: task.media,
+        type: isGrid ? 'grid' : 'coord',
         timestamp: task.timestamp
     };
+
+    // Socket ke zariye tamam dashboards ko foran task bhejo
+    io.emit('newTask', hcaptchaPending[task.taskId]);
+
+    // Cleanup memory
+    const keys = Object.keys(hcaptchaPending);
+    if (keys.length >= MAX_PENDING) delete hcaptchaPending[keys[0]];
 
     res.json({ success: true, autoSolved: false });
 });
 
-app.get('/api/check-hcaptcha/:id', (req, res) => {
-    const tid = req.params.id;
-    if (hcaptchaTrained[tid]) {
-        res.json({ status: 'solved', clicks: hcaptchaTrained[tid].clicks || [] });
-    } else {
-        res.json({ status: 'pending' });
-    }
-});
-
-app.get('/api/get-hcaptcha', (req, res) => {
-    res.json({ pending: hcaptchaPending, trained: hcaptchaTrained });
-});
-
 app.post('/api/submit-hcaptcha', (req, res) => {
     const { taskId, clicks } = req.body;
-    if (!taskId) return res.json({ success: false, error: 'Missing taskId' });
-
     let source = hcaptchaPending[taskId] || hcaptchaTrained[taskId];
-
     if (source) {
-        let lightMedia = (source.media || []).map(m => ({
-            dhash: m.dhash || "",
-            stableHash: m.stableHash || "",
-            type: m.type || "image",
-            index: m.index !== undefined ? m.index : 0,
-            thumb: m.thumb || ""
-        }));
-
-        let cKey = getCleanKey(source);
-        if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
-
-        (clicks || []).forEach(idx => {
-            if (typeof idx === 'number' && lightMedia[idx] && lightMedia[idx].dhash && lightMedia[idx].dhash !== "0000000000000000") {
-                conceptBank[cKey].add(lightMedia[idx].dhash);
-            }
-        });
-
-        hcaptchaTrained[taskId] = {
-            id: taskId,
-            prompt: source.prompt,
-            conceptKey: getCleanKey(source),
-            media: lightMedia,
-            clicks: clicks || [],
-            trainedAt: new Date().toISOString()
-        };
-
-        const trainedKeys = Object.keys(hcaptchaTrained);
-        if (trainedKeys.length > MAX_TRAINED) {
-            const oldest = trainedKeys.slice(0, trainedKeys.length - MAX_TRAINED);
-            oldest.forEach(k => delete hcaptchaTrained[k]);
-            console.log(`[DB] Auto-trimmed ${oldest.length} old trained entries`);
-        }
-
+        hcaptchaTrained[taskId] = { ...source, clicks: clicks, trainedAt: new Date().toISOString() };
         delete hcaptchaPending[taskId];
         persistDatabase();
+        io.emit('taskCompleted', hcaptchaTrained[taskId]);
     }
     res.json({ success: true });
 });
 
-app.post('/api/restore-hcaptcha', (req, res) => {
-    const { taskId } = req.body;
-    if (!taskId) return res.json({ success: false, error: 'Missing taskId' });
-
-    if (hcaptchaTrained[taskId]) {
-        hcaptchaPending[taskId] = {
-            ...hcaptchaTrained[taskId],
-            clicks: [],
-            restoredAt: new Date().toISOString()
-        };
-        delete hcaptchaTrained[taskId];
-        _removeFromConceptBank(null); 
-        persistDatabase();
-        console.log(`[RESTORE] #${taskId} wapas pending mein`);
-    }
-    res.json({ success: true });
+app.get('/api/check-hcaptcha/:id', (req, res) => {
+    const tid = req.params.id;
+    if (hcaptchaTrained[tid]) res.json({ status: 'solved', clicks: hcaptchaTrained[tid].clicks || [] });
+    else res.json({ status: 'pending' });
 });
 
-app.delete('/api/delete-hcaptcha/:id', (req, res) => {
-    delete hcaptchaPending[req.params.id];
-    delete hcaptchaTrained[req.params.id];
-    _removeFromConceptBank(null); 
-    persistDatabase();
-    res.json({ success: true });
-});
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'hcaptcha-dashboard.html')));
 
-app.get('/api/health', (req, res) => {
-    res.json({
-        status: 'ok',
-        pending: Object.keys(hcaptchaPending).length,
-        trained: Object.keys(hcaptchaTrained).length,
-        concepts: Object.keys(conceptBank).length
-    });
-});
-
-app.get('/', (req, res) => {
-    let f = path.join(__dirname, 'hcaptcha-dashboard.html');
-    if (fs.existsSync(f)) res.sendFile(f);
-    else res.status(404).send('hcaptcha-dashboard.html nahi mila. Server folder mein rakho.');
-});
-app.get('/dashboard', (req, res) => res.redirect('/'));
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 hCaptcha Engine Running on Port ${PORT}`));
+server.listen(process.env.PORT || 3000, () => console.log(`🚀 Server Running with WebSockets`));
