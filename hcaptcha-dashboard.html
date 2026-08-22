@@ -440,10 +440,7 @@ function buildCard(t) {
     
     let _exSrc = parts[1] ? _safeUrl(parts[1]) : '';
     
-    if (!_exSrc && t.media && t.media.length > 0) {
-        let firstThumb = t.media[0]?.thumb || t.media[0]?.src || '';
-        if (firstThumb) _exSrc = _safeUrl(firstThumb);
-    }
+    // FIX: Yahan se fallback logic completely remove kar di gayi hai.
     
     let exHtml = _exSrc
         ? `<img src="${_exSrc}" class="example-img" style="display:block">
