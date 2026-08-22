@@ -5,7 +5,6 @@ const path = require('path');
 const http = require('http');
 const { Server } = require('socket.io');
 
-// Server-Side AI Libraries (Sirf ek baar yahan load hongi)
 const tf = require('@tensorflow/tfjs-node');
 const mobilenet = require('@tensorflow-models/mobilenet');
 const knnClassifier = require('@tensorflow-models/knn-classifier');
@@ -27,13 +26,12 @@ const MAX_TRAINED = 10000;
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
 
-// AI Globals
 let aiModel = null;
 let knn = knnClassifier.create();
 let isAIReady = false;
 
 // ==========================================
-// 🧠 CENTRALIZED AI ENGINE (SERVER SIDE)
+// 🧠 CENTRALIZED AI ENGINE (FIXED IMAGE PARSER)
 // ==========================================
 async function initAI() {
     try {
@@ -48,7 +46,7 @@ async function initAI() {
                 tensors[k] = tf.tensor(dataset[k].data, dataset[k].shape);
             }
             knn.setClassifierDataset(tensors);
-            console.log(`[AI] KNN Dataset Loaded from Disk.`);
+            console.log(`[AI] KNN Dataset Loaded. Training data exists!`);
         }
         isAIReady = true;
         console.log("[AI] System is Fully Operational 🚀");
@@ -66,38 +64,52 @@ function saveKNN() {
             dataset[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape };
         }
         fs.writeFileSync(KNN_FILE, JSON.stringify(dataset), 'utf8');
-    } catch (e) {
-        console.error('[AI] Save Error:', e);
-    }
+    } catch (e) {}
 }
 
-function base64ToTensor(base64Str) {
-    const base64Data = base64Str.replace(/^data:image\/\w+;base64,/, "");
-    const buffer = Buffer.from(base64Data, 'base64');
-    return tf.node.decodeImage(buffer, 3);
+// FIX: Node.js ke liye proper Image downloader aur Base64 parser
+async function getTensorFromSource(source) {
+    if (!source) return null;
+    try {
+        let buffer;
+        if (source.startsWith('data:image')) {
+            const base64Data = source.split(',')[1];
+            buffer = Buffer.from(base64Data, 'base64');
+        } else if (source.startsWith('http')) {
+            const response = await fetch(source);
+            const arrayBuffer = await response.arrayBuffer();
+            buffer = Buffer.from(arrayBuffer);
+        } else {
+            return null;
+        }
+        return tf.node.decodeImage(buffer, 3);
+    } catch (e) {
+        return null;
+    }
 }
 
 async function predictWithServerAI(task) {
     if (!isAIReady || !task.media) return [];
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let dataset = knn.getClassExampleCount();
-    if (!dataset[pText]) return [];
+    if (!dataset[pText]) return []; // AI ko abhi ye lafz nahi pata
 
     let predictedClicks = [];
     for (let m of task.media) {
-        if (!m.src && !m.thumb) continue;
         try {
-            let tfImg = base64ToTensor(m.thumb || m.src);
-            let features = aiModel.infer(tfImg, true);
-            let result = await knn.predictClass(features);
-            
-            let conf = result.confidences[pText] || 0;
-            let negConf = result.confidences['negative_' + pText] || 0;
-            
-            if (result.label === pText && conf > 0.85 && negConf < 0.30) {
-                predictedClicks.push(m.index);
+            let tfImg = await getTensorFromSource(m.thumb || m.src);
+            if (tfImg) {
+                let features = aiModel.infer(tfImg, true);
+                let result = await knn.predictClass(features);
+                
+                let conf = result.confidences[pText] || 0;
+                let negConf = result.confidences['negative_' + pText] || 0;
+                
+                if (result.label === pText && conf > 0.85 && negConf < 0.30) {
+                    predictedClicks.push(m.index);
+                }
+                tfImg.dispose();
             }
-            tfImg.dispose();
         } catch(e) {}
     }
     return predictedClicks;
@@ -108,23 +120,25 @@ async function trainServerAI(task, clicks, wrongIndices = []) {
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let negLabel = 'negative_' + pText;
 
+    let learnedSomething = false;
     for (let m of task.media) {
-        if (!m.src && !m.thumb) continue;
         try {
-            let tfImg = base64ToTensor(m.thumb || m.src);
-            let features = aiModel.infer(tfImg, true);
-            
-            let isCorrect = clicks.includes(m.index);
-            let isWrong = wrongIndices.includes(m.index);
+            let tfImg = await getTensorFromSource(m.thumb || m.src);
+            if (tfImg) {
+                let features = aiModel.infer(tfImg, true);
+                let isCorrect = clicks.includes(m.index);
+                let isWrong = wrongIndices.includes(m.index);
 
-            if (isCorrect) { knn.addExample(features, pText); knn.addExample(features, pText); }
-            else if (isWrong) { knn.addExample(features, negLabel); knn.addExample(features, negLabel); knn.addExample(features, negLabel); }
-            else { knn.addExample(features, negLabel); }
-            
-            tfImg.dispose();
+                if (isCorrect) { knn.addExample(features, pText); knn.addExample(features, pText); }
+                else if (isWrong) { knn.addExample(features, negLabel); knn.addExample(features, negLabel); knn.addExample(features, negLabel); }
+                else { knn.addExample(features, negLabel); }
+                
+                tfImg.dispose();
+                learnedSomething = true;
+            }
         } catch(e) {}
     }
-    saveKNN();
+    if (learnedSomething) saveKNN();
 }
 
 // ==========================================
@@ -135,7 +149,6 @@ function initDB() {
         try {
             const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
             hcaptchaTrained = data.trained || {};
-            console.log(`[DB] Engine Loaded. Trained: ${Object.keys(hcaptchaTrained).length}`);
         } catch (e) {}
     }
 }
@@ -156,7 +169,6 @@ app.post('/api/new-hcaptcha', async (req, res) => {
     const task = req.body;
     if (!task || !task.taskId) return res.json({ success: false });
 
-    // Exact database match (Pehle se confirm theek hai)
     if (hcaptchaTrained[task.taskId]) {
         return res.json({ success: true, autoSolved: true, clicks: hcaptchaTrained[task.taskId].clicks });
     }
@@ -164,7 +176,6 @@ app.post('/api/new-hcaptcha', async (req, res) => {
     const isGrid = task.media && task.media.length > 1;
     task.type = isGrid ? 'grid' : 'coord';
     
-    // AI Prediction (Server par hogi)
     let aiPredictedClicks = [];
     let aiPredicted = false;
     
@@ -173,7 +184,7 @@ app.post('/api/new-hcaptcha', async (req, res) => {
         if (aiPredictedClicks.length >= 2 && aiPredictedClicks.length <= 6) {
             aiPredicted = true;
         } else {
-            aiPredictedClicks = []; // Agar conditions meet nahi huin to khali kardo
+            aiPredictedClicks = [];
         }
     }
 
@@ -183,14 +194,11 @@ app.post('/api/new-hcaptcha', async (req, res) => {
         media: task.media,
         type: task.type,
         timestamp: task.timestamp,
-        clicks: aiPredictedClicks, // AI ki prediction attach kardi
+        clicks: aiPredictedClicks,
         aiPredicted: aiPredicted
     };
 
-    // Extension ko FALSE bheja taake wo Dashboard ka wait kare
     res.json({ success: true, autoSolved: false }); 
-    
-    // Socket ke zariye Dashboard ko task bhej diya
     io.emit('newTask', hcaptchaPending[task.taskId]);
     
     const keys = Object.keys(hcaptchaPending);
@@ -202,7 +210,6 @@ app.post('/api/submit-hcaptcha', async (req, res) => {
     let source = hcaptchaPending[taskId] || hcaptchaTrained[taskId];
     
     if (source) {
-        // Jab Dashboard Submit karega tab Server AI seekhay ga
         if (source.type === 'grid') {
             await trainServerAI(source, clicks, wrongIndices || []);
         }
