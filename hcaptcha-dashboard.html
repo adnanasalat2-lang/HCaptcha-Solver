@@ -120,7 +120,7 @@ function startApp(mode) {
 }
 
 // -----------------------------------------
-// SEQUENTIAL SCRIPT LOADER (CRASH FIX)
+// SEQUENTIAL SCRIPT LOADER
 // -----------------------------------------
 function loadScript(src) {
     return new Promise((resolve, reject) => {
@@ -372,9 +372,8 @@ document.getElementById('tasksArea').addEventListener('click', (e) => {
     if (!t.clicks) t.clicks = [];
     
     // Retrain safety
-    if (retrainState[tid] && !e.target.classList.contains('btn-confirm') && !e.target.classList.contains('btn-cancel') && !e.target.classList.contains('g-img') && !e.target.classList.contains('s-img')) return;
+    if (retrainState[tid] && !e.target.classList.contains('btn-confirm') && !e.target.classList.contains('btn-cancel') && !e.target.classList.contains('btn-reset') && !e.target.classList.contains('g-img') && !e.target.classList.contains('s-img')) return;
 
-    // 1. Grid Image Click Logic
     if (e.target.classList.contains('g-img')) {
         let idx = parseInt(e.target.dataset.index);
         t.aiPredicted = false; 
@@ -390,13 +389,20 @@ document.getElementById('tasksArea').addEventListener('click', (e) => {
             if(retrainState[tid]) retrainState[tid].newClicks.push(idx);
         }
     } 
-    // 2. 🔴 FIXED: Single Box / Coordinate Click Logic
-    else if (e.target.classList.contains('s-img') && currentTab !== 'trained') {
+    // 🔴 FIXED: Single Box Click Logic
+    else if (e.target.classList.contains('s-img')) {
+        // Agar Trained tab mein ho aur Retrain nahi ho raha, to click ignore karo
+        if (currentTab === 'trained' && !retrainState[tid]) return;
+
         let rect = e.target.getBoundingClientRect();
         let x = ((e.clientX - rect.left) / rect.width) * 100;
         let y = ((e.clientY - rect.top) / rect.height) * 100;
         
-        t.clicks.push({ px: x, py: y });
+        if (retrainState[tid]) {
+            retrainState[tid].newClicks.push({ px: x, py: y });
+        } else {
+            t.clicks.push({ px: x, py: y });
+        }
         
         let dot = document.createElement('div'); 
         dot.className = 'dot'; 
@@ -404,10 +410,14 @@ document.getElementById('tasksArea').addEventListener('click', (e) => {
         dot.style.top = `${y}%`;
         e.target.parentElement.appendChild(dot);
     } 
-    // 3. Reset Button Logic
+    // 🔴 FIXED: Clear Button Logic (Retrain ke liye bhi)
     else if (e.target.classList.contains('btn-reset')) {
-        t.clicks = []; t.aiPredicted = false; 
-        card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected','ai-pick'));
+        if (retrainState[tid]) {
+            retrainState[tid].newClicks = [];
+        } else {
+            t.clicks = []; t.aiPredicted = false; 
+        }
+        card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected','ai-pick','retrain-pick'));
         card.querySelectorAll('.dot').forEach(d => d.remove()); 
         card.classList.remove('ai-processing');
     }
@@ -435,8 +445,11 @@ function startRetrain(taskId) {
     let t = serverData.trained[taskId];
     if (!t) return;
     retrainState[taskId] = { oldClicks: [...(t.clicks || [])], newClicks: [...(t.clicks || [])] };
+    
+    // 🔴 FIXED: Added Clear button to Retrain actions
     document.getElementById(`act-${taskId}`).innerHTML = `
         <button class="btn btn-confirm" onclick="submitTask('${taskId}', true)">✅ Confirm</button>
+        <button class="btn btn-reset">Clear</button>
         <button class="btn btn-cancel" onclick="cancelRetrain('${taskId}')">❌ Cancel</button>`;
 }
 function cancelRetrain(taskId) { delete retrainState[taskId]; renderTasks(); }
