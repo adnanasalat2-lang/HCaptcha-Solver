@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- FIX: Referrer policy add ki hai taake hCaptcha images 403 Forbidden na hon -->
+    <meta name="referrer" content="no-referrer">
     <title>hCaptcha Master - AI Edition</title>
     <!-- TF Models — page load hote hi -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
@@ -425,24 +427,26 @@ function renderCurrentData() {
 function buildCard(t) {
     let card = document.createElement('div'); card.className = 'task-card'; card.dataset.id = t.id;
     let isPending = currentTab === 'pending', parts = t.prompt.split('|||');
+    
     function _safeUrl(u) {
         if (!u) return '';
-        // data:image base64 — seedha allow karo (ye hamesha kaam karta hai)
+        u = u.trim(); // FIX: Extra spaces remove karne ke liye
         if (u.startsWith('data:image/')) return u;
-        // HTTP/HTTPS URLs — sanitize karo
         if (/^https?:\/\//.test(u)) return u.replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
         return '';
     }
+    
     let _exSrc = parts[1] ? _safeUrl(parts[1]) : '';
-    // Fallback: agar koi media mein thumb ho aur example na ho to pehli media ka thumb use karo
+    
+    // FIX: Fallback logic better ki hai taake agar pehli media image `https` ho to wo bhi accept ho
     if (!_exSrc && t.media && t.media.length > 0) {
         let firstThumb = t.media[0]?.thumb || t.media[0]?.src || '';
-        if (firstThumb && firstThumb.startsWith('data:image/')) _exSrc = firstThumb;
+        if (firstThumb) _exSrc = _safeUrl(firstThumb);
     }
+    
+    // FIX: Inline onerror CSP (security block) ki wajah se run nahi ho raha tha, isay neechay global listener se handle kiya hai
     let exHtml = _exSrc
-        ? `<img src="${_exSrc}" class="example-img" 
-             onerror="this.style.display='none';this.nextElementSibling.style.display='flex'" 
-             style="display:block">
+        ? `<img src="${_exSrc}" class="example-img" style="display:block">
            <div class="example-img-placeholder" style="display:none">🖼️</div>`
         : `<div class="example-img-placeholder">🖼️</div>`;
 
@@ -537,6 +541,16 @@ async function sendToServer(taskId, btnEl, card) {
     } catch(e) { if (btnEl) { btnEl.textContent='❌ Retry'; btnEl.disabled = false; }
     } finally { _saving.delete(taskId); }
 }
+
+// FIX: Global error listener add kiya hai taake CSP error handler ko block na kare
+window.addEventListener('error', function(e) {
+    if (e.target && e.target.tagName === 'IMG' && e.target.classList.contains('example-img')) {
+        e.target.style.display = 'none';
+        if (e.target.nextElementSibling) {
+            e.target.nextElementSibling.style.display = 'flex';
+        }
+    }
+}, true);
 
 setTimeout(startFetch, 200); setTimeout(initAI, 500);
 </script>
