@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master - Ultra Smooth Edition</title>
+    <title>hCaptcha Master - Ultra Engine</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -69,7 +69,7 @@
 <body>
 <div class="header">
     <div class="header-top">
-        <h1>hCaptcha Master (Ultra Smooth) 🤖</h1>
+        <h1>hCaptcha Master (Ultra Engine) 🤖</h1>
         <div class="tabs">
             <button class="tab-btn active" id="btn-pending" onclick="setTab('pending')">Pending <span class="count" id="c-pending">0</span></button>
             <button class="tab-btn" id="btn-trained" onclick="setTab('trained')">Trained <span class="count" id="c-trained">0</span></button>
@@ -182,7 +182,7 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
-// ── Non-Blocking Async AI Training ──
+// ── Background Non-Blocking AI Training ──
 async function trainAIBrainAsync(task, wrongIndices = []) {
     if (!isAIReady || task.type !== 'grid' || !task.media) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
@@ -198,7 +198,6 @@ async function trainAIBrainAsync(task, wrongIndices = []) {
             await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 800); });
             if (!img.complete || img.naturalWidth === 0) continue;
             
-            // Safe execution without memory leaks
             tf.tidy(() => {
                 let tfImg = tf.browser.fromPixels(img);
                 let features = aiModel.infer(tfImg, true);
@@ -210,7 +209,6 @@ async function trainAIBrainAsync(task, wrongIndices = []) {
                 else { knn.addExample(features, negLabel); }
             });
 
-            // Browser frame yield — ZERO HANG
             await tf.nextFrame();
         } catch(e) {}
     }
@@ -218,7 +216,7 @@ async function trainAIBrainAsync(task, wrongIndices = []) {
     if (autoTrainEnabled) reEvaluatePending();
 }
 
-// ── Non-Blocking AI Predictor ──
+// ── Background AI Predictor ──
 async function predictWithAI(task) {
     if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media || task.clicks.length > 0) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
@@ -248,7 +246,6 @@ async function predictWithAI(task) {
             if (resolvedRes.label === pText && conf > 0.85 && negConf < 0.30) {
                 predictedClicks.push(m.index);
             }
-            // Yield UI thread
             await tf.nextFrame();
         } catch(e) {}
     }
@@ -273,6 +270,7 @@ async function predictWithAI(task) {
     }
 }
 
+// ── Background Evaluator (Trained tab mein bhi chalta hai) ──
 async function reEvaluatePending() {
     if (isEvaluatingAI) return;
     isEvaluatingAI = true;
@@ -387,6 +385,7 @@ async function fetchTasks() {
     if (isFetching) return;
     isFetching = true;
     try {
+        // HAMESHA pending tasks background mein fetch karein
         const resPending = await fetch(`${SERVER_URL}/api/tasks?tab=pending&page=0&size=50&t=${Date.now()}`, { cache: 'no-store' });
         if (resPending.ok) {
             const dPending = await resPending.json();
@@ -412,6 +411,7 @@ async function fetchTasks() {
     isFetching = false;
 }
 
+// Background sync active rahega chahe page minimize ho
 function startFetch() { if (!_fetchTimer) _fetchTimer = setInterval(fetchTasks, 600); fetchTasks(); }
 
 function renderCurrentData() {
@@ -502,12 +502,16 @@ function buildCard(t) {
     return card;
 }
 
+// ── Smooth 3-Second Fluid Video Player (150ms Loop) ──
 setInterval(() => {
     videoTasks.forEach(vt => {
         let el = document.querySelector(`.vid-player[data-id="${vt.id}"]`);
-        if (el && vt.frames?.length > 0) { vt.current=(vt.current+1)%vt.frames.length; el.src=vt.frames[vt.current]; }
+        if (el && vt.frames && vt.frames.length > 0) { 
+            vt.current = (vt.current + 1) % vt.frames.length; 
+            el.src = vt.frames[vt.current]; 
+        }
     });
-}, 200); 
+}, 150); 
 
 tasksArea.addEventListener('click', (e) => {
     let card = e.target.closest('.task-card'); if (!card) return;
