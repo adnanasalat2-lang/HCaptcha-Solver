@@ -40,11 +40,11 @@
         .task-prompt { color: #fff; font-size: 14px; font-weight: bold; flex: 1; }
         
         .img-grid, .trained-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
-        .img-grid img, .trained-grid img { width: 100%; height: 140px; object-fit: cover; cursor: pointer; border: 4px solid transparent; background: #222; }
+        .img-grid img, .trained-grid img { width: 100%; height: 140px; object-fit: cover; cursor: pointer; border: 4px solid transparent; background: #222; transition: opacity 0.3s; }
         .img-grid img.selected { border-color: #00ff88; opacity: 0.7; }
         .img-grid img.ai-pick { border-color: #ff00ff; }
         .trained-grid img { height: 100px; border: 3px solid #333; }
-        .trained-grid img.was-clicked { border-color: #00ff88; }
+        .trained-grid img.was-clicked { border-color: #00ff88; opacity: 0.8; }
         .trained-grid img.retrain-pick { border-color: #ff8800; }
         
         .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; background: #000; border-radius: 4px; border: 2px solid #444; overflow: hidden; }
@@ -125,9 +125,7 @@ function startApp(mode) {
 function loadScript(src) {
     return new Promise((resolve, reject) => {
         let s = document.createElement('script');
-        s.src = src;
-        s.onload = resolve;
-        s.onerror = reject;
+        s.src = src; s.onload = resolve; s.onerror = reject;
         document.head.appendChild(s);
     });
 }
@@ -246,44 +244,13 @@ async function trainAIBrain(task, wrongIndices = []) {
 // UI & SOCKET LOGIC 
 // -----------------------------------------
 socket.on('initialState', (data) => { serverData = data; renderTasks(); });
+socket.on('newTask', async (task) => { serverData.pending[task.id] = task; renderTasks(); if (isMaster && autoTrainEnabled) await predictWithAI(task); });
+socket.on('updateTask', (task) => { serverData.pending[task.id] = task; renderTasks(); });
+socket.on('taskCompleted', async (data) => { delete serverData.pending[data.task.id]; serverData.trained[data.task.id] = data.task; renderTasks(); if (isMaster && isAIReady) await trainAIBrain(data.task, data.wrongIndices); });
+socket.on('taskDeleted', (taskId) => { delete serverData.pending[taskId]; delete serverData.trained[taskId]; renderTasks(); });
 
-socket.on('newTask', async (task) => {
-    serverData.pending[task.id] = task;
-    renderTasks();
-    if (isMaster && autoTrainEnabled) await predictWithAI(task);
-});
-
-socket.on('updateTask', (task) => {
-    serverData.pending[task.id] = task;
-    renderTasks();
-});
-
-socket.on('taskCompleted', async (data) => {
-    delete serverData.pending[data.task.id];
-    serverData.trained[data.task.id] = data.task;
-    renderTasks();
-    if (isMaster && isAIReady) await trainAIBrain(data.task, data.wrongIndices);
-});
-
-socket.on('taskDeleted', (taskId) => {
-    delete serverData.pending[taskId];
-    delete serverData.trained[taskId];
-    renderTasks();
-});
-
-function toggleAutoTrain() {
-    autoTrainEnabled = !autoTrainEnabled;
-    let btn = document.getElementById('btnAutoTrain');
-    btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
-    btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
-}
-
-function toggleAutoSave() {
-    autoSaveEnabled = !autoSaveEnabled;
-    let btn = document.getElementById('btnAutoSave');
-    btn.className = 'btn-toggle' + (autoSaveEnabled ? ' on' : '');
-    btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
-}
+function toggleAutoTrain() { autoTrainEnabled = !autoTrainEnabled; let btn = document.getElementById('btnAutoTrain'); btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : ''); btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF'); }
+function toggleAutoSave() { autoSaveEnabled = !autoSaveEnabled; let btn = document.getElementById('btnAutoSave'); btn.className = 'btn-toggle' + (autoSaveEnabled ? ' on' : ''); btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF'); }
 
 function setTab(tab) {
     currentTab = tab;
@@ -308,9 +275,7 @@ function renderTasks() {
     else if (currentTab === 'workers') list = Object.values(serverData.pending).filter(t => t.type !== 'grid');
     else list = Object.values(serverData.trained).reverse().slice(0, 50);
 
-    list.forEach(t => {
-        try { tasksArea.appendChild(buildCard(t)); } catch(e) {}
-    });
+    list.forEach(t => { try { tasksArea.appendChild(buildCard(t)); } catch(e) {} });
 }
 
 function buildCard(t) {
@@ -362,7 +327,7 @@ function buildCard(t) {
 }
 
 // -----------------------------------------
-// FIX: COMPLETE CLICK LISTENER LOGIC
+// FIXED CLICK LOGIC (RETRAIN WAS-CLICKED FIX)
 // -----------------------------------------
 document.getElementById('tasksArea').addEventListener('click', (e) => {
     let card = e.target.closest('.task-card'); if (!card) return;
@@ -379,8 +344,9 @@ document.getElementById('tasksArea').addEventListener('click', (e) => {
         t.aiPredicted = false; 
         card.classList.remove('ai-processing');
         
-        if (e.target.classList.contains('selected') || e.target.classList.contains('ai-pick') || e.target.classList.contains('retrain-pick')) {
-            e.target.classList.remove('selected', 'ai-pick', 'retrain-pick'); 
+        // 🔴 FIX: was-clicked ko hatane ke liye is condition mein was-clicked shamil kar liya gaya
+        if (e.target.classList.contains('selected') || e.target.classList.contains('ai-pick') || e.target.classList.contains('retrain-pick') || e.target.classList.contains('was-clicked')) {
+            e.target.classList.remove('selected', 'ai-pick', 'retrain-pick', 'was-clicked'); 
             t.clicks = t.clicks.filter(i => i !== idx);
             if(retrainState[tid]) retrainState[tid].newClicks = retrainState[tid].newClicks.filter(i => i !== idx);
         } else { 
@@ -389,9 +355,7 @@ document.getElementById('tasksArea').addEventListener('click', (e) => {
             if(retrainState[tid]) retrainState[tid].newClicks.push(idx);
         }
     } 
-    // 🔴 FIXED: Single Box Click Logic
     else if (e.target.classList.contains('s-img')) {
-        // Agar Trained tab mein ho aur Retrain nahi ho raha, to click ignore karo
         if (currentTab === 'trained' && !retrainState[tid]) return;
 
         let rect = e.target.getBoundingClientRect();
@@ -410,14 +374,13 @@ document.getElementById('tasksArea').addEventListener('click', (e) => {
         dot.style.top = `${y}%`;
         e.target.parentElement.appendChild(dot);
     } 
-    // 🔴 FIXED: Clear Button Logic (Retrain ke liye bhi)
     else if (e.target.classList.contains('btn-reset')) {
         if (retrainState[tid]) {
             retrainState[tid].newClicks = [];
         } else {
             t.clicks = []; t.aiPredicted = false; 
         }
-        card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected','ai-pick','retrain-pick'));
+        card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected','ai-pick','retrain-pick','was-clicked'));
         card.querySelectorAll('.dot').forEach(d => d.remove()); 
         card.classList.remove('ai-processing');
     }
@@ -445,8 +408,6 @@ function startRetrain(taskId) {
     let t = serverData.trained[taskId];
     if (!t) return;
     retrainState[taskId] = { oldClicks: [...(t.clicks || [])], newClicks: [...(t.clicks || [])] };
-    
-    // 🔴 FIXED: Added Clear button to Retrain actions
     document.getElementById(`act-${taskId}`).innerHTML = `
         <button class="btn btn-confirm" onclick="submitTask('${taskId}', true)">✅ Confirm</button>
         <button class="btn btn-reset">Clear</button>
