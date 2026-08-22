@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master - Instant Engine</title>
+    <title>hCaptcha Master - Ultra Smooth Edition</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -69,7 +69,7 @@
 <body>
 <div class="header">
     <div class="header-top">
-        <h1>hCaptcha Master (Instant Engine) 🤖</h1>
+        <h1>hCaptcha Master (Ultra Smooth) 🤖</h1>
         <div class="tabs">
             <button class="tab-btn active" id="btn-pending" onclick="setTab('pending')">Pending <span class="count" id="c-pending">0</span></button>
             <button class="tab-btn" id="btn-trained" onclick="setTab('trained')">Trained <span class="count" id="c-trained">0</span></button>
@@ -97,15 +97,16 @@ const PAGE_SIZE = 20;
 let isAIReady = false, aiModel, knn;
 let autoTrainEnabled = false, autoSaveEnabled = false;
 let retrainState = {};
-let isAIWorking = false;
+let isEvaluatingAI = false;
 
 async function initAI() {
     syncStatus.innerHTML = "🧠 AI Loading...";
     try {
-        await new Promise(r => setTimeout(r, 200));
+        await tf.setBackend('webgl');
+        await tf.ready();
         aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
         knn = knnClassifier.create();
-        loadKNN();
+        await loadKNN();
         isAIReady = true;
         syncStatus.innerHTML = "🤖 AI Ready ✅";
         syncStatus.classList.add('active');
@@ -181,7 +182,7 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
-// Background Non-Blocking AI Trainer
+// ── Non-Blocking Async AI Training ──
 async function trainAIBrainAsync(task, wrongIndices = []) {
     if (!isAIReady || task.type !== 'grid' || !task.media) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
@@ -194,9 +195,10 @@ async function trainAIBrainAsync(task, wrongIndices = []) {
             let img = new Image();
             if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
             img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 1200); });
+            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 800); });
             if (!img.complete || img.naturalWidth === 0) continue;
             
+            // Safe execution without memory leaks
             tf.tidy(() => {
                 let tfImg = tf.browser.fromPixels(img);
                 let features = aiModel.infer(tfImg, true);
@@ -204,16 +206,19 @@ async function trainAIBrainAsync(task, wrongIndices = []) {
                 let isWrong = wrongIndices.includes(m.index);
 
                 if (isCorrect) { knn.addExample(features, pText); knn.addExample(features, pText); } 
-                else if (isWrong) { knn.addExample(features, negLabel); knn.addExample(features, negLabel); knn.addExample(features, negLabel); } 
+                else if (isWrong) { knn.addExample(features, negLabel); knn.addExample(features, negLabel); } 
                 else { knn.addExample(features, negLabel); }
             });
-            await new Promise(r => setTimeout(r, 10)); // Yield thread
+
+            // Browser frame yield — ZERO HANG
+            await tf.nextFrame();
         } catch(e) {}
     }
     saveKNN();
     if (autoTrainEnabled) reEvaluatePending();
 }
 
+// ── Non-Blocking AI Predictor ──
 async function predictWithAI(task) {
     if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media || task.clicks.length > 0) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
@@ -228,7 +233,7 @@ async function predictWithAI(task) {
             let img = new Image();
             if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
             img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 1200); });
+            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 600); });
             if (!img.complete || img.naturalWidth === 0) continue;
             
             let res = null;
@@ -243,6 +248,8 @@ async function predictWithAI(task) {
             if (resolvedRes.label === pText && conf > 0.85 && negConf < 0.30) {
                 predictedClicks.push(m.index);
             }
+            // Yield UI thread
+            await tf.nextFrame();
         } catch(e) {}
     }
 
@@ -267,8 +274,8 @@ async function predictWithAI(task) {
 }
 
 async function reEvaluatePending() {
-    if (isAIWorking) return;
-    isAIWorking = true;
+    if (isEvaluatingAI) return;
+    isEvaluatingAI = true;
     for (let id in serverData.pending) {
         let t = serverData.pending[id];
         if (t && (!t.clicks || t.clicks.length === 0)) {
@@ -276,10 +283,11 @@ async function reEvaluatePending() {
             let isGrid = media.length > 1;
             if (isGrid) {
                 await predictWithAI({ id, clicks: [], type: 'grid', media, prompt: t.prompt || '' });
+                await new Promise(r => setTimeout(r, 20));
             }
         }
     }
-    isAIWorking = false;
+    isEvaluatingAI = false;
 }
 
 function startRetrain(taskId) {
@@ -329,10 +337,8 @@ async function confirmRetrain(taskId) {
     let wrongClicks = (state.oldClicks || []).filter(idx => !state.newClicks.includes(idx));
     t.clicks = state.newClicks;
     
-    // 1. Instant submit to backend
     fetch(`${SERVER_URL}/api/submit-hcaptcha`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ taskId, clicks: state.newClicks }) }).catch(()=>{});
     
-    // 2. Background async learn
     trainAIBrainAsync(t, wrongClicks);
     
     delete retrainState[taskId];
@@ -406,7 +412,7 @@ async function fetchTasks() {
     isFetching = false;
 }
 
-function startFetch() { if (!_fetchTimer) _fetchTimer = setInterval(fetchTasks, 500); fetchTasks(); }
+function startFetch() { if (!_fetchTimer) _fetchTimer = setInterval(fetchTasks, 600); fetchTasks(); }
 
 function renderCurrentData() {
     let activeData = currentTab === 'pending' ? serverData.pending : serverData.trained;
@@ -536,14 +542,12 @@ function sendToServer(taskId, btnEl, card) {
     let t = activeTasksStore[taskId]; 
     if (!t) { _saving.delete(taskId); return; }
 
-    // 1. INSTANT DISPATCH TO BACKEND (Zero delay for browser site)
     fetch(`${SERVER_URL}/api/submit-hcaptcha`, { 
         method: 'POST', 
         headers: { 'Content-Type': 'application/json' }, 
         body: JSON.stringify({ taskId, clicks: t.clicks }) 
     }).catch(()=>{});
 
-    // 2. INSTANT UI REMOVAL TO TRAINED TAB
     if (currentTab === 'pending') {
         ghostBlocker.add(taskId);
         setTimeout(() => ghostBlocker.delete(taskId), 4000);
@@ -553,7 +557,6 @@ function sendToServer(taskId, btnEl, card) {
         if (btnEl) { btnEl.textContent='Updated!'; setTimeout(()=>{ if(btnEl){btnEl.textContent='Update';btnEl.disabled=false;} },1000); }
     }
 
-    // 3. ASYNC BACKGROUND AI LEARNING (Non-blocking, UI freeze nahi hoga)
     if (isAIReady && t.clicks.length > 0) {
         trainAIBrainAsync(t).finally(() => {
             _saving.delete(taskId);
