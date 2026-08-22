@@ -32,7 +32,7 @@
         .task-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
         .task-id { color: #ff4444; font-family: monospace; font-size: 16px; font-weight: bold; }
         .prompt-container { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; background: #222; padding: 8px; border-radius: 6px; border: 1px solid #333; }
-        .example-img { width: 55px; height: 55px; object-fit: contain; border-radius: 4px; background: #222; border: 1px solid #555; flex-shrink: 0; }
+        .example-img { width: 55px; height: 55px; object-fit: cover; border-radius: 4px; background: #222; border: 1px solid #555; flex-shrink: 0; }
         .example-img-placeholder { width: 55px; height: 55px; border-radius: 4px; background: #2a2a2a; border: 1px dashed #555; display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
         .task-prompt { color: #fff; font-size: 14px; font-weight: bold; margin: 0; line-height: 1.4; flex: 1; }
         
@@ -427,7 +427,7 @@ function buildCard(t) {
     function _safeUrl(u) { return (!u) ? '' : (u.startsWith('data:image/') || /^https?:\/\//.test(u)) ? u.replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;') : ''; }
     let _exSrc = parts[1] ? _safeUrl(parts[1]) : '';
     let exHtml = _exSrc
-        ? `<img src="${_exSrc}" class="example-img" loading="lazy" onerror="this.outerHTML='<div class=\\'example-img-placeholder\\'>🖼️</div>'">`
+        ? `<img src="${_exSrc}" class="example-img" onerror="this.outerHTML='<div class=\\'example-img-placeholder\\'>🖼️</div>'">`
         : `<div class="example-img-placeholder">🖼️</div>`;
 
     let isMediaMissing = t.media.length === 0 || t.media.every(m => !m.thumb && !m.src && !m.frames);
