@@ -124,17 +124,9 @@ function evaluateAutoSolve(task) {
             }
         });
 
-        if (matchedClicks.length >= 1 && matchedClicks.length <= 5) {
-            let lightMedia = task.media.map(m => ({ dhash: m.dhash, type: m.type, index: m.index }));
-            hcaptchaTrained[task.taskId] = {
-                id: task.taskId,
-                prompt: task.prompt,
-                refHash: task.refHash,
-                media: lightMedia,
-                clicks: matchedClicks,
-                trainedAt: new Date().toISOString()
-            };
-            _addToConceptBank(hcaptchaTrained[task.taskId]);
+        // FIX: Auto-save hata diya — galat match database pollute karta tha (snowball effect)
+        // FIX: Minimum 2 matches chahiye — sirf 1 match coincidental ho sakta hai
+        if (matchedClicks.length >= 2 && matchedClicks.length <= 5) {
             return { solved: true, clicks: matchedClicks };
         }
     }
@@ -146,16 +138,8 @@ function evaluateAutoSolve(task) {
             for (let id in hcaptchaTrained) {
                 let tr = hcaptchaTrained[id];
                 if (tr.media && tr.media.length === 1 && getCleanKey(tr) === cKey) {
-                    // FIX: Increased distance to 5 for video frame variations
+                    // FIX: Auto-save hata diya — same reason as Strategy 2
                     if (getHammingDistance(item.dhash, tr.media[0].dhash) <= 5) {
-                        hcaptchaTrained[task.taskId] = {
-                            id: task.taskId,
-                            prompt: task.prompt,
-                            refHash: task.refHash,
-                            media: [ { dhash: item.dhash, type: item.type, index: 0 } ],
-                            clicks: tr.clicks, 
-                            trainedAt: new Date().toISOString()
-                        };
                         return { solved: true, clicks: tr.clicks };
                     }
                 }
