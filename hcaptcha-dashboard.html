@@ -97,7 +97,6 @@ let autoSaveEnabled = false;
 let retrainState = {};
 let videoTasks = [];
 
-// AI Globals
 let aiModel, knn;
 let isAIReady = false;
 
@@ -121,26 +120,37 @@ function startApp(mode) {
 }
 
 // -----------------------------------------
-// MASTER AI BRAIN LOGIC
+// SEQUENTIAL SCRIPT LOADER (CRASH FIX)
 // -----------------------------------------
-function loadAILibraries() {
-    document.getElementById('syncStatus').innerHTML = "🧠 Downloading AI Files...";
-    const scripts = [
-        'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js',
-        'https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js',
-        'https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js'
-    ];
-    let loaded = 0;
-    scripts.forEach(src => {
-        let s = document.createElement('script'); s.src = src;
-        s.onload = () => { loaded++; if(loaded === 3) initAI(); };
+function loadScript(src) {
+    return new Promise((resolve, reject) => {
+        let s = document.createElement('script');
+        s.src = src;
+        s.onload = resolve;
+        s.onerror = reject;
         document.head.appendChild(s);
     });
 }
 
+async function loadAILibraries() {
+    document.getElementById('syncStatus').innerHTML = "🧠 Downloading AI Files (Step 1/3)...";
+    try {
+        // Sequential Loading: AI kabhi crash nahi hoga
+        await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js');
+        document.getElementById('syncStatus').innerHTML = "🧠 Downloading AI Files (Step 2/3)...";
+        await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js');
+        document.getElementById('syncStatus').innerHTML = "🧠 Downloading AI Files (Step 3/3)...";
+        await loadScript('https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js');
+        
+        initAI();
+    } catch (e) {
+        document.getElementById('syncStatus').innerHTML = "⚠️ Network Error loading AI";
+    }
+}
+
 async function initAI() {
     try {
-        await tf.ready(); // 🔴 FIX: AI loading se pehle wait lazmi hai
+        await tf.ready();
         aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
         knn = knnClassifier.create();
         await loadKNN(); 
@@ -148,8 +158,7 @@ async function initAI() {
         document.getElementById('syncStatus').innerHTML = "🤖 Master AI Active ✅";
         document.getElementById('syncStatus').classList.add('active');
     } catch(e) { 
-        console.error("AI Init Error:", e);
-        document.getElementById('syncStatus').innerHTML = "⚠️ AI Failed: " + e.message; 
+        document.getElementById('syncStatus').innerHTML = "⚠️ AI Load Failed: " + e.message; 
     }
 }
 
@@ -301,9 +310,8 @@ function renderTasks() {
     else if (currentTab === 'workers') list = Object.values(serverData.pending).filter(t => t.type !== 'grid');
     else list = Object.values(serverData.trained).reverse().slice(0, 50);
 
-    // 🔴 FIX: try-catch for extra safety
     list.forEach(t => {
-        try { tasksArea.appendChild(buildCard(t)); } catch(e) { console.error("Error building card:", e); }
+        try { tasksArea.appendChild(buildCard(t)); } catch(e) {}
     });
 }
 
@@ -313,7 +321,6 @@ function buildCard(t) {
     card.className = `task-card ${showAI ? 'ai-processing' : ''}`; 
     card.dataset.id = t.id;
     
-    // 🔴 FIX: Null safety checks added
     let taskIdStr = t.id || "000000";
     let promptStr = t.prompt || "";
     let isPending = !!serverData.pending[t.id];
