@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
     <title>hCaptcha Master - Worker Control</title>
-    <!-- Sirf Socket.io, koi TensorFlow browser me nahi -->
     <script src="/socket.io/socket.io.js"></script>
     <style>
         * { box-sizing: border-box; }
@@ -68,7 +67,9 @@
     </div>
     <div class="ai-bar">
         <span class="sync-status" id="syncStatus">🔄 Connecting to Server...</span>
-        <button id="btnAutoSave" class="btn-toggle" onclick="toggleAutoSave()">💾 AI Auto Save: OFF</button>
+        <!-- TUMHARE DONO BUTTON WAPAS AA GAYE HAIN -->
+        <button id="btnAutoTrain" class="btn-toggle" onclick="toggleAutoTrain()">🧠 Auto Train: OFF</button>
+        <button id="btnAutoSave" class="btn-toggle" onclick="toggleAutoSave()">💾 Auto Save: OFF</button>
     </div>
 </div>
 <div class="grid-container" id="tasksArea"></div>
@@ -77,13 +78,21 @@
 const socket = io();
 let currentTab = 'ai-grids';
 let serverData = { pending: {}, trained: {} };
+
+let autoTrainEnabled = false;
 let autoSaveEnabled = false;
 let retrainState = {};
 let videoTasks = [];
 
-// WebSocket Events
-socket.on('connect', () => document.getElementById('syncStatus').innerHTML = "🟢 Connected to Master");
-socket.on('disconnect', () => document.getElementById('syncStatus').innerHTML = "🔴 Disconnected");
+// Socket Events
+socket.on('connect', () => {
+    document.getElementById('syncStatus').innerHTML = "🟢 Connected to Master";
+    document.getElementById('syncStatus').classList.add('active');
+});
+socket.on('disconnect', () => {
+    document.getElementById('syncStatus').innerHTML = "🔴 Disconnected";
+    document.getElementById('syncStatus').classList.remove('active');
+});
 
 socket.on('initialState', (data) => {
     serverData = data;
@@ -95,14 +104,14 @@ socket.on('newTask', (task) => {
     serverData.pending[task.id] = task;
     renderTasks();
     
-    // Agar Server AI ne predict karliya hai, aur Auto-Save ON hai, to khud submit karo
-    if (task.aiPredicted && autoSaveEnabled) {
+    // Agar Auto Train aur Auto Save dono ON hain, aur server ne predict kiya hai
+    if (task.aiPredicted && autoTrainEnabled && autoSaveEnabled) {
         let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
         if(card && currentTab === 'ai-grids') {
             let btn = card.querySelector('.btn-save');
             if(btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Auto-Saving...'; }
         }
-        setTimeout(() => submitTask(task.id, false), 800); // 800ms ka delay taake naturally flow ho
+        setTimeout(() => submitTask(task.id, false), 800); 
     }
 });
 
@@ -118,12 +127,20 @@ socket.on('taskDeleted', (taskId) => {
     renderTasks();
 });
 
-// UI Functions
+// UI Toggles
+function toggleAutoTrain() {
+    autoTrainEnabled = !autoTrainEnabled;
+    let btn = document.getElementById('btnAutoTrain');
+    btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
+    btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
+    renderTasks(); // Tabhi pink borders dikhengi ya gayab hongi
+}
+
 function toggleAutoSave() {
     autoSaveEnabled = !autoSaveEnabled;
     let btn = document.getElementById('btnAutoSave');
     btn.className = 'btn-toggle' + (autoSaveEnabled ? ' on' : '');
-    btn.textContent = '💾 AI Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
+    btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
 function setTab(tab) {
@@ -156,7 +173,12 @@ function renderTasks() {
 }
 
 function buildCard(t) {
-    let card = document.createElement('div'); card.className = `task-card ${t.aiPredicted && currentTab !== 'trained' ? 'ai-processing' : ''}`; card.dataset.id = t.id;
+    // Agar Auto Train ON hai tabhi UI mein highlights aayengi
+    let showAI = t.aiPredicted && autoTrainEnabled && currentTab !== 'trained';
+    let card = document.createElement('div'); 
+    card.className = `task-card ${showAI ? 'ai-processing' : ''}`; 
+    card.dataset.id = t.id;
+    
     let isPending = !!serverData.pending[t.id];
     let parts = t.prompt.split('|||');
     
@@ -170,7 +192,9 @@ function buildCard(t) {
         mediaHTML = `<div class="${isPending ? 'img-grid' : 'trained-grid'}">`;
         t.media.forEach(m => {
             let cl = '';
-            if (t.clicks.includes(m.index)) cl = isPending ? (t.aiPredicted ? 'ai-pick' : 'selected') : 'was-clicked';
+            if (t.clicks.includes(m.index)) {
+                cl = isPending ? (showAI ? 'ai-pick' : 'selected') : 'was-clicked';
+            }
             mediaHTML += `<img src="${m.thumb || m.src || ''}" class="g-img ${cl}" data-index="${m.index}">`;
         });
         mediaHTML += '</div>';
@@ -195,7 +219,7 @@ function buildCard(t) {
     return card;
 }
 
-// Interactivity
+// User Actions
 document.getElementById('tasksArea').addEventListener('click', (e) => {
     let card = e.target.closest('.task-card'); if (!card) return;
     let tid = card.dataset.id;
@@ -206,7 +230,8 @@ document.getElementById('tasksArea').addEventListener('click', (e) => {
 
     if (e.target.classList.contains('g-img')) {
         let idx = parseInt(e.target.dataset.index);
-        // Worker clicked an image manually -> AI prediction lock breaks, it's manual now
+        
+        // Agar worker ne khud click kardiya, to AI ka dhoka (pink border) khatam kardo
         t.aiPredicted = false; 
         card.classList.remove('ai-processing');
         
