@@ -2,22 +2,40 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const app = express();
+const http = require('http');
+const { WebSocketServer } = require('ws');
+const Redis = require('ioredis');
 
+const app = express();
 app.use(cors());
-app.use(express.json({ limit: '60mb' }));
+app.use(express.json({ limit: '15mb' }));
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE = path.join(DATA_DIR, 'database.json');
 
-const MAX_PENDING = 80;
-const MAX_TRAINED = 5000;
-// Dashboard page size — har fetch mein itne hi cards aayenge
+const MAX_PENDING = 1000;
+const MAX_TRAINED = 10000;
 const DASHBOARD_PAGE_SIZE = 20;
 
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
 let conceptBank = {};
+
+// Redis Initialization with fallback to in-memory mode
+let redis = null;
+let pubsub = null;
+const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
+
+try {
+    redis = new Redis(REDIS_URL, { retryStrategy: () => 2000, lazyConnect: true });
+    pubsub = new Redis(REDIS_URL, { retryStrategy: () => 2000, lazyConnect: true });
+    redis.connect().then(() => console.log('✅ Redis Connected')).catch(() => console.log('ℹ️ Running on In-Memory Fallback'));
+    pubsub.connect().then(() => {
+        pubsub.subscribe('hcaptcha_solutions', () => {});
+    }).catch(() => {});
+} catch (e) {
+    console.log('ℹ️ Running in Pure In-Memory Mode');
+}
 
 function getCleanKey(task) {
     let p = (task.prompt || "").split("|||")[0].trim().toLowerCase();
@@ -29,7 +47,7 @@ function dhashToBigInt(hexOrBin) {
     if (/^[01]+$/.test(hexOrBin)) {
         return BigInt('0b' + hexOrBin);
     }
-    try { return BigInt('0x' + hexOrBin); } catch(e) { return null; }
+    try { return BigInt('0x' + hexOrBin); } catch (e) { return null; }
 }
 
 function getHammingDistance(h1, h2) {
@@ -64,7 +82,7 @@ function _addToConceptBank(tr) {
     });
 }
 
-function _removeFromConceptBank(tr) {
+function _removeFromConceptBank() {
     rebuildConceptBank();
 }
 
@@ -80,11 +98,8 @@ function initDB() {
             if (trainedKeys.length > MAX_TRAINED) {
                 const toDelete = trainedKeys.slice(0, trainedKeys.length - MAX_TRAINED);
                 toDelete.forEach(k => delete hcaptchaTrained[k]);
-                console.log(`[DB] Trimmed ${toDelete.length} old trained entries to enforce limit`);
             }
-
             rebuildConceptBank();
-            console.log(`[DB] Engine Loaded. Trained: ${Object.keys(hcaptchaTrained).length} | Concepts: ${Object.keys(conceptBank).length}`);
         } catch (e) {
             console.error("[DB] Error loading database:", e.message);
         }
@@ -96,12 +111,10 @@ let saveTimeout = null;
 function persistDatabase() {
     if (saveTimeout) clearTimeout(saveTimeout);
     saveTimeout = setTimeout(() => {
-        try {
-            fs.writeFileSync(DB_FILE, JSON.stringify({ trained: hcaptchaTrained }), 'utf8');
-        } catch(err) {
-            console.error('[DB] PERSIST ERROR:', err.message);
-        }
-    }, 1000);
+        fs.writeFile(DB_FILE, JSON.stringify({ trained: hcaptchaTrained }), 'utf8', (err) => {
+            if (err) console.error('[DB] Write error:', err.message);
+        });
+    }, 2000);
 }
 
 function evaluateAutoSolve(task) {
@@ -110,7 +123,6 @@ function evaluateAutoSolve(task) {
     }
 
     let cKey = getCleanKey(task);
-    
     let targetDhashes = conceptBank[cKey];
     if (targetDhashes && targetDhashes.size > 0 && task.media && task.media.length > 1) {
         let matchedClicks = [];
@@ -142,27 +154,86 @@ function evaluateAutoSolve(task) {
             }
         }
     }
-    
     return { solved: false };
 }
 
 // ==========================================
-// ROUTES
+// HTTP + WEBSOCKET ENGINE
 // ==========================================
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server });
+const wsClients = new Map();
 
+wss.on('connection', (ws) => {
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
+
+    ws.on('message', (msgStr) => {
+        try {
+            const data = JSON.parse(msgStr);
+            if (data.action === 'register' && data.taskId) {
+                ws.taskId = data.taskId;
+                wsClients.set(data.taskId, ws);
+
+                if (hcaptchaTrained[data.taskId]) {
+                    ws.send(JSON.stringify({ status: 'solved', taskId: data.taskId, clicks: hcaptchaTrained[data.taskId].clicks || [] }));
+                }
+            }
+        } catch (e) {}
+    });
+
+    ws.on('close', () => {
+        if (ws.taskId) wsClients.delete(ws.taskId);
+    });
+});
+
+// Ping interval for connection maintenance
+setInterval(() => {
+    wss.clients.forEach((ws) => {
+        if (!ws.isAlive) return ws.terminate();
+        ws.isAlive = false;
+        ws.ping();
+    });
+}, 30000);
+
+if (pubsub) {
+    pubsub.on('message', (channel, message) => {
+        if (channel === 'hcaptcha_solutions') {
+            try {
+                const { taskId, clicks } = JSON.parse(message);
+                const targetWs = wsClients.get(taskId);
+                if (targetWs && targetWs.readyState === 1) {
+                    targetWs.send(JSON.stringify({ status: 'solved', taskId, clicks }));
+                }
+            } catch (e) {}
+        }
+    });
+}
+
+function broadcastSolution(taskId, clicks) {
+    const targetWs = wsClients.get(taskId);
+    if (targetWs && targetWs.readyState === 1) {
+        targetWs.send(JSON.stringify({ status: 'solved', taskId, clicks }));
+    }
+    if (redis && redis.status === 'ready') {
+        redis.publish('hcaptcha_solutions', JSON.stringify({ taskId, clicks })).catch(() => {});
+    }
+}
+
+// ROUTES
 app.post('/api/new-hcaptcha', (req, res) => {
     const task = req.body;
     if (!task || !task.taskId) return res.json({ success: false, error: 'Missing taskId' });
 
     let autoRes = evaluateAutoSolve(task);
     if (autoRes.solved) {
-        persistDatabase();
+        broadcastSolution(task.taskId, autoRes.clicks);
         return res.json({ success: true, autoSolved: true, clicks: autoRes.clicks });
     }
 
     const keys = Object.keys(hcaptchaPending);
     if (keys.length >= MAX_PENDING) {
-        keys.slice(0, 10).forEach(k => delete hcaptchaPending[k]);
+        keys.slice(0, 50).forEach(k => delete hcaptchaPending[k]);
     }
 
     hcaptchaPending[task.taskId] = {
@@ -184,38 +255,16 @@ app.get('/api/check-hcaptcha/:id', (req, res) => {
     }
 });
 
-// ──────────────────────────────────────────────────────────
-// NEW: Paginated API — dashboard ke liye lightweight endpoint
-// tab=pending|trained, page=0,1,2..., size=20 (default)
-// Thumbs bhi sirf is page ke tasks ke liye bhejta hai
-// ──────────────────────────────────────────────────────────
 app.get('/api/tasks', (req, res) => {
-    const tab    = req.query.tab  === 'trained' ? 'trained' : 'pending';
-    const page   = Math.max(0, parseInt(req.query.page)  || 0);
-    const size   = Math.min(50, Math.max(1, parseInt(req.query.size) || DASHBOARD_PAGE_SIZE));
-    // since= timestamp — naye tasks sirf ye bhejta hai (polling ke liye)
-    const since  = req.query.since ? parseInt(req.query.since) : 0;
+    const tab = req.query.tab === 'trained' ? 'trained' : 'pending';
+    const page = Math.max(0, parseInt(req.query.page) || 0);
+    const size = Math.min(50, Math.max(1, parseInt(req.query.size) || DASHBOARD_PAGE_SIZE));
 
     let source = tab === 'trained' ? hcaptchaTrained : hcaptchaPending;
     let ids = Object.keys(source);
 
-    // Trained: newest pehle
     if (tab === 'trained') ids = ids.reverse();
-
     let total = ids.length;
-
-    // since filter — pending tab polling mein use hota hai (sirf naye tasks)
-    if (since > 0 && tab === 'pending') {
-        ids = ids.filter(id => {
-            let ts = source[id].timestamp ? new Date(source[id].timestamp).getTime() : 0;
-            return ts > since;
-        });
-        // Since mode mein pagination nahi — sab naye bhejo (max 20)
-        let tasks = {};
-        ids.slice(0, 20).forEach(id => { tasks[id] = source[id]; });
-        return res.json({ tasks, total, page: 0, pages: 1, tab });
-    }
-
     let pageIds = ids.slice(page * size, (page + 1) * size);
     let tasks = {};
     pageIds.forEach(id => { tasks[id] = source[id]; });
@@ -223,7 +272,6 @@ app.get('/api/tasks', (req, res) => {
     res.json({ tasks, total, page, pages: Math.ceil(total / size), tab });
 });
 
-// Health + counts — dashboard header ke liye (lightweight, no data)
 app.get('/api/counts', (req, res) => {
     res.json({
         pending: Object.keys(hcaptchaPending).length,
@@ -232,7 +280,6 @@ app.get('/api/counts', (req, res) => {
     });
 });
 
-// LEGACY: Purana endpoint — extension content.js use karta hai, na hatao
 app.get('/api/get-hcaptcha', (req, res) => {
     res.json({ pending: hcaptchaPending, trained: hcaptchaTrained });
 });
@@ -242,7 +289,6 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     if (!taskId) return res.json({ success: false, error: 'Missing taskId' });
 
     let source = hcaptchaPending[taskId] || hcaptchaTrained[taskId];
-
     if (source) {
         let lightMedia = (source.media || []).map(m => ({
             dhash: m.dhash || "",
@@ -274,11 +320,11 @@ app.post('/api/submit-hcaptcha', (req, res) => {
         if (trainedKeys.length > MAX_TRAINED) {
             const oldest = trainedKeys.slice(0, trainedKeys.length - MAX_TRAINED);
             oldest.forEach(k => delete hcaptchaTrained[k]);
-            console.log(`[DB] Auto-trimmed ${oldest.length} old trained entries`);
         }
 
         delete hcaptchaPending[taskId];
         persistDatabase();
+        broadcastSolution(taskId, clicks || []);
     }
     res.json({ success: true });
 });
@@ -294,9 +340,8 @@ app.post('/api/restore-hcaptcha', (req, res) => {
             restoredAt: new Date().toISOString()
         };
         delete hcaptchaTrained[taskId];
-        _removeFromConceptBank(null); 
+        _removeFromConceptBank();
         persistDatabase();
-        console.log(`[RESTORE] #${taskId} wapas pending mein`);
     }
     res.json({ success: true });
 });
@@ -304,7 +349,7 @@ app.post('/api/restore-hcaptcha', (req, res) => {
 app.delete('/api/delete-hcaptcha/:id', (req, res) => {
     delete hcaptchaPending[req.params.id];
     delete hcaptchaTrained[req.params.id];
-    _removeFromConceptBank(null); 
+    _removeFromConceptBank();
     persistDatabase();
     res.json({ success: true });
 });
@@ -312,9 +357,9 @@ app.delete('/api/delete-hcaptcha/:id', (req, res) => {
 app.get('/api/health', (req, res) => {
     res.json({
         status: 'ok',
+        wsClients: wsClients.size,
         pending: Object.keys(hcaptchaPending).length,
-        trained: Object.keys(hcaptchaTrained).length,
-        concepts: Object.keys(conceptBank).length
+        trained: Object.keys(hcaptchaTrained).length
     });
 });
 
@@ -326,4 +371,4 @@ app.get('/', (req, res) => {
 app.get('/dashboard', (req, res) => res.redirect('/'));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 hCaptcha Engine Running on Port ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 High-Concurrency Engine on Port ${PORT}`));
