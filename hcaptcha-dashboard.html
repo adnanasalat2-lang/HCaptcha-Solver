@@ -433,17 +433,17 @@ function buildCard(t) {
     function _safeUrl(u) {
         if (!u) return '';
         u = u.trim();
-        if (u.startsWith('data:image/')) return u;
-        if (/^https?:\/\//.test(u)) return u.replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        // FIX: Allow blob URLs and protocol-relative URLs
+        if (u.startsWith('data:image/') || u.startsWith('blob:')) return u;
+        if (/^(https?:)?\/\//.test(u)) return u.replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
         return '';
     }
     
     let _exSrc = parts[1] ? _safeUrl(parts[1]) : '';
     
-    // FIX: Yahan se fallback logic completely remove kar di gayi hai.
-    
+    // FIX: Inline onerror handler aur strict referrerpolicy add kiya
     let exHtml = _exSrc
-        ? `<img src="${_exSrc}" class="example-img" style="display:block">
+        ? `<img src="${_exSrc}" class="example-img" style="display:block" referrerpolicy="no-referrer" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
            <div class="example-img-placeholder" style="display:none">🖼️</div>`
         : `<div class="example-img-placeholder">🖼️</div>`;
 
@@ -484,6 +484,7 @@ function buildCard(t) {
         ${mediaHTML}
         <div class="actions">${actionsHtml}</div>`;
     return card;
+}
 }
 
 // Yahan 400 ki jagah 200 hi rakha hai taake video apni natural speed mein play ho
