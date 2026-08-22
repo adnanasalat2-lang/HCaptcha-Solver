@@ -2,18 +2,16 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const http = require('http');
-const { WebSocketServer } = require('ws');
 const Redis = require('ioredis');
-
 const app = express();
+
 app.use(cors());
-app.use(express.json({ limit: '15mb' }));
+app.use(express.json({ limit: '60mb' }));
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE = path.join(DATA_DIR, 'database.json');
 
-const MAX_PENDING = 1000;
+const MAX_PENDING = 200;
 const MAX_TRAINED = 10000;
 const DASHBOARD_PAGE_SIZE = 20;
 
@@ -21,20 +19,12 @@ let hcaptchaPending = {};
 let hcaptchaTrained = {};
 let conceptBank = {};
 
-// Redis Initialization with fallback to in-memory mode
 let redis = null;
-let pubsub = null;
-const REDIS_URL = process.env.REDIS_URL || 'redis://127.0.0.1:6379';
-
-try {
-    redis = new Redis(REDIS_URL, { retryStrategy: () => 2000, lazyConnect: true });
-    pubsub = new Redis(REDIS_URL, { retryStrategy: () => 2000, lazyConnect: true });
-    redis.connect().then(() => console.log('✅ Redis Connected')).catch(() => console.log('ℹ️ Running on In-Memory Fallback'));
-    pubsub.connect().then(() => {
-        pubsub.subscribe('hcaptcha_solutions', () => {});
-    }).catch(() => {});
-} catch (e) {
-    console.log('ℹ️ Running in Pure In-Memory Mode');
+if (process.env.REDIS_URL) {
+    try {
+        redis = new Redis(process.env.REDIS_URL, { retryStrategy: () => 2000, lazyConnect: true });
+        redis.connect().then(() => console.log('✅ Redis Connected')).catch(() => {});
+    } catch(e) {}
 }
 
 function getCleanKey(task) {
@@ -47,7 +37,7 @@ function dhashToBigInt(hexOrBin) {
     if (/^[01]+$/.test(hexOrBin)) {
         return BigInt('0b' + hexOrBin);
     }
-    try { return BigInt('0x' + hexOrBin); } catch (e) { return null; }
+    try { return BigInt('0x' + hexOrBin); } catch(e) { return null; }
 }
 
 function getHammingDistance(h1, h2) {
@@ -98,8 +88,11 @@ function initDB() {
             if (trainedKeys.length > MAX_TRAINED) {
                 const toDelete = trainedKeys.slice(0, trainedKeys.length - MAX_TRAINED);
                 toDelete.forEach(k => delete hcaptchaTrained[k]);
+                console.log(`[DB] Trimmed ${toDelete.length} old trained entries`);
             }
+
             rebuildConceptBank();
+            console.log(`[DB] Engine Loaded. Trained: ${Object.keys(hcaptchaTrained).length} | Concepts: ${Object.keys(conceptBank).length}`);
         } catch (e) {
             console.error("[DB] Error loading database:", e.message);
         }
@@ -112,9 +105,9 @@ function persistDatabase() {
     if (saveTimeout) clearTimeout(saveTimeout);
     saveTimeout = setTimeout(() => {
         fs.writeFile(DB_FILE, JSON.stringify({ trained: hcaptchaTrained }), 'utf8', (err) => {
-            if (err) console.error('[DB] Write error:', err.message);
+            if (err) console.error('[DB] PERSIST ERROR:', err.message);
         });
-    }, 2000);
+    }, 1000);
 }
 
 function evaluateAutoSolve(task) {
@@ -154,86 +147,26 @@ function evaluateAutoSolve(task) {
             }
         }
     }
+    
     return { solved: false };
 }
 
 // ==========================================
-// HTTP + WEBSOCKET ENGINE
-// ==========================================
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
-const wsClients = new Map();
-
-wss.on('connection', (ws) => {
-    ws.isAlive = true;
-    ws.on('pong', () => { ws.isAlive = true; });
-
-    ws.on('message', (msgStr) => {
-        try {
-            const data = JSON.parse(msgStr);
-            if (data.action === 'register' && data.taskId) {
-                ws.taskId = data.taskId;
-                wsClients.set(data.taskId, ws);
-
-                if (hcaptchaTrained[data.taskId]) {
-                    ws.send(JSON.stringify({ status: 'solved', taskId: data.taskId, clicks: hcaptchaTrained[data.taskId].clicks || [] }));
-                }
-            }
-        } catch (e) {}
-    });
-
-    ws.on('close', () => {
-        if (ws.taskId) wsClients.delete(ws.taskId);
-    });
-});
-
-// Ping interval for connection maintenance
-setInterval(() => {
-    wss.clients.forEach((ws) => {
-        if (!ws.isAlive) return ws.terminate();
-        ws.isAlive = false;
-        ws.ping();
-    });
-}, 30000);
-
-if (pubsub) {
-    pubsub.on('message', (channel, message) => {
-        if (channel === 'hcaptcha_solutions') {
-            try {
-                const { taskId, clicks } = JSON.parse(message);
-                const targetWs = wsClients.get(taskId);
-                if (targetWs && targetWs.readyState === 1) {
-                    targetWs.send(JSON.stringify({ status: 'solved', taskId, clicks }));
-                }
-            } catch (e) {}
-        }
-    });
-}
-
-function broadcastSolution(taskId, clicks) {
-    const targetWs = wsClients.get(taskId);
-    if (targetWs && targetWs.readyState === 1) {
-        targetWs.send(JSON.stringify({ status: 'solved', taskId, clicks }));
-    }
-    if (redis && redis.status === 'ready') {
-        redis.publish('hcaptcha_solutions', JSON.stringify({ taskId, clicks })).catch(() => {});
-    }
-}
-
 // ROUTES
+// ==========================================
+
 app.post('/api/new-hcaptcha', (req, res) => {
     const task = req.body;
     if (!task || !task.taskId) return res.json({ success: false, error: 'Missing taskId' });
 
     let autoRes = evaluateAutoSolve(task);
     if (autoRes.solved) {
-        broadcastSolution(task.taskId, autoRes.clicks);
         return res.json({ success: true, autoSolved: true, clicks: autoRes.clicks });
     }
 
     const keys = Object.keys(hcaptchaPending);
     if (keys.length >= MAX_PENDING) {
-        keys.slice(0, 50).forEach(k => delete hcaptchaPending[k]);
+        keys.slice(0, 20).forEach(k => delete hcaptchaPending[k]);
     }
 
     hcaptchaPending[task.taskId] = {
@@ -289,6 +222,7 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     if (!taskId) return res.json({ success: false, error: 'Missing taskId' });
 
     let source = hcaptchaPending[taskId] || hcaptchaTrained[taskId];
+
     if (source) {
         let lightMedia = (source.media || []).map(m => ({
             dhash: m.dhash || "",
@@ -320,11 +254,11 @@ app.post('/api/submit-hcaptcha', (req, res) => {
         if (trainedKeys.length > MAX_TRAINED) {
             const oldest = trainedKeys.slice(0, trainedKeys.length - MAX_TRAINED);
             oldest.forEach(k => delete hcaptchaTrained[k]);
+            console.log(`[DB] Auto-trimmed ${oldest.length} old trained entries`);
         }
 
         delete hcaptchaPending[taskId];
         persistDatabase();
-        broadcastSolution(taskId, clicks || []);
     }
     res.json({ success: true });
 });
@@ -340,7 +274,7 @@ app.post('/api/restore-hcaptcha', (req, res) => {
             restoredAt: new Date().toISOString()
         };
         delete hcaptchaTrained[taskId];
-        _removeFromConceptBank();
+        _removeFromConceptBank(); 
         persistDatabase();
     }
     res.json({ success: true });
@@ -349,7 +283,7 @@ app.post('/api/restore-hcaptcha', (req, res) => {
 app.delete('/api/delete-hcaptcha/:id', (req, res) => {
     delete hcaptchaPending[req.params.id];
     delete hcaptchaTrained[req.params.id];
-    _removeFromConceptBank();
+    _removeFromConceptBank(); 
     persistDatabase();
     res.json({ success: true });
 });
@@ -357,9 +291,9 @@ app.delete('/api/delete-hcaptcha/:id', (req, res) => {
 app.get('/api/health', (req, res) => {
     res.json({
         status: 'ok',
-        wsClients: wsClients.size,
         pending: Object.keys(hcaptchaPending).length,
-        trained: Object.keys(hcaptchaTrained).length
+        trained: Object.keys(hcaptchaTrained).length,
+        concepts: Object.keys(conceptBank).length
     });
 });
 
@@ -371,4 +305,4 @@ app.get('/', (req, res) => {
 app.get('/dashboard', (req, res) => res.redirect('/'));
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 High-Concurrency Engine on Port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Original Precise Engine Running on Port ${PORT}`));
