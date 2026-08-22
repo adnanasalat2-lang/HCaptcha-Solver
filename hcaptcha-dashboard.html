@@ -436,7 +436,7 @@ function buildCard(t) {
         return '';
     }
     
-    // parts[1] = real example image (base64). Grid ki koi bhi image yahan KABHI use nahi hogi.
+    // parts[1] = real example (base64). Grid image kabhi example nahi hoti.
     let _exSrc = parts[1] ? _safeUrl(parts[1]) : '';
     
     // FIX: Inline onerror CSP (security block) ki wajah se run nahi ho raha tha, isay neechay global listener se handle kiya hai
