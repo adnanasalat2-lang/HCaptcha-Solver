@@ -52,6 +52,7 @@
         .img-grid img { width: 100%; height: 105px; object-fit: cover; cursor: pointer; border: 3px solid transparent; background: #222; border-radius: 3px; }
         .img-grid img.selected { border-color: #00ff88; opacity: 0.7; }
         .img-grid img.ai-pick { border-color: #ff00ff; }
+        .img-grid img.retrain-pick { border-color: #ff8800 !important; }
         
         .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; background: #000; border-radius: 4px; border: 1px solid #444; overflow: hidden; }
         .single-box img { width: 100%; height: auto; min-height: 380px; max-height: 480px; object-fit: contain; display: block; }
@@ -62,10 +63,15 @@
         .btn-save { background: #00ff88; color: #000; }
         .btn-reset { background: #444; }
         .btn-del { background: #ff4444; flex: 0.3; }
+        .btn-retrain { background: #ff8800; color: #000; }
+        .btn-confirm { background: #00ff88; color: #000; }
+        .btn-cancel { background: #555; }
+        .btn-warn { background: #ff2222 !important; color: #fff !important; }
 
         /* Trained Grid View */
         #trainedView { display: none; flex: 1; flex-direction: column; background: #141414; border: 1px solid #262626; border-radius: 6px; overflow: hidden; margin-top: 10px; }
         .trained-container { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-wrap: wrap; gap: 12px; }
+        .retrain-hint { font-size: 11px; color: #ff8800; margin-top: 4px; padding: 4px 8px; background: #221500; border-radius: 3px; border: 1px solid #ff8800; width: 100%; }
     </style>
 </head>
 <body>
@@ -125,6 +131,7 @@ const syncStatus = document.getElementById('syncStatus');
 let currentTab = 'pending';
 let serverData = { pending: {}, trained: {} }, activeTasksStore = {}, videoTasks = [];
 let ghostBlocker = new Set();
+let retrainState = {};
 let isFetching = false;
 let trainedPage = 0;
 
@@ -397,7 +404,8 @@ function renderTrainedStream() {
     let frag = document.createDocumentFragment();
     for (let id of Object.keys(serverData.trained)) {
         let td = serverData.trained[id];
-        let card = buildCard({ id, clicks: td.clicks || [], type: (td.media?.length > 1 ? 'grid' : 'coord'), media: td.media || [], prompt: td.prompt || '' }, true);
+        activeTasksStore[id] = { id, clicks: td.clicks || [], type: (td.media?.length > 1 ? 'grid' : 'coord'), media: td.media || [], prompt: td.prompt || '' };
+        let card = buildCard(activeTasksStore[id], true);
         frag.appendChild(card);
     }
     trainedArea.appendChild(frag);
@@ -436,15 +444,78 @@ function buildCard(t, isTrained = false) {
             <button class="btn btn-del">❌</button>
         </div>` : `
         <div class="actions">
-            <button class="btn btn-del" style="flex:1" onclick="deleteTrained('${t.id}')">Delete Archive</button>
+            <button class="btn btn-retrain" onclick="startRetrain('${t.id}')">🔧 Retrain</button>
+            <button class="btn btn-del" onclick="deleteTrained('${t.id}')">❌</button>
         </div>`;
 
     card.innerHTML = `
-        <div class="task-head"><span class="task-id">#${t.id.substring(0,6)}</span></div>
+        <div class="task-head">
+            <span class="task-id">#${t.id.substring(0,6)}</span>
+            ${isTrained ? `<span style="font-size:11px;color:#888">${t.clicks.length} saved</span>` : ''}
+        </div>
         <div class="prompt-container"><div class="example-wrap">${exHtml}</div><div class="task-prompt">${parts[0]}</div></div>
         ${mediaHTML}
         ${actions}`;
     return card;
+}
+
+// ── Retrain Controls for Trained Tab ──
+function startRetrain(taskId) {
+    let t = activeTasksStore[taskId];
+    let card = document.querySelector(`.task-card[data-id="${taskId}"]`);
+    if (!t || !card) return;
+
+    retrainState[taskId] = { oldClicks: [...t.clicks], newClicks: [...t.clicks] };
+
+    card.querySelectorAll('.g-img').forEach(img => {
+        let idx = parseInt(img.dataset.index);
+        img.onclick = (e) => {
+            e.stopPropagation();
+            if (retrainState[taskId].newClicks.includes(idx)) {
+                retrainState[taskId].newClicks = retrainState[taskId].newClicks.filter(i => i !== idx);
+                img.classList.remove('selected', 'retrain-pick');
+            } else {
+                retrainState[taskId].newClicks.push(idx);
+                img.classList.add('selected', 'retrain-pick');
+            }
+        };
+    });
+
+    let existingHint = card.querySelector(`#hint-${taskId}`);
+    if (existingHint) existingHint.remove();
+
+    let hint = document.createElement('div');
+    hint.className = 'retrain-hint'; hint.id = `hint-${taskId}`;
+    hint.textContent = '🟠 Click required images → Confirm Update';
+    card.querySelector('.actions').before(hint);
+
+    let actions = card.querySelector('.actions');
+    actions.innerHTML = `
+        <button class="btn btn-confirm" onclick="confirmRetrain('${taskId}')">✅ Update</button>
+        <button class="btn btn-cancel" onclick="cancelRetrain('${taskId}')">Cancel</button>`;
+}
+
+function confirmRetrain(taskId) {
+    let t = activeTasksStore[taskId];
+    let state = retrainState[taskId];
+    if (!t || !state) return;
+
+    t.clicks = state.newClicks;
+    fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId, clicks: t.clicks })
+    }).catch(()=>{});
+
+    if (isAIReady && t.type === 'grid') trainAIBrainAsync(t);
+
+    delete retrainState[taskId];
+    fetchTasks();
+}
+
+function cancelRetrain(taskId) {
+    delete retrainState[taskId];
+    fetchTasks();
 }
 
 // ── Smooth 3-Second Fluid Animation Loop ──
@@ -458,9 +529,11 @@ setInterval(() => {
     });
 }, 150);
 
+// ── Event Stream Clicks with Zero-Click Guard ──
 document.body.addEventListener('click', (e) => {
     let card = e.target.closest('.task-card'); if (!card) return;
     let tid = card.dataset.id, t = activeTasksStore[tid]; if (!t) return;
+    if (retrainState[tid]) return; // Handled by retrain mode
 
     if (e.target.classList.contains('g-img')) {
         let idx = parseInt(e.target.dataset.index);
@@ -479,6 +552,18 @@ document.body.addEventListener('click', (e) => {
         dot.className = 'dot'; dot.style.left = `${x}%`; dot.style.top = `${y}%`;
         e.target.parentElement.appendChild(dot);
     } else if (e.target.classList.contains('btn-save')) {
+        // STRICT GUARD: Do not allow saving if no click was made
+        if (!t.clicks || t.clicks.length === 0) {
+            e.target.classList.add('btn-warn');
+            e.target.textContent = '⚠️ Pehle Select Karo!';
+            setTimeout(() => {
+                if (e.target) {
+                    e.target.classList.remove('btn-warn');
+                    e.target.textContent = 'Save & Train';
+                }
+            }, 1000);
+            return;
+        }
         sendToServer(tid, e.target, card);
     } else if (e.target.classList.contains('btn-reset')) {
         t.clicks = [];
