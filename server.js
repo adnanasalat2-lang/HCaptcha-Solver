@@ -205,7 +205,6 @@ app.post('/api/new-hcaptcha', (req, res) => {
     res.json({ success: true, autoSolved: false });
 });
 
-// STRICT EMPTY CLICK FILTER: Never save 0 clicks to Database
 app.post('/api/submit-hcaptcha', (req, res) => {
     const { taskId, clicks } = req.body;
     if (!taskId) return res.json({ success: false, error: 'Missing taskId' });
