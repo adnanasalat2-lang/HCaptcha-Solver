@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — Ultra Learner</title>
+    <title>hCaptcha Master Pro — Ultra Smooth</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -87,7 +87,7 @@
         </div>
     </div>
     <div class="ai-bar">
-        <span class="sync-status" id="syncStatus">🧠 AI Ready</span>
+        <span class="sync-status" id="syncStatus">🧠 Initializing AI...</span>
         <button id="btnAutoTrain" class="btn-toggle on" onclick="toggleAutoTrain()">🧠 Auto Train: ON</button>
         <button id="btnAutoSave" class="btn-toggle on" onclick="toggleAutoSave()">💾 Auto Save: ON</button>
         <button class="btn-clear-ai" onclick="resetAIBrain()">🧹 Reset Brain</button>
@@ -97,6 +97,7 @@
     </div>
 </div>
 
+<!-- Pending View (Always synced in background) -->
 <div class="workspace-split" id="pendingView">
     <div class="column">
         <div class="column-header">
@@ -114,6 +115,7 @@
     </div>
 </div>
 
+<!-- Trained Database View -->
 <div id="trainedView">
     <div class="column-header">
         <span style="color:#00ff88;font-size:14px;">🗂️ Trained Database Archive</span>
@@ -136,14 +138,30 @@ let retrainEditingTasks = new Set();
 let isFetching = false;
 let trainedPage = 0;
 
-let isAIReady = false, aiModel, knn;
+let isAIReady = false, aiModel = null, knn = null;
 let autoTrainEnabled = true, autoSaveEnabled = true;
 let isEvaluatingAI = false;
 
+// ── ROBUST TENSORFLOW LIFECYCLE (Prevents White-Screen Context Crash) ──
 async function initAI() {
     try {
-        await tf.setBackend('webgl');
+        try {
+            await tf.setBackend('webgl');
+        } catch(e) {
+            await tf.setBackend('cpu');
+        }
         await tf.ready();
+        
+        // Listen for WebGL context loss and auto-recover
+        const canvas = document.createElement('canvas');
+        canvas.addEventListener('webglcontextlost', async (e) => {
+            e.preventDefault();
+            syncStatus.innerHTML = "⚠️ WebGL Recovering...";
+            await tf.setBackend('cpu');
+            await tf.ready();
+            updateAIStatus();
+        }, false);
+
         aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
         knn = knnClassifier.create();
         await loadKNN();
@@ -151,7 +169,16 @@ async function initAI() {
         updateAIStatus();
         reEvaluatePending();
     } catch(e) {
-        syncStatus.innerHTML = "⚠️ AI Fallback";
+        syncStatus.innerHTML = "⚠️ AI CPU Mode Active";
+        try {
+            await tf.setBackend('cpu');
+            await tf.ready();
+            aiModel = await mobilenet.load({ version: 2, alpha: 0.5 });
+            knn = knnClassifier.create();
+            await loadKNN();
+            isAIReady = true;
+            updateAIStatus();
+        } catch(err) {}
     }
 }
 
@@ -165,7 +192,7 @@ function updateAIStatus() {
     } catch(e) {}
 }
 
-const IDB = { name:'hcm_knn_master', store:'knn', key:'model_v6' };
+const IDB = { name:'hcm_knn_master_v7', store:'knn', key:'model_v7' };
 function idbOpen() {
     return new Promise((res,rej)=>{
         let r = indexedDB.open(IDB.name,1);
@@ -212,13 +239,14 @@ async function loadKNN() {
 }
 
 async function resetAIBrain() {
-    if (confirm("Kya aap AI Brain ki sari memory reset karna chahte hain?")) {
+    if (confirm("Reset AI memory completely?")) {
         indexedDB.deleteDatabase(IDB.name);
         if (knn) knn.clearAllClasses();
         location.reload();
     }
 }
 
+// ── Tab Switch Without Pausing Background Work ──
 function setTab(tab) {
     currentTab = tab;
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -231,8 +259,8 @@ function setTab(tab) {
         document.getElementById('pendingView').style.display = 'none';
         document.getElementById('trainedView').style.display = 'flex';
         trainedArea.innerHTML = '';
+        fetchTrainedTab();
     }
-    fetchTasks();
 }
 
 function toggleAutoTrain() {
@@ -250,7 +278,20 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
-// ── 3X FAST-LEARNING AI ENGINE (Learns instantly on Manual Save & Retrain) ──
+// Cross-browser safe image element creator
+function loadSafeImage(src) {
+    return new Promise(resolve => {
+        if (!src) return resolve(null);
+        let img = new Image();
+        if (!src.startsWith('data:')) img.crossOrigin = "anonymous";
+        img.onload = () => resolve(img);
+        img.onerror = () => resolve(null);
+        img.src = src;
+        setTimeout(() => resolve(img.complete && img.naturalWidth > 0 ? img : null), 1200);
+    });
+}
+
+// ── 3X FAST LEARNER (Works during Retrain & Normal Save) ──
 async function trainAIBrainAsync(task) {
     if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
@@ -260,17 +301,13 @@ async function trainAIBrainAsync(task) {
         let imgSrc = m.thumb || m.src;
         if (!imgSrc) continue;
         try {
-            let img = new Image();
-            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
-            img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 400); });
-            if (!img.complete || img.naturalWidth === 0) continue;
+            let img = await loadSafeImage(imgSrc);
+            if (!img || !img.complete || img.naturalWidth === 0) continue;
             
             tf.tidy(() => {
                 let tfImg = tf.browser.fromPixels(img);
                 let features = aiModel.infer(tfImg, true);
                 
-                // 3X Positive Weighting for instant learning
                 if (task.clicks.includes(m.index)) {
                     knn.addExample(features, pText);
                     knn.addExample(features, pText);
@@ -297,11 +334,8 @@ async function predictWithAI(task) {
         let imgSrc = m.thumb || m.src;
         if (!imgSrc) continue;
         try {
-            let img = new Image();
-            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
-            img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 300); });
-            if (!img.complete || img.naturalWidth === 0) continue;
+            let img = await loadSafeImage(imgSrc);
+            if (!img || !img.complete || img.naturalWidth === 0) continue;
             
             let res = null;
             tf.tidy(() => {
@@ -313,7 +347,6 @@ async function predictWithAI(task) {
             let conf = resolvedRes.confidences[pText] || 0;
             let negConf = resolvedRes.confidences['negative_' + pText] || 0;
             
-            // Realistic confidence balance
             if (resolvedRes.label === pText && conf >= 0.80 && negConf < 0.30) {
                 predictedClicks.push(m.index);
             }
@@ -351,21 +384,17 @@ async function reEvaluatePending() {
     isEvaluatingAI = false;
 }
 
+// ── DUAL PIPELINE: Pending queue ALWAYS fetches and evaluates ──
 async function fetchTasks() {
     if (isFetching) return;
     isFetching = true;
     try {
-        const res = await fetch(`${SERVER_URL}/api/tasks?tab=${currentTab}&page=${trainedPage}&size=40&t=${Date.now()}`, { cache: 'no-store' });
+        const res = await fetch(`${SERVER_URL}/api/tasks?tab=pending&page=0&size=40&t=${Date.now()}`, { cache: 'no-store' });
         if (res.ok) {
             const data = await res.json();
-            if (currentTab === 'pending') {
-                serverData.pending = data.tasks || {};
-                renderPendingStreams();
-                if (isAIReady && autoTrainEnabled) reEvaluatePending();
-            } else {
-                serverData.trained = data.tasks || {};
-                renderTrainedStream();
-            }
+            serverData.pending = data.tasks || {};
+            renderPendingStreams();
+            if (isAIReady && autoTrainEnabled) reEvaluatePending();
         }
         
         fetch(`${SERVER_URL}/api/counts`).then(r => r.json()).then(counts => {
@@ -375,6 +404,17 @@ async function fetchTasks() {
         }).catch(()=>{});
     } catch(e) {}
     isFetching = false;
+}
+
+async function fetchTrainedTab() {
+    try {
+        const res = await fetch(`${SERVER_URL}/api/tasks?tab=trained&page=${trainedPage}&size=40&t=${Date.now()}`, { cache: 'no-store' });
+        if (res.ok) {
+            const data = await res.json();
+            serverData.trained = data.tasks || {};
+            renderTrainedStream();
+        }
+    } catch(e) {}
 }
 
 function renderPendingStreams() {
@@ -487,7 +527,7 @@ function buildCard(t, isTrained = false) {
     return card;
 }
 
-// ── Complete Interactive Handlers ──
+// ── Event Handlers ──
 document.body.addEventListener('click', (e) => {
     let actionBtn = e.target.closest('[data-action]');
     let card = e.target.closest('.task-card');
@@ -528,7 +568,7 @@ document.body.addEventListener('click', (e) => {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ taskId: tid, clicks: t.clicks })
             }).then(() => {
-                if (isAIReady && t.type === 'grid') trainAIBrainAsync(t); // Instant Re-train Brain
+                if (isAIReady && t.type === 'grid') trainAIBrainAsync(t);
                 retrainEditingTasks.delete(tid);
                 card.classList.remove('in-retrain');
                 let b = card.querySelector(`#banner-${tid}`); if (b) b.remove();
@@ -536,7 +576,7 @@ document.body.addEventListener('click', (e) => {
                 actBox.innerHTML = `
                     <button class="btn btn-retrain" data-action="retrain">🔧 Retrain</button>
                     <button class="btn btn-del" data-action="del-trained">❌</button>`;
-                fetchTasks();
+                fetchTrainedTab();
             });
             return;
         }
@@ -556,7 +596,7 @@ document.body.addEventListener('click', (e) => {
             actBox.innerHTML = `
                 <button class="btn btn-retrain" data-action="retrain">🔧 Retrain</button>
                 <button class="btn btn-del" data-action="del-trained">❌</button>`;
-            fetchTasks();
+            fetchTrainedTab();
             return;
         }
 
@@ -632,7 +672,7 @@ document.body.addEventListener('click', (e) => {
 });
 
 function deleteTrained(taskId) {
-    fetch(`${SERVER_URL}/api/delete-hcaptcha/${taskId}`, { method: 'DELETE' }).then(() => fetchTasks());
+    fetch(`${SERVER_URL}/api/delete-hcaptcha/${taskId}`, { method: 'DELETE' }).then(() => fetchTrainedTab());
 }
 
 function sendToServer(taskId, btnEl, card) {
@@ -652,7 +692,6 @@ function sendToServer(taskId, btnEl, card) {
     if (card) card.remove();
     delete activeTasksStore[taskId];
 
-    // Train 3x Weights on user save
     if (isAIReady && t.type === 'grid' && t.clicks.length > 0) {
         trainAIBrainAsync(t);
     }
@@ -675,6 +714,7 @@ setInterval(() => {
     });
 }, 150);
 
+// Continuous background fetch
 setInterval(fetchTasks, 500);
 fetchTasks();
 setTimeout(initAI, 100);
