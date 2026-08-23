@@ -68,6 +68,11 @@ function rebuildConceptBank() {
 }
 
 function _addToConceptBank(tr) {
+    // STRICT GUARD: Video/Coordinate tasks ko CONCEPT BANK mein KABHI add mat karo!
+    if (tr.media && (tr.media.length === 1 || tr.media[0].type === 'video_frames' || tr.media[0].frames)) {
+        return; 
+    }
+
     let cKey = getCleanKey(tr);
     if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
     (tr.clicks || []).forEach(idx => {
@@ -103,20 +108,30 @@ function persistDatabase() {
     }, 2000);
 }
 
-// STRICT EVALUATOR: Video tasks must NEVER auto-solve via loose concept text matching
+// ── ABSOLUTE STRICT AUTO-SOLVE EVALUATOR ──
 function evaluateAutoSolve(task) {
-    // 1. Exact Task ID match
+    const isVideoOrCoord = task.media && (task.media.length === 1 || task.media[0].type === 'video_frames' || task.media[0].frames);
+
+    // 1. Agar Video ya Coordinate task hai:
+    if (isVideoOrCoord) {
+        // Video task sirf aur sirf EXACT ID match par chalay ga!
+        // Kabhi bhi loose concept ya fuzzy match se video solve nahi hogi!
+        if (hcaptchaTrained[task.taskId]) {
+            let tr = hcaptchaTrained[task.taskId];
+            // Extra check: Verify ke trained solution coordinates wala hi hai
+            if (tr.clicks && tr.clicks.length > 0 && typeof tr.clicks[0] === 'object') {
+                return { solved: true, clicks: tr.clicks };
+            }
+        }
+        return { solved: false };
+    }
+
+    // 2. Exact Grid Match
     if (hcaptchaTrained[task.taskId]) {
         return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
     }
 
-    // 2. Video / Single Canvas tasks — Strictly require EXACT trained match, no loose concept inference
-    const isVideoOrCoord = task.media && (task.media.length === 1 || task.media[0].type === 'video_frames' || task.media[0].frames);
-    if (isVideoOrCoord) {
-        return { solved: false };
-    }
-
-    // 3. Grid Tasks Only (dHash Concept Matching)
+    // 3. Grid Tasks Concept Matching (Sirf 3x3 Grid images ke liye)
     let cKey = getCleanKey(task);
     let targetDhashes = conceptBank[cKey];
 
@@ -221,6 +236,8 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     let source = hcaptchaPending[taskId] || hcaptchaTrained[taskId];
 
     if (source) {
+        let isVideo = source.media && (source.media.length === 1 || source.media[0].type === 'video_frames');
+
         let lightMedia = (source.media || []).map(m => ({
             dhash: m.dhash || "",
             stableHash: m.stableHash || "",
@@ -229,14 +246,17 @@ app.post('/api/submit-hcaptcha', (req, res) => {
             thumb: m.thumb || (m.frames ? m.frames[0] : "")
         }));
 
-        let cKey = getCleanKey(source);
-        if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
+        // Sirf Grid images ko concept bank me add karo
+        if (!isVideo) {
+            let cKey = getCleanKey(source);
+            if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
 
-        clicks.forEach(idx => {
-            if (typeof idx === 'number' && lightMedia[idx] && lightMedia[idx].dhash && lightMedia[idx].dhash !== "0000000000000000") {
-                conceptBank[cKey].add(lightMedia[idx].dhash);
-            }
-        });
+            clicks.forEach(idx => {
+                if (typeof idx === 'number' && lightMedia[idx] && lightMedia[idx].dhash && lightMedia[idx].dhash !== "0000000000000000") {
+                    conceptBank[cKey].add(lightMedia[idx].dhash);
+                }
+            });
+        }
 
         hcaptchaTrained[taskId] = {
             id: taskId,
