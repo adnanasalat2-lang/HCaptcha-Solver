@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — Ultra Smooth</title>
+    <title>hCaptcha Master Pro — Persistent Cloud AI</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -131,7 +131,7 @@ const syncStatus = document.getElementById('syncStatus');
 
 let currentTab = 'pending';
 let serverData = { pending: {}, trained: {} }, activeTasksStore = {};
-let videoTasksMap = new Map(); // Fast Map for video elements
+let videoTasksMap = new Map();
 let ghostBlocker = new Set();
 let retrainEditingTasks = new Set();
 let isFetching = false;
@@ -140,10 +140,10 @@ let trainedPage = 0;
 let isAIReady = false, aiModel = null, knn = null;
 let autoTrainEnabled = true, autoSaveEnabled = true;
 
-// ── AI Evaluation Queue (Processes 1 Task at a time to prevent UI lag) ──
 let aiTaskQueue = [];
 let isProcessingAIQueue = false;
 
+// ── PERSISTENT SERVER-SIDE AI BRAIN ENGINE ──
 async function initAI() {
     try {
         try {
@@ -156,18 +156,21 @@ async function initAI() {
 
         aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
         knn = knnClassifier.create();
-        await loadKNN();
+        
+        // 1. Download Persistent AI Brain from Server DB
+        await loadBrainFromServer();
+        
         isAIReady = true;
         updateAIStatus();
         triggerAIQueue();
     } catch(e) {
-        syncStatus.innerHTML = "⚠️ AI CPU Mode";
+        syncStatus.innerHTML = "⚠️ AI Fallback Mode";
         try {
             await tf.setBackend('cpu');
             await tf.ready();
             aiModel = await mobilenet.load({ version: 2, alpha: 0.5 });
             knn = knnClassifier.create();
-            await loadKNN();
+            await loadBrainFromServer();
             isAIReady = true;
             updateAIStatus();
         } catch(err) {}
@@ -179,60 +182,50 @@ function updateAIStatus() {
     try {
         let ds = knn.getClassExampleCount();
         let concepts = Object.keys(ds).filter(k => !k.startsWith('negative_')).length;
-        syncStatus.innerHTML = `🤖 AI Ready ✅ (${concepts} Concepts)`;
+        syncStatus.innerHTML = `🤖 AI Brain Ready ✅ (${concepts} Concepts Synced)`;
         syncStatus.classList.add('active');
     } catch(e) {}
 }
 
-const IDB = { name:'hcm_knn_master_v8', store:'knn', key:'model_v8' };
-function idbOpen() {
-    return new Promise((res,rej)=>{
-        let r = indexedDB.open(IDB.name,1);
-        r.onupgradeneeded = e => e.target.result.createObjectStore(IDB.store);
-        r.onsuccess = e => res(e.target.result);
-        r.onerror = () => rej(r.error);
-    });
-}
-async function idbSet(val) {
-    let db = await idbOpen();
-    return new Promise((res,rej)=>{
-        let tx = db.transaction(IDB.store,'readwrite');
-        tx.objectStore(IDB.store).put(val, IDB.key);
-        tx.oncomplete = res; tx.onerror = ()=>rej(tx.error);
-    });
-}
-async function idbGet() {
-    let db = await idbOpen();
-    return new Promise((res,rej)=>{
-        let tx = db.transaction(IDB.store,'readonly');
-        let req = tx.objectStore(IDB.store).get(IDB.key);
-        req.onsuccess = () => res(req.result||null);
-        req.onerror = () => rej(req.error);
-    });
-}
-async function saveKNN() {
+// Save brain directly to Railway Server
+async function saveBrainToServer() {
     if (!knn) return;
     try {
         let ds = knn.getClassifierDataset();
         let ser = {};
-        for (let k in ds) { ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape }; }
-        await idbSet(ser);
+        for (let k in ds) {
+            ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape };
+        }
+        await fetch(`${SERVER_URL}/api/ai-brain`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(ser)
+        });
         updateAIStatus();
     } catch(e) {}
 }
-async function loadKNN() {
+
+// Load brain on startup from Railway Server
+async function loadBrainFromServer() {
     try {
-        let ser = await idbGet();
-        if (!ser) return;
+        const res = await fetch(`${SERVER_URL}/api/ai-brain?t=${Date.now()}`);
+        if (!res.ok) return;
+        const ser = await res.json();
+        if (!ser || Object.keys(ser).length === 0) return;
+        
         let ds = {};
-        for (let k in ser) { ds[k] = tf.tensor(ser[k].data, ser[k].shape); }
+        for (let k in ser) {
+            if (ser[k] && ser[k].data && ser[k].shape) {
+                ds[k] = tf.tensor(ser[k].data, ser[k].shape);
+            }
+        }
         knn.setClassifierDataset(ds);
     } catch(e) {}
 }
 
 async function resetAIBrain() {
-    if (confirm("Reset AI memory completely?")) {
-        indexedDB.deleteDatabase(IDB.name);
+    if (confirm("Kya aap Server se AI Brain ki saari training reset karna chahte hain?")) {
+        await fetch(`${SERVER_URL}/api/ai-brain`, { method: 'DELETE' });
         if (knn) knn.clearAllClasses();
         location.reload();
     }
@@ -281,7 +274,6 @@ function loadSafeImage(src) {
     });
 }
 
-// ── Non-Blocking AI Queue Runner (Keeps Workers UI 100% Smooth) ──
 function queueTaskForAI(taskId) {
     if (!aiTaskQueue.includes(taskId)) {
         aiTaskQueue.push(taskId);
@@ -298,13 +290,13 @@ async function triggerAIQueue() {
         let t = activeTasksStore[tid];
         if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
             await predictWithAI(t);
-            // Yield CPU back to browser for 25ms so workers/clicks never freeze
             await new Promise(r => setTimeout(r, 25));
         }
     }
     isProcessingAIQueue = false;
 }
 
+// ── 3X FAST LEARNER (Saves directly to Server DB) ──
 async function trainAIBrainAsync(task) {
     if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
@@ -331,7 +323,7 @@ async function trainAIBrainAsync(task) {
             await tf.nextFrame();
         } catch(e) {}
     }
-    await saveKNN();
+    await saveBrainToServer();
     triggerAIQueue();
 }
 
@@ -384,7 +376,6 @@ async function predictWithAI(task) {
     }
 }
 
-// ── Background Fetch Pipeline ──
 async function fetchTasks() {
     if (isFetching) return;
     isFetching = true;
@@ -529,7 +520,6 @@ function buildCard(t, isTrained = false) {
     return card;
 }
 
-// ── Lightweight Video Looper (Ultra Low CPU Impact) ──
 let lastVideoTick = 0;
 function runVideoAnimation(time) {
     if (time - lastVideoTick > 150) {
@@ -546,7 +536,6 @@ function runVideoAnimation(time) {
 }
 requestAnimationFrame(runVideoAnimation);
 
-// ── Instant Interaction Handlers (Never Freezes Worker Clicks) ──
 document.body.addEventListener('click', (e) => {
     let actionBtn = e.target.closest('[data-action]');
     let card = e.target.closest('.task-card');
