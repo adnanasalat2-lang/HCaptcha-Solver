@@ -16,7 +16,7 @@ const wss = new WebSocket.Server({ server });
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE = path.join(DATA_DIR, 'database.json');
 
-const MAX_PENDING = 60; // Keep RAM minimal
+const MAX_PENDING = 60;
 const MAX_TRAINED = 50000;
 const DASHBOARD_PAGE_SIZE = 20;
 
@@ -205,14 +205,18 @@ app.post('/api/new-hcaptcha', (req, res) => {
     res.json({ success: true, autoSolved: false });
 });
 
+// STRICT EMPTY CLICK FILTER: Never save 0 clicks to Database
 app.post('/api/submit-hcaptcha', (req, res) => {
     const { taskId, clicks } = req.body;
     if (!taskId) return res.json({ success: false, error: 'Missing taskId' });
 
+    if (!clicks || !Array.isArray(clicks) || clicks.length === 0) {
+        return res.json({ success: false, error: 'Empty clicks blocked' });
+    }
+
     let source = hcaptchaPending[taskId] || hcaptchaTrained[taskId];
 
     if (source) {
-        // Strip out heavy video frames from trained database to keep storage feather-light
         let lightMedia = (source.media || []).map(m => ({
             dhash: m.dhash || "",
             stableHash: m.stableHash || "",
@@ -224,7 +228,7 @@ app.post('/api/submit-hcaptcha', (req, res) => {
         let cKey = getCleanKey(source);
         if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
 
-        (clicks || []).forEach(idx => {
+        clicks.forEach(idx => {
             if (typeof idx === 'number' && lightMedia[idx] && lightMedia[idx].dhash && lightMedia[idx].dhash !== "0000000000000000") {
                 conceptBank[cKey].add(lightMedia[idx].dhash);
             }
@@ -235,7 +239,7 @@ app.post('/api/submit-hcaptcha', (req, res) => {
             prompt: source.prompt,
             conceptKey: getCleanKey(source),
             media: lightMedia,
-            clicks: clicks || [],
+            clicks: clicks,
             trainedAt: new Date().toISOString()
         };
 
@@ -247,7 +251,7 @@ app.post('/api/submit-hcaptcha', (req, res) => {
 
         delete hcaptchaPending[taskId];
         persistDatabase();
-        notifyBrowsers(taskId, clicks || []);
+        notifyBrowsers(taskId, clicks);
     }
     res.json({ success: true });
 });
