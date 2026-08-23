@@ -54,9 +54,9 @@
         .img-grid img.ai-pick { border-color: #ff00ff; }
         .img-grid img.retrain-pick { border-color: #ff8800 !important; }
         
-        .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; background: #000; border-radius: 4px; border: 1px solid #444; overflow: hidden; }
-        .single-box img { width: 100%; height: auto; min-height: 380px; max-height: 480px; object-fit: contain; display: block; }
-        .dot { position: absolute; width: 16px; height: 16px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; }
+        .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; align-items: center; background: #000; border-radius: 4px; border: 1px solid #444; overflow: hidden; }
+        .single-box img { width: 100%; height: auto; min-height: 380px; max-height: 480px; object-fit: contain; display: block; user-select: none; }
+        .dot { position: absolute; width: 14px; height: 14px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 10; }
 
         .actions { display: flex; gap: 6px; margin-top: 8px; }
         .btn { flex: 1; padding: 8px; border: none; font-weight: bold; cursor: pointer; color: #fff; font-size: 12px; border-radius: 4px; }
@@ -68,7 +68,6 @@
         .btn-cancel { background: #555; }
         .btn-warn { background: #ff2222 !important; color: #fff !important; }
 
-        /* Trained Grid View */
         #trainedView { display: none; flex: 1; flex-direction: column; background: #141414; border: 1px solid #262626; border-radius: 6px; overflow: hidden; margin-top: 10px; }
         .trained-container { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-wrap: wrap; gap: 12px; }
         .retrain-hint { font-size: 11px; color: #ff8800; margin-top: 4px; padding: 4px 8px; background: #221500; border-radius: 3px; border: 1px solid #ff8800; width: 100%; }
@@ -94,7 +93,6 @@
     </div>
 </div>
 
-<!-- Pending Split View -->
 <div class="workspace-split" id="pendingView">
     <div class="column">
         <div class="column-header">
@@ -112,7 +110,6 @@
     </div>
 </div>
 
-<!-- Trained Database View -->
 <div id="trainedView">
     <div class="column-header">
         <span style="color:#00ff88;font-size:14px;">🗂️ Trained Database Archive</span>
@@ -139,7 +136,6 @@ let isAIReady = false, aiModel, knn;
 let autoTrainEnabled = true, autoSaveEnabled = true;
 let isEvaluatingAI = false;
 
-// ── Ultra Fast TensorFlow Initialization ──
 async function initAI() {
     try {
         await tf.setBackend('webgl');
@@ -234,7 +230,6 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
-// ── Ultra Fast Parallel AI Trainer ──
 async function trainAIBrainAsync(task) {
     if (!isAIReady || task.type !== 'grid' || !task.media) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
@@ -332,7 +327,6 @@ async function reEvaluatePending() {
     isEvaluatingAI = false;
 }
 
-// ── Stream Fetch & Routing ──
 async function fetchTasks() {
     if (isFetching) return;
     isFetching = true;
@@ -432,7 +426,9 @@ function buildCard(t, isTrained = false) {
         let m = t.media[0], isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
         let src = isVid ? m.frames[0] : (m.src || '');
         mediaHTML = `<div class="single-box"><img src="${src}" class="s-img ${isVid?'vid-player':''}" data-id="${t.id}" draggable="false"/>`;
-        t.clicks.forEach(pt => { mediaHTML += `<div class="dot" style="left:${pt.px}%;top:${pt.py}%;"></div>`; });
+        t.clicks.forEach(pt => {
+            mediaHTML += `<div class="dot" style="left:${pt.px}%;top:${pt.py}%;"></div>`;
+        });
         mediaHTML += '</div>';
         if (isVid && !isTrained) videoTasks.push({ id: t.id, frames: m.frames, current: 0 });
     }
@@ -459,7 +455,6 @@ function buildCard(t, isTrained = false) {
     return card;
 }
 
-// ── Retrain Controls for Trained Tab ──
 function startRetrain(taskId) {
     let t = activeTasksStore[taskId];
     let card = document.querySelector(`.task-card[data-id="${taskId}"]`);
@@ -518,7 +513,6 @@ function cancelRetrain(taskId) {
     fetchTasks();
 }
 
-// ── Smooth 3-Second Fluid Animation Loop ──
 setInterval(() => {
     videoTasks.forEach(vt => {
         let el = document.querySelector(`.vid-player[data-id="${vt.id}"]`);
@@ -529,11 +523,11 @@ setInterval(() => {
     });
 }, 150);
 
-// ── Event Stream Clicks with Zero-Click Guard ──
+// Multi-Resolution Exact Image Geometry Click Handler
 document.body.addEventListener('click', (e) => {
     let card = e.target.closest('.task-card'); if (!card) return;
     let tid = card.dataset.id, t = activeTasksStore[tid]; if (!t) return;
-    if (retrainState[tid]) return; // Handled by retrain mode
+    if (retrainState[tid]) return;
 
     if (e.target.classList.contains('g-img')) {
         let idx = parseInt(e.target.dataset.index);
@@ -545,14 +539,43 @@ document.body.addEventListener('click', (e) => {
             t.clicks.push(idx);
         }
     } else if (e.target.classList.contains('s-img')) {
-        let rect = e.target.getBoundingClientRect();
-        let x = ((e.clientX - rect.left) / rect.width) * 100, y = ((e.clientY - rect.top) / rect.height) * 100;
-        t.clicks.push({ px: x, py: y });
+        let img = e.target;
+        let rect = img.getBoundingClientRect();
+        
+        let nw = img.naturalWidth || 400;
+        let nh = img.naturalHeight || 300;
+        let containerRatio = rect.width / rect.height;
+        let imageRatio = nw / nh;
+        
+        let actualW = rect.width;
+        let actualH = rect.height;
+        let offsetX = 0;
+        let offsetY = 0;
+
+        if (containerRatio > imageRatio) {
+            actualW = rect.height * imageRatio;
+            offsetX = (rect.width - actualW) / 2;
+        } else {
+            actualH = rect.width / imageRatio;
+            offsetY = (rect.height - actualH) / 2;
+        }
+
+        let clickX = e.clientX - rect.left - offsetX;
+        let clickY = e.clientY - rect.top - offsetY;
+
+        if (clickX < 0 || clickX > actualW || clickY < 0 || clickY > actualH) return;
+
+        let px = Math.max(0, Math.min(100, (clickX / actualW) * 100));
+        let py = Math.max(0, Math.min(100, (clickY / actualH) * 100));
+
+        t.clicks.push({ px: px, py: py });
+
         let dot = document.createElement('div');
-        dot.className = 'dot'; dot.style.left = `${x}%`; dot.style.top = `${y}%`;
-        e.target.parentElement.appendChild(dot);
+        dot.className = 'dot';
+        dot.style.left = `${((e.clientX - rect.left) / rect.width) * 100}%`;
+        dot.style.top = `${((e.clientY - rect.top) / rect.height) * 100}%`;
+        img.parentElement.appendChild(dot);
     } else if (e.target.classList.contains('btn-save')) {
-        // STRICT GUARD: Do not allow saving if no click was made
         if (!t.clicks || t.clicks.length === 0) {
             e.target.classList.add('btn-warn');
             e.target.textContent = '⚠️ Pehle Select Karo!';
