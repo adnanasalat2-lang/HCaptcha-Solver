@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — Makhan Ultra</title>
+    <title>hCaptcha Master Pro — Smooth Edition</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -38,7 +38,7 @@
         
         .task-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
         
-        .task-card { background: #181818; border: 1px solid #2c2c2c; border-radius: 5px; padding: 8px; will-change: transform; }
+        .task-card { background: #181818; border: 1px solid #2c2c2c; border-radius: 5px; padding: 8px; }
         .task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 6px rgba(255,0,255,0.25); }
         .task-card.in-retrain { border: 2px solid #ff8800 !important; background: #1f1408 !important; }
         .task-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px; }
@@ -151,12 +151,13 @@ let aiTaskQueue = [];
 let isProcessingAIQueue = false;
 let brainSaveTimer = null;
 
-// ── Ultra-Fast Non-Blocking AI Init ──
+// ── Lightweight WebGL Accelerated AI Init ──
 async function initAI() {
     try {
         try {
             await tf.setBackend('webgl');
             tf.env().set('WEBGL_FORCE_F16_TEXTURES', true);
+            tf.env().set('WEBGL_PACK', true);
         } catch(e) {
             await tf.setBackend('cpu');
         }
@@ -171,7 +172,7 @@ async function initAI() {
         updateAIStatus();
         triggerAIQueue();
     } catch(e) {
-        syncStatus.innerHTML = "⚠️ AI CPU Ready";
+        syncStatus.innerHTML = "⚠️ AI Fallback Mode";
         try {
             await tf.setBackend('cpu');
             await tf.ready();
@@ -194,7 +195,6 @@ function updateAIStatus() {
     } catch(e) {}
 }
 
-// Debounced Brain Sync (Zero Lag during work)
 function scheduleBrainSync() {
     if (brainSaveTimer) clearTimeout(brainSaveTimer);
     brainSaveTimer = setTimeout(async () => {
@@ -212,7 +212,7 @@ function scheduleBrainSync() {
             });
             updateAIStatus();
         } catch(e) {}
-    }, 1500);
+    }, 2000);
 }
 
 async function loadBrainFromServer() {
@@ -293,7 +293,7 @@ function loadSafeImage(src) {
         img.onload = () => resolve(img);
         img.onerror = () => resolve(null);
         img.src = src;
-        setTimeout(() => resolve(img.complete && img.naturalWidth > 0 ? img : null), 600);
+        setTimeout(() => resolve(img.complete && img.naturalWidth > 0 ? img : null), 500);
     });
 }
 
@@ -304,7 +304,7 @@ function queueTaskForAI(taskId) {
     triggerAIQueue();
 }
 
-// ── 60 FPS Microtask Scheduler ──
+// ── Smooth 60 FPS Microtask Scheduler (Zero UI Lag) ──
 async function triggerAIQueue() {
     if (isProcessingAIQueue || !isAIReady || !autoTrainEnabled || aiTaskQueue.length === 0) return;
     isProcessingAIQueue = true;
@@ -314,7 +314,7 @@ async function triggerAIQueue() {
         let t = activeTasksStore[tid];
         if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
             await predictWithAI(t);
-            await new Promise(r => setTimeout(r, 20)); // Yield CPU to keep mouse response 100% fluid
+            await new Promise(r => setTimeout(r, 20)); // Yield CPU to maintain fluid UI response
         }
     }
     isProcessingAIQueue = false;
@@ -419,7 +419,6 @@ async function fetchTasks() {
     isFetching = false;
 }
 
-// Instant Paged Trained Tab Fetch (Super Fast Load)
 async function fetchTrainedTab() {
     try {
         const res = await fetch(`${SERVER_URL}/api/tasks?tab=trained&page=${trainedPage}&t=${Date.now()}`, { cache: 'no-store' });
