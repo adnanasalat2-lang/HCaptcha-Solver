@@ -52,7 +52,7 @@
         .img-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
         .img-grid img { width: 100%; height: 105px; object-fit: cover; cursor: pointer; border: 3px solid transparent; background: #222; border-radius: 3px; }
         .img-grid img.selected { border-color: #00ff88; opacity: 0.8; }
-        .img-grid img.ai-pick { border-color: #ff00ff; }
+        .img-grid img.ai-pick { border-color: #ff00ff; opacity: 0.9; }
         .img-grid img.retrain-pick { border-color: #ff8800 !important; opacity: 0.95; }
         
         .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; align-items: center; background: #000; border-radius: 4px; border: 1px solid #444; overflow: hidden; }
@@ -263,12 +263,12 @@ async function trainAIBrainAsync(task) {
     saveKNN();
 }
 
-// ── FIXED: Strict Prediction Guard to prevent false empty saves ──
+// STRICT PREDICTION GUARD: Never submit with empty or weak clicks
 async function predictWithAI(task) {
-    if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media || task.clicks.length > 0) return;
+    if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let dataset = knn.getClassExampleCount();
-    if (!dataset[pText] || dataset[pText] < 2) return; // Must have at least 2 training examples
+    if (!dataset[pText] || dataset[pText] < 2) return;
 
     let predictedClicks = [];
     for (let m of task.media) {
@@ -291,7 +291,6 @@ async function predictWithAI(task) {
             let conf = resolvedRes.confidences[pText] || 0;
             let negConf = resolvedRes.confidences['negative_' + pText] || 0;
             
-            // STRICT Threshold: High Confidence Only
             if (resolvedRes.label === pText && conf >= 0.92 && negConf < 0.15) {
                 predictedClicks.push(m.index);
             }
@@ -299,7 +298,7 @@ async function predictWithAI(task) {
         } catch(e) {}
     }
 
-    // STRICT GUARD: Must be exactly between 2 and 5 items to auto-submit
+    // STRICT: Must have minimum 2 and maximum 5 clicks
     if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
         task.clicks = predictedClicks;
         let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
@@ -322,12 +321,9 @@ async function reEvaluatePending() {
     if (isEvaluatingAI) return;
     isEvaluatingAI = true;
     for (let id in serverData.pending) {
-        let t = serverData.pending[id];
-        if (t && (!t.clicks || t.clicks.length === 0)) {
-            let media = t.media || [];
-            if (media.length > 1) {
-                await predictWithAI({ id, clicks: [], type: 'grid', media, prompt: t.prompt || '' });
-            }
+        let t = activeTasksStore[id];
+        if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
+            await predictWithAI(t);
         }
     }
     isEvaluatingAI = false;
@@ -469,7 +465,6 @@ function buildCard(t, isTrained = false) {
     return card;
 }
 
-// ── FIXED: Robust Event Delegation Engine for Retrain & Actions ──
 document.body.addEventListener('click', (e) => {
     let actionBtn = e.target.closest('[data-action]');
     let card = e.target.closest('.task-card');
@@ -480,7 +475,6 @@ document.body.addEventListener('click', (e) => {
     let isTrainedCard = card.closest('#trainedView') !== null;
     let isInRetrain = retrainEditingTasks.has(tid);
 
-    // 1. Action Button Dispatches
     if (actionBtn) {
         let act = actionBtn.dataset.action;
         
@@ -574,12 +568,11 @@ document.body.addEventListener('click', (e) => {
         }
     }
 
-    // 2. Interactive Image Selection
-    if (isTrainedCard && !isInRetrain) return; // Do not click on archive cards unless in retrain mode
+    if (isTrainedCard && !isInRetrain) return;
 
     if (e.target.classList.contains('g-img')) {
         let idx = parseInt(e.target.dataset.index);
-        if (e.target.classList.contains('selected') || e.target.classList.contains('retrain-pick')) {
+        if (e.target.classList.contains('selected') || e.target.classList.contains('retrain-pick') || e.target.classList.contains('ai-pick')) {
             e.target.classList.remove('selected', 'ai-pick', 'retrain-pick');
             t.clicks = t.clicks.filter(i => i !== idx);
         } else {
@@ -620,7 +613,12 @@ function deleteTrained(taskId) {
 }
 
 function sendToServer(taskId, btnEl, card) {
-    let t = activeTasksStore[taskId]; if (!t) return;
+    let t = activeTasksStore[taskId];
+    if (!t || !t.clicks || t.clicks.length === 0) {
+        if (card) card.classList.remove('ai-processing');
+        return;
+    }
+
     fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
