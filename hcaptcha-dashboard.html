@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro</title>
+    <title>hCaptcha Master Pro — Ultra Learner</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -25,6 +25,7 @@
         .sync-status.active { color: #00ff88; }
         .btn-toggle { padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; border: 1px solid #555; background: #222; color: #888; }
         .btn-toggle.on { background: #00ff88; color: #000; border-color: #00ff88; }
+        .btn-clear-ai { background: #331111; color: #ff5555; border: 1px solid #772222; padding: 6px 10px; border-radius: 4px; font-size: 11px; font-weight: bold; cursor: pointer; }
         .search-box input { padding: 6px 10px; background: #222; border: 1px solid #444; color: #00ff88; border-radius: 4px; font-size: 12px; outline: none; width: 140px; }
 
         .workspace-split { display: flex; gap: 12px; flex: 1; min-height: 0; margin-top: 10px; }
@@ -51,13 +52,13 @@
 
         .img-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
         .img-grid img { width: 100%; height: 105px; object-fit: cover; cursor: pointer; border: 3px solid transparent; background: #222; border-radius: 3px; }
-        .img-grid img.selected { border-color: #00ff88; opacity: 0.8; }
+        .img-grid img.selected { border-color: #00ff88; opacity: 0.85; }
         .img-grid img.ai-pick { border-color: #ff00ff; opacity: 0.9; }
         .img-grid img.retrain-pick { border-color: #ff8800 !important; opacity: 0.95; }
         
         .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; align-items: center; background: #000; border-radius: 4px; border: 1px solid #444; overflow: hidden; }
         .single-box img { width: 100%; height: auto; min-height: 380px; max-height: 480px; object-fit: contain; display: block; user-select: none; }
-        .dot { position: absolute; width: 14px; height: 14px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 10; }
+        .dot { position: absolute; width: 16px; height: 16px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 10; }
         .dot.retrain-dot { background: #ff8800; }
 
         .actions { display: flex; gap: 6px; margin-top: 8px; }
@@ -89,6 +90,7 @@
         <span class="sync-status" id="syncStatus">🧠 AI Ready</span>
         <button id="btnAutoTrain" class="btn-toggle on" onclick="toggleAutoTrain()">🧠 Auto Train: ON</button>
         <button id="btnAutoSave" class="btn-toggle on" onclick="toggleAutoSave()">💾 Auto Save: ON</button>
+        <button class="btn-clear-ai" onclick="resetAIBrain()">🧹 Reset Brain</button>
         <div class="search-box">
             <input type="text" id="searchInput" oninput="filterTasks()" placeholder="🔍 Task ID..."/>
         </div>
@@ -105,7 +107,7 @@
     </div>
     <div class="column">
         <div class="column-header">
-            <span class="col-title-manual">👷 Manual Worker Stream (3s Videos/Points)</span>
+            <span class="col-title-manual">👷 Manual Worker Stream (Videos / Coordinates)</span>
             <span class="stream-count" id="c-manual">0 Tasks</span>
         </div>
         <div class="task-list" id="manualArea"></div>
@@ -146,15 +148,24 @@ async function initAI() {
         knn = knnClassifier.create();
         await loadKNN();
         isAIReady = true;
-        syncStatus.innerHTML = "🤖 AI Fast-Track Active ✅";
-        syncStatus.classList.add('active');
+        updateAIStatus();
         reEvaluatePending();
     } catch(e) {
         syncStatus.innerHTML = "⚠️ AI Fallback";
     }
 }
 
-const IDB = { name:'hcm_knn_master', store:'knn', key:'model_v5' };
+function updateAIStatus() {
+    if (!knn) return;
+    try {
+        let ds = knn.getClassExampleCount();
+        let concepts = Object.keys(ds).filter(k => !k.startsWith('negative_')).length;
+        syncStatus.innerHTML = `🤖 AI Ready ✅ (${concepts} Concepts)`;
+        syncStatus.classList.add('active');
+    } catch(e) {}
+}
+
+const IDB = { name:'hcm_knn_master', store:'knn', key:'model_v6' };
 function idbOpen() {
     return new Promise((res,rej)=>{
         let r = indexedDB.open(IDB.name,1);
@@ -187,8 +198,7 @@ async function saveKNN() {
         let ser = {};
         for (let k in ds) { ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape }; }
         await idbSet(ser);
-        let concepts = Object.keys(ser).filter(k => !k.startsWith('negative_')).length;
-        syncStatus.innerHTML = `🤖 AI Ready ✅ (${concepts} Concepts)`;
+        updateAIStatus();
     } catch(e) {}
 }
 async function loadKNN() {
@@ -199,6 +209,14 @@ async function loadKNN() {
         for (let k in ser) { ds[k] = tf.tensor(ser[k].data, ser[k].shape); }
         knn.setClassifierDataset(ds);
     } catch(e) {}
+}
+
+async function resetAIBrain() {
+    if (confirm("Kya aap AI Brain ki sari memory reset karna chahte hain?")) {
+        indexedDB.deleteDatabase(IDB.name);
+        if (knn) knn.clearAllClasses();
+        location.reload();
+    }
 }
 
 function setTab(tab) {
@@ -232,8 +250,9 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
+// ── 3X FAST-LEARNING AI ENGINE (Learns instantly on Manual Save & Retrain) ──
 async function trainAIBrainAsync(task) {
-    if (!isAIReady || task.type !== 'grid' || !task.media) return;
+    if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let negLabel = 'negative_' + pText;
 
@@ -250,7 +269,10 @@ async function trainAIBrainAsync(task) {
             tf.tidy(() => {
                 let tfImg = tf.browser.fromPixels(img);
                 let features = aiModel.infer(tfImg, true);
+                
+                // 3X Positive Weighting for instant learning
                 if (task.clicks.includes(m.index)) {
+                    knn.addExample(features, pText);
                     knn.addExample(features, pText);
                     knn.addExample(features, pText);
                 } else {
@@ -260,15 +282,15 @@ async function trainAIBrainAsync(task) {
             await tf.nextFrame();
         } catch(e) {}
     }
-    saveKNN();
+    await saveKNN();
+    reEvaluatePending();
 }
 
-// STRICT PREDICTION GUARD: Never submit with empty or weak clicks
 async function predictWithAI(task) {
     if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let dataset = knn.getClassExampleCount();
-    if (!dataset[pText] || dataset[pText] < 2) return;
+    if (!dataset[pText] || dataset[pText] < 1) return;
 
     let predictedClicks = [];
     for (let m of task.media) {
@@ -291,14 +313,14 @@ async function predictWithAI(task) {
             let conf = resolvedRes.confidences[pText] || 0;
             let negConf = resolvedRes.confidences['negative_' + pText] || 0;
             
-            if (resolvedRes.label === pText && conf >= 0.92 && negConf < 0.15) {
+            // Realistic confidence balance
+            if (resolvedRes.label === pText && conf >= 0.80 && negConf < 0.30) {
                 predictedClicks.push(m.index);
             }
             await tf.nextFrame();
         } catch(e) {}
     }
 
-    // STRICT: Must have minimum 2 and maximum 5 clicks
     if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
         task.clicks = predictedClicks;
         let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
@@ -465,6 +487,7 @@ function buildCard(t, isTrained = false) {
     return card;
 }
 
+// ── Complete Interactive Handlers ──
 document.body.addEventListener('click', (e) => {
     let actionBtn = e.target.closest('[data-action]');
     let card = e.target.closest('.task-card');
@@ -505,7 +528,7 @@ document.body.addEventListener('click', (e) => {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ taskId: tid, clicks: t.clicks })
             }).then(() => {
-                if (isAIReady && t.type === 'grid') trainAIBrainAsync(t);
+                if (isAIReady && t.type === 'grid') trainAIBrainAsync(t); // Instant Re-train Brain
                 retrainEditingTasks.delete(tid);
                 card.classList.remove('in-retrain');
                 let b = card.querySelector(`#banner-${tid}`); if (b) b.remove();
@@ -629,6 +652,7 @@ function sendToServer(taskId, btnEl, card) {
     if (card) card.remove();
     delete activeTasksStore[taskId];
 
+    // Train 3x Weights on user save
     if (isAIReady && t.type === 'grid' && t.clicks.length > 0) {
         trainAIBrainAsync(t);
     }
