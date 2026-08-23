@@ -103,15 +103,20 @@ function persistDatabase() {
     }, 2000);
 }
 
+// STRICT EVALUATOR: Video tasks must NEVER auto-solve via loose concept text matching
 function evaluateAutoSolve(task) {
+    // 1. Exact Task ID match
     if (hcaptchaTrained[task.taskId]) {
         return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
     }
 
-    if (task.media && task.media.length === 1 && (task.media[0].type === 'video_frames' || task.media[0].frames)) {
+    // 2. Video / Single Canvas tasks — Strictly require EXACT trained match, no loose concept inference
+    const isVideoOrCoord = task.media && (task.media.length === 1 || task.media[0].type === 'video_frames' || task.media[0].frames);
+    if (isVideoOrCoord) {
         return { solved: false };
     }
 
+    // 3. Grid Tasks Only (dHash Concept Matching)
     let cKey = getCleanKey(task);
     let targetDhashes = conceptBank[cKey];
 
