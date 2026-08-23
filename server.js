@@ -8,13 +8,14 @@ const Redis = require('ioredis');
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '60mb' }));
+app.use(express.json({ limit: '100mb' }));
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE = path.join(DATA_DIR, 'database.json');
+const AI_BRAIN_FILE = path.join(DATA_DIR, 'ai_brain.json');
 
 const MAX_PENDING = 60;
 const MAX_TRAINED = 50000;
@@ -23,6 +24,7 @@ const DASHBOARD_PAGE_SIZE = 20;
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
 let conceptBank = {};
+let aiBrainDataset = {}; // Persistent Server-Side AI Brain
 
 const browserSockets = new Map();
 
@@ -68,7 +70,6 @@ function rebuildConceptBank() {
 }
 
 function _addToConceptBank(tr) {
-    // STRICT GUARD: Video/Coordinate tasks ko CONCEPT BANK mein KABHI add mat karo!
     if (tr.media && (tr.media.length === 1 || tr.media[0].type === 'video_frames' || tr.media[0].frames)) {
         return; 
     }
@@ -95,6 +96,15 @@ function initDB() {
             console.error("[DB] Error loading database:", e.message);
         }
     }
+    if (fs.existsSync(AI_BRAIN_FILE)) {
+        try {
+            const rawBrain = fs.readFileSync(AI_BRAIN_FILE, 'utf8');
+            aiBrainDataset = JSON.parse(rawBrain);
+            console.log(`[AI-BRAIN] Server Memory Restored. Concepts: ${Object.keys(aiBrainDataset).length}`);
+        } catch(e) {
+            aiBrainDataset = {};
+        }
+    }
 }
 initDB();
 
@@ -108,17 +118,22 @@ function persistDatabase() {
     }, 2000);
 }
 
-// ── ABSOLUTE STRICT AUTO-SOLVE EVALUATOR ──
+let aiSaveTimeout = null;
+function persistAIBrain() {
+    if (aiSaveTimeout) clearTimeout(aiSaveTimeout);
+    aiSaveTimeout = setTimeout(() => {
+        fs.writeFile(AI_BRAIN_FILE, JSON.stringify(aiBrainDataset), 'utf8', (err) => {
+            if (err) console.error('[AI-BRAIN] PERSIST ERROR:', err.message);
+        });
+    }, 2000);
+}
+
 function evaluateAutoSolve(task) {
     const isVideoOrCoord = task.media && (task.media.length === 1 || task.media[0].type === 'video_frames' || task.media[0].frames);
 
-    // 1. Agar Video ya Coordinate task hai:
     if (isVideoOrCoord) {
-        // Video task sirf aur sirf EXACT ID match par chalay ga!
-        // Kabhi bhi loose concept ya fuzzy match se video solve nahi hogi!
         if (hcaptchaTrained[task.taskId]) {
             let tr = hcaptchaTrained[task.taskId];
-            // Extra check: Verify ke trained solution coordinates wala hi hai
             if (tr.clicks && tr.clicks.length > 0 && typeof tr.clicks[0] === 'object') {
                 return { solved: true, clicks: tr.clicks };
             }
@@ -126,12 +141,10 @@ function evaluateAutoSolve(task) {
         return { solved: false };
     }
 
-    // 2. Exact Grid Match
     if (hcaptchaTrained[task.taskId]) {
         return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
     }
 
-    // 3. Grid Tasks Concept Matching (Sirf 3x3 Grid images ke liye)
     let cKey = getCleanKey(task);
     let targetDhashes = conceptBank[cKey];
 
@@ -200,6 +213,26 @@ function notifyBrowsers(taskId, clicks) {
     }
 }
 
+// ── Server-Side AI Brain Sync Routes ──
+app.get('/api/ai-brain', (req, res) => {
+    res.json(aiBrainDataset || {});
+});
+
+app.post('/api/ai-brain', (req, res) => {
+    if (req.body && typeof req.body === 'object') {
+        aiBrainDataset = req.body;
+        persistAIBrain();
+        return res.json({ success: true, count: Object.keys(aiBrainDataset).length });
+    }
+    res.json({ success: false });
+});
+
+app.delete('/api/ai-brain', (req, res) => {
+    aiBrainDataset = {};
+    persistAIBrain();
+    res.json({ success: true });
+});
+
 app.post('/api/new-hcaptcha', (req, res) => {
     const task = req.body;
     if (!task || !task.taskId) return res.json({ success: false, error: 'Missing taskId' });
@@ -246,7 +279,6 @@ app.post('/api/submit-hcaptcha', (req, res) => {
             thumb: m.thumb || (m.frames ? m.frames[0] : "")
         }));
 
-        // Sirf Grid images ko concept bank me add karo
         if (!isVideo) {
             let cKey = getCleanKey(source);
             if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
