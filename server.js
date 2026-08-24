@@ -249,15 +249,25 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     let source = hcaptchaPending[taskId] || hcaptchaTrained[taskId];
     if (!source) return res.json({ success: false, error: 'Task not found' });
 
-    // Light media — thumb size limit
-    let lightMedia = (source.media || []).map(m => ({
-        dhash: m.dhash || "",
-        stableHash: m.stableHash || "",
-        type: m.type || "image",
-        index: m.index ?? 0,
-        // Thumb: max 300 chars (URL ya chhota base64 prefix)
-        thumb: (m.thumb || m.src || "").substring(0, 300)
-    }));
+    // Light media — canvas/video frames ke liye zyada space
+    let lightMedia = (source.media || []).map(m => {
+        let isVideo = m.type === 'video_frames';
+        // Video frames: pehle 3 frames rakho display ke liye
+        let frames = isVideo && m.frames ? m.frames.slice(0, 3) : undefined;
+        // Thumb: canvas task ke liye full base64 rakho (display ke liye zaroori)
+        let thumb = m.thumb || m.src || "";
+        if (thumb.startsWith('data:image') && thumb.length > 50000) {
+            thumb = thumb.substring(0, 50000); // Max 50KB per thumb
+        }
+        return {
+            dhash: m.dhash || "",
+            stableHash: m.stableHash || "",
+            type: m.type || "image",
+            index: m.index ?? 0,
+            thumb,
+            frames
+        };
+    });
 
     // Concept bank update
     let cKey = getCleanKey(source);
