@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>hCaptcha Master Pro ⚡ (100% Precision)</title>
+<title>hCaptcha Master Pro ⚡ (Exact AI Mode)</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -233,12 +233,7 @@ async function predictTask(task) {
     let pText = cleanLabel(task.prompt);
     let dataset = knn.getClassExampleCount();
 
-    if (!dataset[pText]) {
-        let keys = Object.keys(dataset).filter(k => !k.startsWith('neg_'));
-        let matched = keys.find(k => k === pText || k.includes(pText) || pText.includes(k));
-        if (matched) pText = matched;
-        else return [];
-    }
+    if (!dataset[pText]) return [];
 
     let predicted = [];
     for (let m of (task.media || [])) {
@@ -250,7 +245,8 @@ async function predictTask(task) {
             let conf = res.confidences[pText] || 0;
             let negConf = res.confidences['neg_' + pText] || 0;
 
-            if (res.label === pText && conf >= 0.40 && negConf < 0.45) {
+            // Strict 70% Confidence Threshold (0% Guesswork)
+            if (res.label === pText && conf >= 0.70 && negConf < 0.25) {
                 predicted.push(m.index);
             }
         } catch(e) {}
@@ -288,7 +284,6 @@ async function triggerParallelSolve() {
     isBatchRunning = false;
 }
 
-// ── WebSocket Push ──
 let ws = null;
 function wsConn() {
     if (ws && ws.readyState < 2) return;
@@ -327,7 +322,6 @@ function wsConn() {
     };
 }
 
-// ── 0% Blink Direct Video Frame Blit ──
 let lastTick = 0;
 function animateVideos(t) {
     if (t - lastTick > 125) {
