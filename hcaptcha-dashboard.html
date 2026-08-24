@@ -4,13 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="referrer" content="no-referrer">
-<title>hCaptcha Master Pro</title>
+<title>hCaptcha Master Pro ⚡ (Zero-Blink)</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { background-color: #0c0c0c; color: #ffffff; font-family: Arial, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; padding: 8px; gap: 8px; }
+body { background-color: #0c0c0c; color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; padding: 8px; gap: 8px; }
 
 .header { background: #181818; padding: 8px 12px; border-bottom: 2px solid #00ff88; display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; border-radius: 4px; }
 .header-left { display: flex; align-items: center; gap: 12px; }
@@ -35,7 +35,7 @@ body { background-color: #0c0c0c; color: #ffffff; font-family: Arial, sans-serif
 .stream-count { background: #000; padding: 1px 6px; border-radius: 6px; font-size: 11px; color: #fff; }
 
 .task-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
-.task-card { background: #1c1c1c; border: 1px solid #333; border-radius: 4px; padding: 8px; }
+.task-card { background: #1c1c1c; border: 1px solid #333; border-radius: 4px; padding: 8px; contain: layout; }
 .task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 8px rgba(255,0,255,0.3); }
 .task-card.in-retrain { border: 2px solid #ff8800 !important; background: #221405 !important; }
 .task-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
@@ -47,16 +47,15 @@ body { background-color: #0c0c0c; color: #ffffff; font-family: Arial, sans-serif
 .example-img-placeholder { width: 38px; height: 38px; border-radius: 3px; background: #2a2a2a; border: 1px dashed #555; display: flex; align-items: center; justify-content: center; font-size: 14px; }
 .task-prompt { color: #fff; font-size: 11px; font-weight: bold; line-height: 1.2; }
 
-/* 1.0 Clean 3x3 Grid Layout */
 .img-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
 .img-grid img { width: 100%; height: 95px; object-fit: cover; cursor: pointer; border: 3px solid transparent; background: #222; border-radius: 3px; }
 .img-grid img.selected { border-color: #00ff88; opacity: 0.85; }
 .img-grid img.ai-pick { border-color: #ff00ff; }
 .img-grid img.retrain-pick { border-color: #ff8800 !important; }
 
-/* Manual / Video Area */
-.single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; align-items: center; background: #000; border-radius: 4px; border: 1px solid #444; overflow: hidden; user-select: none; }
-.single-box img { width: 100%; height: auto; min-height: 280px; max-height: 380px; object-fit: contain; display: block; }
+.single-box { position: relative; width: 100%; height: 320px; cursor: crosshair; display: flex; justify-content: center; align-items: center; background: #000; border-radius: 4px; border: 1px solid #444; overflow: hidden; user-select: none; }
+.single-box .frame-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; display: none; pointer-events: none; }
+.single-box .frame-layer.active { display: block; }
 .dot { position: absolute; width: 14px; height: 14px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 10; box-shadow: 0 0 6px #00ff88; }
 .dot.end-dot { background: #ff8800; box-shadow: 0 0 6px #ff8800; }
 
@@ -128,20 +127,15 @@ const trainedArea = document.getElementById('trainedArea');
 const syncStatus = document.getElementById('syncStatus');
 
 let currentTab = 'pending';
-let serverData = { pending: {}, trained: {} }, activeTasksStore = {}, videoTasks = [];
+let serverData = { pending: {}, trained: {} }, activeTasksStore = {};
+let videoControllers = new Map();
 let ghostBlocker = new Set(), retrainEditingTasks = new Set();
 let isAIReady = false, aiModel, knn;
 let autoTrainEnabled = true, autoSaveEnabled = true;
 let isEvaluatingAI = false;
 let brainSaveTimer = null;
 
-// Worker Trigger for Background AI Execution
-const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 800);`], { type: 'text/javascript' });
-const bgWorker = new Worker(URL.createObjectURL(timerBlob));
-bgWorker.onmessage = () => {
-    if (isAIReady && autoTrainEnabled && !isEvaluatingAI) reEvaluatePending();
-};
-
+// Smooth WebGL Model Init
 async function initAI() {
     try {
         try { await tf.setBackend('webgl'); } catch(e) { await tf.setBackend('cpu'); }
@@ -151,7 +145,6 @@ async function initAI() {
         await loadBrainFromServer();
         isAIReady = true;
         updateAIStatus();
-        if (autoTrainEnabled) reEvaluatePending();
     } catch(e) {
         syncStatus.innerHTML = "⚠️ AI Fallback";
     }
@@ -214,11 +207,10 @@ function setTab(tab) {
     if (tab === 'pending') {
         document.getElementById('pendingView').style.display = 'flex';
         document.getElementById('trainedView').style.display = 'none';
-        fetchTasks();
     } else {
         document.getElementById('pendingView').style.display = 'none';
         document.getElementById('trainedView').style.display = 'flex';
-        fetchTasks();
+        fetchTrained();
     }
 }
 
@@ -227,7 +219,6 @@ function toggleAutoTrain() {
     let btn = document.getElementById('btnAutoTrain');
     btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
     btn.textContent = '🧠 Auto: ' + (autoTrainEnabled ? 'ON' : 'OFF');
-    if (autoTrainEnabled && isAIReady) reEvaluatePending();
 }
 
 function toggleAutoSave() {
@@ -248,7 +239,7 @@ async function trainAIBrainAsync(task) {
         try {
             let img = new Image();
             img.src = imgSrc;
-            await new Promise(res => { img.onload = res; img.onerror = res; setTimeout(res, 300); });
+            await new Promise(res => { img.onload = res; img.onerror = res; setTimeout(res, 250); });
             if (!img.complete || img.naturalWidth === 0) continue;
             
             tf.tidy(() => {
@@ -319,23 +310,7 @@ async function predictWithAI(task) {
     }
 }
 
-async function reEvaluatePending() {
-    if (isEvaluatingAI) return;
-    isEvaluatingAI = true;
-    for (let id in serverData.pending) {
-        let t = serverData.pending[id];
-        if (t && (!t.clicks || t.clicks.length === 0)) {
-            let media = t.media || [];
-            let isGrid = media.length > 1 || (media.length === 1 && media[0]?.type === 'image');
-            if (isGrid) {
-                await predictWithAI({ id, clicks: [], type: 'grid', media, prompt: t.prompt || '' });
-            }
-        }
-    }
-    isEvaluatingAI = false;
-}
-
-// Full WebSocket Direct Push
+// 100% Pure WebSocket Engine (No Polling Overwrite)
 let ws = null;
 function wsConn() {
     if (ws && ws.readyState < 2) return;
@@ -350,17 +325,14 @@ function wsConn() {
                 document.getElementById('c-trained-total').innerText = `${m.data.trained || 0} Solved`;
             }
             if (m.type === 'new_pending') {
-                serverData.pending[m.data.id] = m.data;
-                renderPendingStreams();
-                if (isAIReady && autoTrainEnabled) reEvaluatePending();
+                appendSingleCard(m.data.id, m.data);
             }
             if (m.type === 'task_solved' || m.type === 'task_deleted') {
                 let tid = m.data.taskId;
                 ghostBlocker.add(tid);
                 document.querySelector(`.task-card[data-id="${tid}"]`)?.remove();
                 delete activeTasksStore[tid];
-                delete serverData.pending[tid];
-                videoTasks = videoTasks.filter(v => v.id !== tid);
+                videoControllers.delete(tid);
                 updateStreamCounts();
             }
         } catch(e) {}
@@ -368,50 +340,19 @@ function wsConn() {
     ws.onclose = () => setTimeout(wsConn, 1500);
 }
 
-async function fetchTasks() {
-    try {
-        const res = await fetch(`${SERVER_URL}/api/tasks?tab=${currentTab}&t=${Date.now()}`);
-        if (res.ok) {
-            const data = await res.json();
-            if (currentTab === 'pending') {
-                serverData.pending = data.tasks || {};
-                renderPendingStreams();
-                if (isAIReady && autoTrainEnabled) reEvaluatePending();
-            } else {
-                serverData.trained = data.tasks || {};
-                renderTrainedStream();
-            }
-        }
-    } catch(e) {}
-}
+function appendSingleCard(id, td) {
+    if (ghostBlocker.has(id) || activeTasksStore[id]) return;
+    let media = td.media || [];
+    let isGrid = media.length > 1 || (media.length === 1 && media[0]?.type === 'image');
 
-function renderPendingStreams() {
-    let pending = serverData.pending;
+    activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
+    let card = buildCard(activeTasksStore[id]);
 
-    // Remove obsolete cards
-    document.querySelectorAll('#pendingView .task-card').forEach(card => {
-        let id = card.dataset.id;
-        if (!pending[id] || ghostBlocker.has(id)) {
-            card.remove();
-            delete activeTasksStore[id];
-            videoTasks = videoTasks.filter(v => v.id !== id);
-        }
-    });
-
-    for (let id of Object.keys(pending)) {
-        if (ghostBlocker.has(id) || activeTasksStore[id]) continue;
-        let td = pending[id], media = td.media || [];
-        let isGrid = media.length > 1 || (media.length === 1 && media[0]?.type === 'image');
-
-        activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
-        let card = buildCard(activeTasksStore[id]);
-
-        if (isGrid) {
-            gridArea.prepend(card);
-            if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[id]);
-        } else {
-            manualArea.prepend(card);
-        }
+    if (isGrid) {
+        gridArea.prepend(card);
+        if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[id]);
+    } else {
+        manualArea.prepend(card);
     }
     updateStreamCounts();
 }
@@ -421,15 +362,32 @@ function updateStreamCounts() {
     document.getElementById('c-manual').innerText = `${manualArea.children.length} Tasks`;
 }
 
-function renderTrainedStream() {
-    trainedArea.innerHTML = '';
-    for (let id of Object.keys(serverData.trained)) {
-        let td = serverData.trained[id];
-        let isGrid = td.media?.length > 1 || (td.media?.length === 1 && td.media[0]?.type === 'image');
-        activeTasksStore[id] = { id, clicks: [...(td.clicks || [])], type: isGrid ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '', _isTrained: true };
-        let card = buildCard(activeTasksStore[id], true);
-        trainedArea.appendChild(card);
-    }
+async function fetchInitial() {
+    try {
+        const res = await fetch(`${SERVER_URL}/api/tasks?tab=pending&t=${Date.now()}`);
+        if (res.ok) {
+            const data = await res.json();
+            let tasks = data.tasks || {};
+            for (let id in tasks) appendSingleCard(id, tasks[id]);
+        }
+    } catch(e) {}
+}
+
+async function fetchTrained() {
+    try {
+        const res = await fetch(`${SERVER_URL}/api/tasks?tab=trained&t=${Date.now()}`);
+        if (res.ok) {
+            const data = await res.json();
+            trainedArea.innerHTML = '';
+            let tasks = data.tasks || {};
+            for (let id in tasks) {
+                let td = tasks[id];
+                let isGrid = td.media?.length > 1 || (td.media?.length === 1 && td.media[0]?.type === 'image');
+                activeTasksStore[id] = { id, clicks: [...(td.clicks || [])], type: isGrid ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '', _isTrained: true };
+                trainedArea.appendChild(buildCard(activeTasksStore[id], true));
+            }
+        }
+    } catch(e) {}
 }
 
 function buildCard(t, isTrained = false) {
@@ -452,13 +410,24 @@ function buildCard(t, isTrained = false) {
     } else {
         let m = t.media[0] || {};
         let isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
-        let src = isVid ? m.frames[0] : (m.thumb || m.src || '');
-        mediaHTML = `<div class="single-box"><img src="${src}" class="s-img ${isVid?'vid-player':''}" data-id="${t.id}" draggable="false"/>`;
+        
+        mediaHTML = `<div class="single-box" data-id="${t.id}">`;
+        if (isVid) {
+            m.frames.forEach((f, idx) => {
+                mediaHTML += `<img src="${f}" class="frame-layer ${idx===0?'active':''}" data-frame="${idx}" draggable="false"/>`;
+            });
+        } else {
+            mediaHTML += `<img src="${m.thumb || m.src || ''}" class="frame-layer active" draggable="false"/>`;
+        }
+
         t.clicks.forEach((pt, i) => {
             mediaHTML += `<div class="dot${i % 2 === 1 ? ' end-dot' : ''}" style="left:${pt.px}%;top:${pt.py}%;"></div>`;
         });
         mediaHTML += '</div>';
-        if (isVid && !isTrained) videoTasks.push({ id: t.id, frames: m.frames, current: 0 });
+
+        if (isVid && !isTrained) {
+            videoControllers.set(t.id, { total: m.frames.length, current: 0 });
+        }
     }
 
     let actions = !isTrained ? `
@@ -483,16 +452,33 @@ function buildCard(t, isTrained = false) {
     return card;
 }
 
-// Event Delegation for Zero-Blink Operations
+// 0% Blink Frame Swapper Engine (Class Toggle Only)
+let lastFrameTime = 0;
+function animateZeroBlinkVideos(timestamp) {
+    if (timestamp - lastFrameTime > 140) {
+        lastFrameTime = timestamp;
+        videoControllers.forEach((v, id) => {
+            let card = document.querySelector(`.task-card[data-id="${id}"]`);
+            if (card) {
+                let layers = card.querySelectorAll('.frame-layer');
+                if (layers.length > 1) {
+                    layers[v.current].classList.remove('active');
+                    v.current = (v.current + 1) % v.total;
+                    layers[v.current].classList.add('active');
+                }
+            }
+        });
+    }
+    requestAnimationFrame(animateZeroBlinkVideos);
+}
+requestAnimationFrame(animateZeroBlinkVideos);
+
 document.body.addEventListener('click', (e) => {
     let actionBtn = e.target.closest('[data-action]');
     let card = e.target.closest('.task-card');
     if (!card) return;
     let tid = card.dataset.id, t = activeTasksStore[tid];
     if (!t) return;
-
-    let isTrainedCard = card.closest('#trainedView') !== null;
-    let isInRetrain = retrainEditingTasks.has(tid);
 
     if (actionBtn) {
         let act = actionBtn.dataset.action;
@@ -505,16 +491,16 @@ document.body.addEventListener('click', (e) => {
         }
         if (act === 'del') {
             ghostBlocker.add(tid); card.remove(); delete activeTasksStore[tid];
-            videoTasks = videoTasks.filter(v => v.id !== tid); updateStreamCounts();
+            videoControllers.delete(tid); updateStreamCounts();
             fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' });
         }
         if (act === 'del-trained') {
-            fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).then(() => fetchTasks());
+            fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).then(() => fetchTrained());
             card.remove(); delete activeTasksStore[tid];
         }
     }
 
-    if (isTrainedCard && !isInRetrain) return;
+    if (card.closest('#trainedView') && !retrainEditingTasks.has(tid)) return;
 
     if (e.target.classList.contains('g-img')) {
         let idx = parseInt(e.target.dataset.index);
@@ -551,7 +537,7 @@ function sendToServer(taskId, btnEl, card) {
     ghostBlocker.add(taskId);
     if (card) card.remove();
     delete activeTasksStore[taskId];
-    videoTasks = videoTasks.filter(v => v.id !== taskId);
+    videoControllers.delete(taskId);
     updateStreamCounts();
 
     if (isAIReady && t.type === 'grid') {
@@ -566,19 +552,8 @@ function filterTasks() {
     });
 }
 
-// Direct 1.0 Non-Blinking Video Animation
-setInterval(() => {
-    videoTasks.forEach(vt => {
-        let el = document.querySelector(`.vid-player[data-id="${vt.id}"]`);
-        if (el && vt.frames?.length > 0) {
-            vt.current = (vt.current + 1) % vt.frames.length;
-            el.src = vt.frames[vt.current];
-        }
-    });
-}, 130);
-
 wsConn();
-fetchTasks();
+fetchInitial();
 initAI();
 </script>
 </body>
