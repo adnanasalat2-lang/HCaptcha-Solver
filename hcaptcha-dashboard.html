@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>hCaptcha Master Pro ⚡ (1K High-Power Edition)</title>
+<title>hCaptcha Master Pro ⚡ (Fixed Retrain & AI)</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -32,6 +32,7 @@ body{background:#0c0c0c;color:#fff;font-family:-apple-system,BlinkMacSystemFont,
 .task-list{flex:1;overflow-y:auto;padding:6px;display:flex;flex-direction:column;gap:6px}
 .card{background:#181818;border:1px solid #282828;border-radius:4px;padding:8px;position:relative}
 .card.ai-on{border:2px solid #ff00ff!important;box-shadow:0 0 10px rgba(255,0,255,0.4)}
+.card.retrain-mode{border:2px solid #ff8800!important;background:#1c1308!important}
 .chead{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
 .cid{color:#ff5555;font-family:monospace;font-size:12px;font-weight:bold}
 .pcon{display:flex;align-items:center;gap:6px;margin-bottom:6px;background:#1e1e1e;padding:5px;border-radius:4px;border:1px solid #282828}
@@ -42,8 +43,8 @@ body{background:#0c0c0c;color:#fff;font-family:-apple-system,BlinkMacSystemFont,
 .ig{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
 .ig img{width:100%;height:100px;object-fit:cover;cursor:pointer;border:3px solid #222;background:#1a1a1a;border-radius:4px;transition:all 0.15s ease}
 .ig img.sel{border-color:#00ff88!important;opacity:0.85}
-.ig img.aip{border:4px solid #ff00ff!important;box-shadow:0 0 12px rgba(255,0,255,0.9)!important;opacity:1!important}
-.ig img.retrain-pick{border:4px solid #ff8800!important}
+.ig img.aip{border:4px solid #ff00ff!important;box-shadow:0 0 12px rgba(255,0,255,0.9)!important}
+.ig img.retrain-pick{border:4px solid #ff8800!important;opacity:1!important}
 .sbox{position:relative;width:100%;cursor:crosshair;display:flex;justify-content:center;background:#000;border-radius:4px;border:1px solid #333;overflow:hidden;user-select:none}
 .sbox img{width:100%;height:auto;min-height:280px;max-height:360px;object-fit:contain;display:block;pointer-events:none}
 .dot{position:absolute;width:16px;height:16px;background:#00ff88;border:2px solid #000;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:10;box-shadow:0 0 6px #00ff88}
@@ -109,7 +110,7 @@ let videoMap = new Map();
 let atOn = true, asOn = true, sq = '';
 let isBatchRunning = false;
 
-// ── WebGL AI Engine ──
+// ── In-Browser TFJS Engine ──
 let aiModel = null, knn = null, aiReady = false;
 
 async function initAI() {
@@ -118,7 +119,7 @@ async function initAI() {
         await tf.ready();
         aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
         knn = knnClassifier.create();
-        loadLocalBrain();
+        await loadBrain();
         aiReady = true;
         updateAIStatus();
         if (atOn) triggerParallelSolve();
@@ -140,9 +141,9 @@ function cleanLabel(raw) {
     return (raw || '').split('|||')[0].replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
-function loadLocalBrain() {
+async function loadBrain() {
     try {
-        let ser = localStorage.getItem('hcm_brain_v4');
+        let ser = localStorage.getItem('hcm_brain_v5');
         if (!ser) return;
         let data = JSON.parse(ser);
         let ds = {};
@@ -151,36 +152,53 @@ function loadLocalBrain() {
     } catch(e) {}
 }
 
-function saveLocalBrain() {
+function saveBrain() {
     if (!knn) return;
     try {
         let ds = knn.getClassifierDataset();
         let ser = {};
         for (let k in ds) ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape };
-        localStorage.setItem('hcm_brain_v4', JSON.stringify(ser));
+        localStorage.setItem('hcm_brain_v5', JSON.stringify(ser));
         updateAIStatus();
     } catch(e) {}
 }
 
 function resetBrain() {
     if (!confirm("AI Brain reset karein?")) return;
-    localStorage.removeItem('hcm_brain_v4');
+    localStorage.removeItem('hcm_brain_v5');
     if (knn) knn.clearAllClasses();
     location.reload();
 }
 
-function loadImg(src) {
+// ── Canvas Safe Image Loader (CORS/Taint Safe) ──
+function getSafeFeature(src) {
     return new Promise(res => {
         if (!src) return res(null);
         let img = new Image();
-        if (!src.startsWith('data:')) img.crossOrigin = 'anonymous';
-        img.onload = () => res(img);
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+            try {
+                let feat = tf.tidy(() => aiModel.infer(img, true));
+                res(feat);
+            } catch(e) {
+                // Fallback drawing on clean canvas
+                let c = document.createElement('canvas');
+                c.width = img.width || 128; c.height = img.height || 128;
+                let ctx = c.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                try {
+                    let feat = tf.tidy(() => aiModel.infer(c, true));
+                    res(feat);
+                } catch(err) { res(null); }
+            }
+        };
         img.onerror = () => res(null);
         img.src = src;
-        setTimeout(() => res(img.complete && img.naturalWidth > 0 ? img : null), 600);
+        setTimeout(() => res(null), 1200);
     });
 }
 
+// ── Robust Train Function ──
 async function trainTask(task, wrongIndices = []) {
     if (!aiReady || task.type !== 'grid') return;
     let pText = cleanLabel(task.prompt);
@@ -188,28 +206,25 @@ async function trainTask(task, wrongIndices = []) {
 
     for (let m of (task.media || [])) {
         let src = m.thumb || m.src;
-        let img = await loadImg(src);
-        if (!img) continue;
+        let feat = await getSafeFeature(src);
+        if (!feat) continue;
 
-        try {
-            tf.tidy(() => {
-                let feat = aiModel.infer(img, true);
-                let isCorrect = (task.clicks || []).includes(m.index);
-                let isWrong = wrongIndices.includes(m.index);
+        let isCorrect = (task.clicks || []).includes(m.index);
+        let isWrong = wrongIndices.includes(m.index);
 
-                if (isCorrect) {
-                    for (let i = 0; i < 5; i++) knn.addExample(feat, pText);
-                } else if (isWrong) {
-                    for (let i = 0; i < 12; i++) knn.addExample(feat, negLabel);
-                } else {
-                    knn.addExample(feat, negLabel);
-                }
-            });
-        } catch(e) {}
+        if (isCorrect) {
+            for (let i = 0; i < 5; i++) knn.addExample(feat, pText);
+        } else if (isWrong) {
+            for (let i = 0; i < 15; i++) knn.addExample(feat, negLabel);
+        } else {
+            knn.addExample(feat, negLabel);
+        }
+        feat.dispose();
     }
-    saveLocalBrain();
+    saveBrain();
 }
 
+// ── Predict ──
 async function predictTask(task) {
     if (!aiReady || task.type !== 'grid') return [];
     let pText = cleanLabel(task.prompt);
@@ -225,35 +240,29 @@ async function predictTask(task) {
     let predicted = [];
     for (let m of (task.media || [])) {
         let src = m.thumb || m.src;
-        let img = await loadImg(src);
-        if (!img) continue;
+        let feat = await getSafeFeature(src);
+        if (!feat) continue;
 
         try {
-            let res = null;
-            tf.tidy(() => {
-                let feat = aiModel.infer(img, true);
-                res = knn.predictClass(feat);
-            });
-            let r = await res;
-            let conf = r.confidences[pText] || 0;
-            let negConf = r.confidences['neg_' + pText] || 0;
+            let res = await knn.predictClass(feat);
+            let conf = res.confidences[pText] || 0;
+            let negConf = res.confidences['neg_' + pText] || 0;
 
-            if (r.label === pText && conf >= 0.38 && negConf < 0.48) {
+            if (res.label === pText && conf >= 0.35 && negConf < 0.48) {
                 predicted.push(m.index);
             }
         } catch(e) {}
+        feat.dispose();
     }
     return predicted;
 }
 
-// ── Parallel Batch Solving (High-Power 1000+ Tasks Capability) ──
+// ── Parallel Batch Execution ──
 async function triggerParallelSolve() {
     if (!aiReady || !atOn || isBatchRunning) return;
     isBatchRunning = true;
 
     let unassigned = Object.values(activeStore).filter(t => t.type === 'grid' && (!t.clicks || !t.clicks.length) && !ghost.has(t.id));
-    
-    // Process in parallel chunks of 8 to avoid UI lag while maxing out GPU/CPU
     const CHUNK_SIZE = 8;
     for (let i = 0; i < unassigned.length; i += CHUNK_SIZE) {
         if (!atOn) break;
@@ -270,23 +279,18 @@ async function triggerParallelSolve() {
                         if (img) { img.classList.remove('sel'); img.classList.add('aip'); }
                     });
                 }
-                // Instant auto save when ON
                 if (asOn) {
-                    setTimeout(() => saveTo(t.id, card), 80);
+                    setTimeout(() => saveTo(t.id, card), 60);
                 }
             }
         }));
         await tf.nextFrame();
     }
-
     isBatchRunning = false;
 }
 
-// ── Background Interval (Tab switch hone par bhi band nahi hoga) ──
 setInterval(() => {
-    if (aiReady && atOn && !isBatchRunning) {
-        triggerParallelSolve();
-    }
+    if (aiReady && atOn && !isBatchRunning) triggerParallelSolve();
 }, 400);
 
 // ── WebSocket Push ──
@@ -328,23 +332,7 @@ function wsConn() {
     };
 }
 
-// ── Video Animation ──
-let lastTick = 0;
-function animateVideos(t) {
-    if (t - lastTick > 150) {
-        lastTick = t;
-        videoMap.forEach((v, id) => {
-            let el = document.querySelector(`.vid[data-id="${id}"]`);
-            if (el && v.frames && v.frames.length) {
-                v.cur = (v.cur + 1) % v.frames.length;
-                el.src = v.frames[v.cur];
-            }
-        });
-    }
-    requestAnimationFrame(animateVideos);
-}
-requestAnimationFrame(animateVideos);
-
+// ── UI Lists ──
 const gridArea = document.getElementById('gridArea');
 const manualArea = document.getElementById('manualArea');
 const trainedArea = document.getElementById('trainedArea');
@@ -372,8 +360,8 @@ async function fetchTrained() {
             for (let id in tasks) {
                 let td = tasks[id];
                 let isG = td.media?.length > 1;
-                let item = { id, clicks: td.clicks || [], type: isG ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '' };
-                trainedArea.appendChild(mkCard(item, true));
+                activeStore[id] = { id, clicks: [...(td.clicks || [])], type: isG ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '' };
+                trainedArea.appendChild(mkCard(activeStore[id], true));
             }
         }
     } catch(e) {}
@@ -385,12 +373,8 @@ function addCard(id, td) {
     let isG = m.length > 1;
     activeStore[id] = { id, clicks: [], type: isG ? 'grid' : 'coord', media: m, prompt: td.prompt || '' };
     let card = mkCard(activeStore[id], false);
-
-    if (isG) {
-        gridArea.prepend(card);
-    } else {
-        manualArea.prepend(card);
-    }
+    if (isG) gridArea.prepend(card);
+    else manualArea.prepend(card);
     updateCounts();
 }
 
@@ -417,18 +401,12 @@ function mkCard(t, isTrained) {
         mH += '</div>';
     } else {
         let m = t.media[0] || {};
-        let isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
-        let src = isVid ? (m.frames[0] || m.thumb || '') : (m.src || m.thumb || '');
-        
-        mH = `<div class="sbox" data-id="${t.id}"><img src="${src}" class="si${isVid ? ' vid' : ''}" data-id="${t.id}" draggable="false">`;
+        let src = m.src || m.thumb || '';
+        mH = `<div class="sbox" data-id="${t.id}"><img src="${src}" class="si" draggable="false">`;
         (t.clicks || []).forEach((pt, i) => {
             mH += `<div class="dot${i % 2 === 1 ? ' end-dot' : ''}" style="left:${pt.px}%;top:${pt.py}%"></div>`;
         });
         mH += `</div>`;
-        
-        if (isVid && !isTrained) {
-            videoMap.set(t.id, { frames: m.frames, cur: 0 });
-        }
     }
 
     let aH = isTrained
@@ -449,47 +427,30 @@ function mkCard(t, isTrained) {
     return card;
 }
 
-// ── Click Handlers ──
+// ── User Interaction (Retrain Fixed) ──
 document.body.addEventListener('click', async e => {
     let card = e.target.closest('.card');
     if (!card) return;
     let tid = card.dataset.id;
     let t = activeStore[tid];
-    let isTrained = !!card.closest('#trainedView');
 
     if (e.target.classList.contains('gi')) {
         let idx = parseInt(e.target.dataset.index);
+        let inRetrain = !!rts[tid];
+
         if (e.target.classList.contains('sel') || e.target.classList.contains('aip') || e.target.classList.contains('retrain-pick')) {
             e.target.classList.remove('sel', 'aip', 'retrain-pick');
             if (t) t.clicks = t.clicks.filter(i => i !== idx);
         } else {
-            e.target.classList.add(rts[tid] ? 'retrain-pick' : 'sel');
-            if (t) t.clicks.push(idx);
-        }
-    }
-
-    let sbox = e.target.closest('.sbox');
-    if (sbox && !e.target.closest('.acts')) {
-        let rect = sbox.getBoundingClientRect();
-        let px = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
-        let py = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
-
-        if (t) {
-            t.clicks.push({ px, py });
-            let dot = document.createElement('div');
-            dot.className = 'dot' + (t.clicks.length % 2 === 0 ? ' end-dot' : '');
-            dot.style.left = px + '%';
-            dot.style.top = py + '%';
-            sbox.appendChild(dot);
+            e.target.classList.add(inRetrain ? 'retrain-pick' : 'sel');
+            if (t && !t.clicks.includes(idx)) t.clicks.push(idx);
         }
     }
 
     let actionBtn = e.target.closest('[data-action]');
     if (actionBtn) {
         let act = actionBtn.dataset.action;
-        if (act === 'save') {
-            saveTo(tid, card);
-        }
+        if (act === 'save') saveTo(tid, card);
         if (act === 'reset') {
             if (t) t.clicks = [];
             card.querySelectorAll('.gi').forEach(i => i.classList.remove('sel', 'aip', 'retrain-pick'));
@@ -497,19 +458,19 @@ document.body.addEventListener('click', async e => {
             card.classList.remove('ai-on');
         }
         if (act === 'del') {
-            ghost.add(tid); card.remove(); delete activeStore[tid]; videoMap.delete(tid); updateCounts();
+            ghost.add(tid); card.remove(); delete activeStore[tid]; updateCounts();
             fetch(`${SRV}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).catch(()=>{});
         }
         if (act === 'retrain') {
             rts[tid] = { old: [...(t ? t.clicks : [])] };
             if (t) t.clicks = [];
-            card.querySelectorAll('.gi').forEach(i => i.classList.remove('sel','aip'));
-            card.querySelectorAll('.dot').forEach(d => d.remove());
+            card.classList.add('retrain-mode');
+            card.querySelectorAll('.gi').forEach(i => i.classList.remove('sel','aip','retrain-pick'));
             let bnr = document.createElement('div'); bnr.className = 'rhint'; bnr.id = `rh-${tid}`;
-            bnr.textContent = '🟠 Sahi points/images select karein phir Confirm dabayein';
+            bnr.textContent = '🟠 Sahi images click karein phir Update dabayein';
             card.querySelector('.pcon').after(bnr);
             document.getElementById(`act-${tid}`).innerHTML = `
-                <button class="btn bcf" data-action="confirm-rt">✅ Confirm</button>
+                <button class="btn bcf" data-action="confirm-rt">✅ Update & Train</button>
                 <button class="btn bcn" data-action="cancel-rt">Cancel</button>`;
         }
         if (act === 'confirm-rt') {
@@ -520,13 +481,20 @@ document.body.addEventListener('click', async e => {
                 body: JSON.stringify({ taskId: tid, clicks: t?.clicks || [] })
             });
             delete rts[tid];
+            card.classList.remove('retrain-mode');
+            let b = document.getElementById(`rh-${tid}`); if (b) b.remove();
             fetchTrained();
             if (atOn) triggerParallelSolve();
         }
-        if (act === 'cancel-rt') { delete rts[tid]; fetchTrained(); }
+        if (act === 'cancel-rt') {
+            delete rts[tid];
+            card.classList.remove('retrain-mode');
+            let b = document.getElementById(`rh-${tid}`); if (b) b.remove();
+            fetchTrained();
+        }
         if (act === 'del-tr') {
             fetch(`${SRV}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).then(() => fetchTrained());
-            card.remove(); delete activeStore[tid]; videoMap.delete(tid);
+            card.remove(); delete activeStore[tid];
         }
     }
 });
@@ -542,7 +510,6 @@ async function saveTo(taskId, card) {
     ghost.add(taskId);
     if (card) card.remove();
     delete activeStore[taskId];
-    videoMap.delete(taskId);
     updateCounts();
 
     await fetch(`${SRV}/api/submit-hcaptcha`, {
