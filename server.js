@@ -1,5 +1,5 @@
 // ============================================================
-// server.js — High-Speed, Low-Memory Fixed Server
+// server.js — High-Speed, Low-Memory Server
 // ============================================================
 'use strict';
 
@@ -26,7 +26,7 @@ const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE  = path.join(DATA_DIR, 'database.json');
 const AI_FILE  = path.join(DATA_DIR, 'ai_brain.json');
 
-const MAX_PENDING = 60; // Fixed: Controlled memory footprint
+const MAX_PENDING = 60;
 
 let pending   = {};
 let trained   = {};
@@ -57,10 +57,8 @@ function saveDB() {
     }, 1500);
 }
 
-// 100% Exact Match Only (Videos excluded from auto-guess)
 function autoSolve(task) {
     if (trained[task.taskId] && trained[task.taskId].clicks?.length) {
-        // Videos require live operator or exact match
         return { ok: true, clicks: trained[task.taskId].clicks };
     }
     return { ok: false };
@@ -207,7 +205,7 @@ app.get('/api/check-hcaptcha/:id', (req, res) => {
 
 app.get('/api/tasks', (req, res) => {
     let tab = req.query.tab === 'trained' ? 'trained' : 'pending';
-    let size = tab === 'trained' ? 10 : 30; // Fixed: 30 tasks max load per fetch
+    let size = tab === 'trained' ? 10 : 30;
     let src = tab === 'trained' ? trained : pending;
     let ids = Object.keys(src);
     if (tab === 'trained') ids = ids.reverse();
