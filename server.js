@@ -1,5 +1,5 @@
 // ============================================================
-// server.js — 100% Strict Exact-Match Engine (0% Guesswork)
+// server.js — High-Speed, Low-Memory Fixed Server
 // ============================================================
 'use strict';
 
@@ -14,19 +14,19 @@ const app    = express();
 const server = http.createServer(app);
 
 app.use(cors());
-app.use(express.json({ limit: '60mb' }));
+app.use(express.json({ limit: '40mb' }));
 
 const wss = new WS.Server({
     server,
     perMessageDeflate: false,
-    maxPayload: 30 * 1024 * 1024
+    maxPayload: 20 * 1024 * 1024
 });
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE  = path.join(DATA_DIR, 'database.json');
 const AI_FILE  = path.join(DATA_DIR, 'ai_brain.json');
 
-const MAX_PENDING = 400;
+const MAX_PENDING = 60; // Fixed: Controlled memory footprint
 
 let pending   = {};
 let trained   = {};
@@ -57,9 +57,10 @@ function saveDB() {
     }, 1500);
 }
 
-// 100% Exact Match Only
+// 100% Exact Match Only (Videos excluded from auto-guess)
 function autoSolve(task) {
     if (trained[task.taskId] && trained[task.taskId].clicks?.length) {
+        // Videos require live operator or exact match
         return { ok: true, clicks: trained[task.taskId].clicks };
     }
     return { ok: false };
@@ -153,7 +154,7 @@ app.post('/api/new-hcaptcha', (req, res) => {
     }
 
     let pKeys = Object.keys(pending);
-    if (pKeys.length >= MAX_PENDING) pKeys.slice(0, 30).forEach(k => delete pending[k]);
+    if (pKeys.length >= MAX_PENDING) pKeys.slice(0, 15).forEach(k => delete pending[k]);
 
     pending[task.taskId] = {
         id: task.taskId,
@@ -206,7 +207,7 @@ app.get('/api/check-hcaptcha/:id', (req, res) => {
 
 app.get('/api/tasks', (req, res) => {
     let tab = req.query.tab === 'trained' ? 'trained' : 'pending';
-    let size = tab === 'trained' ? 10 : 200;
+    let size = tab === 'trained' ? 10 : 30; // Fixed: 30 tasks max load per fetch
     let src = tab === 'trained' ? trained : pending;
     let ids = Object.keys(src);
     if (tab === 'trained') ids = ids.reverse();
@@ -236,6 +237,7 @@ app.post('/api/ai-brain', (req, res) => {
     }
     res.json({ success: false });
 });
+
 app.delete('/api/ai-brain', (req, res) => {
     aiBrainDS = {};
     try { fs.writeFileSync(AI_FILE, '{}', 'utf8'); } catch(e) {}
@@ -250,5 +252,5 @@ app.get('/', (req, res) => {
 initDB();
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`🚀 100% Exact Matching Server online on port ${PORT}`);
+    console.log(`🚀 Master Server 2.0 Live on Port ${PORT}`);
 });
