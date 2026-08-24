@@ -103,7 +103,7 @@ body{background:#0c0c0c;color:#fff;font-family:-apple-system,BlinkMacSystemFont,
 
 <script>
 const SRV = location.origin;
-const WS_URL = SRV.replace(/^http/,'ws') + '/ws';
+const WS_URL = SRV.replace(/^http/,'ws');
 
 let currentTab = 'pending';
 let activeStore = {}, ghost = new Set(), rts = {};
@@ -250,7 +250,7 @@ async function predictTask(task) {
             let conf = res.confidences[pText] || 0;
             let negConf = res.confidences['neg_' + pText] || 0;
 
-            if (res.label === pText && conf >= 0.75 && negConf < 0.30) {
+            if (res.label === pText && conf >= 0.40 && negConf < 0.45) {
                 predicted.push(m.index);
             }
         } catch(e) {}
