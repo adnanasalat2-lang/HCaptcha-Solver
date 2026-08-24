@@ -42,7 +42,6 @@ body{background:#0d0d0d;color:#fff;font-family:-apple-system,BlinkMacSystemFont,
 .ig{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
 .ig img{width:100%;height:100px;object-fit:cover;cursor:pointer;border:3px solid #222;background:#1a1a1a;border-radius:4px;transition:all 0.15s ease}
 .ig img.sel{border-color:#00ff88!important;opacity:0.85}
-/* Clear High-Visibility Magenta Highlight for AI */
 .ig img.aip{border:4px solid #ff00ff!important;box-shadow:0 0 12px rgba(255,0,255,0.9)!important;opacity:1!important}
 .ig img.retrain-pick{border:4px solid #ff8800!important}
 .sbox{position:relative;width:100%;cursor:crosshair;display:flex;justify-content:center;background:#000;border-radius:4px;border:1px solid #333;overflow:hidden;user-select:none}
@@ -106,6 +105,7 @@ const WS_URL = SRV.replace(/^http/,'ws');
 
 let currentTab = 'pending';
 let activeStore = {}, ghost = new Set(), rts = {};
+let videoMap = new Map();
 let atOn = true, asOn = true, sq = '';
 let autoSaveTimers = {};
 
@@ -181,7 +181,6 @@ function loadImg(src) {
     });
 }
 
-// ── Aggressive Learning Weights ──
 async function trainTask(task, wrongIndices = []) {
     if (!aiReady || task.type !== 'grid') return;
     let pText = cleanLabel(task.prompt);
@@ -199,10 +198,8 @@ async function trainTask(task, wrongIndices = []) {
                 let isWrong = wrongIndices.includes(m.index);
 
                 if (isCorrect) {
-                    // 4x Weight for Correct Image
                     for (let i = 0; i < 4; i++) knn.addExample(feat, pText);
                 } else if (isWrong) {
-                    // 10x Heavy Penalty for Retrained Wrong Image
                     for (let i = 0; i < 10; i++) knn.addExample(feat, negLabel);
                 } else {
                     knn.addExample(feat, negLabel);
@@ -309,6 +306,7 @@ function wsConn() {
                 ghost.add(tid);
                 document.querySelector(`.card[data-id="${tid}"]`)?.remove();
                 delete activeStore[tid];
+                videoMap.delete(tid);
                 updateCounts();
             }
         } catch(e) {}
@@ -320,6 +318,23 @@ function wsConn() {
     };
 }
 
+// ── Video Frames Animation Loop ──
+let lastTick = 0;
+function animateVideos(t) {
+    if (t - lastTick > 150) {
+        lastTick = t;
+        videoMap.forEach((v, id) => {
+            let el = document.querySelector(`.vid[data-id="${id}"]`);
+            if (el && v.frames && v.frames.length) {
+                v.cur = (v.cur + 1) % v.frames.length;
+                el.src = v.frames[v.cur];
+            }
+        });
+    }
+    requestAnimationFrame(animateVideos);
+}
+requestAnimationFrame(animateVideos);
+
 // ── UI Lists ──
 const gridArea = document.getElementById('gridArea');
 const manualArea = document.getElementById('manualArea');
@@ -330,7 +345,7 @@ async function fetchPending() {
         let r = await fetch(`${SRV}/api/tasks?tab=pending&page=0&size=200&t=${Date.now()}`);
         if (r.ok) {
             let d = await r.json();
-            gridArea.innerHTML = ''; manualArea.innerHTML = ''; activeStore = {};
+            gridArea.innerHTML = ''; manualArea.innerHTML = ''; activeStore = {}; videoMap.clear();
             let tasks = d.tasks || {};
             for (let id in tasks) if (!ghost.has(id)) addCard(id, tasks[id]);
         }
@@ -392,11 +407,18 @@ function mkCard(t, isTrained) {
         mH += '</div>';
     } else {
         let m = t.media[0] || {};
-        mH = `<div class="sbox" data-id="${t.id}"><img src="${m.src || m.thumb || ''}" class="si" draggable="false">`;
+        let isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
+        let src = isVid ? (m.frames[0] || m.thumb || '') : (m.src || m.thumb || '');
+        
+        mH = `<div class="sbox" data-id="${t.id}"><img src="${src}" class="si${isVid ? ' vid' : ''}" data-id="${t.id}" draggable="false">`;
         (t.clicks || []).forEach((pt, i) => {
             mH += `<div class="dot${i % 2 === 1 ? ' end-dot' : ''}" style="left:${pt.px}%;top:${pt.py}%"></div>`;
         });
         mH += `</div>`;
+        
+        if (isVid && !isTrained) {
+            videoMap.set(t.id, { frames: m.frames, cur: 0 });
+        }
     }
 
     let aH = isTrained
@@ -425,7 +447,6 @@ document.body.addEventListener('click', async e => {
     let t = activeStore[tid];
     if (!t) return;
 
-    // Grid Clicks
     if (e.target.classList.contains('gi')) {
         if (autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
         let btn = card.querySelector('.bsv');
@@ -441,7 +462,6 @@ document.body.addEventListener('click', async e => {
         }
     }
 
-    // Single/Canvas Drag Coordinate Points
     let sbox = e.target.closest('.sbox');
     if (sbox && !e.target.closest('.acts')) {
         let rect = sbox.getBoundingClientRect();
@@ -457,7 +477,6 @@ document.body.addEventListener('click', async e => {
         sbox.appendChild(dot);
     }
 
-    // Action Buttons
     let actionBtn = e.target.closest('[data-action]');
     if (actionBtn) {
         let act = actionBtn.dataset.action;
@@ -473,7 +492,7 @@ document.body.addEventListener('click', async e => {
             card.classList.remove('ai-on');
         }
         if (act === 'del') {
-            ghost.add(tid); card.remove(); delete activeStore[tid]; updateCounts();
+            ghost.add(tid); card.remove(); delete activeStore[tid]; videoMap.delete(tid); updateCounts();
             fetch(`${SRV}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).catch(()=>{});
         }
         if (act === 'retrain') {
@@ -501,7 +520,7 @@ document.body.addEventListener('click', async e => {
         if (act === 'cancel-rt') { delete rts[tid]; fetchTrained(); }
         if (act === 'del-tr') {
             fetch(`${SRV}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).then(() => fetchTrained());
-            card.remove(); delete activeStore[tid];
+            card.remove(); delete activeStore[tid]; videoMap.delete(tid);
         }
     }
 });
@@ -518,6 +537,7 @@ async function saveTo(taskId, card) {
     ghost.add(taskId);
     if (card) card.remove();
     delete activeStore[taskId];
+    videoMap.delete(taskId);
     updateCounts();
 
     await fetch(`${SRV}/api/submit-hcaptcha`, {
