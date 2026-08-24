@@ -1,5 +1,5 @@
 // ============================================================
-// server.js — 99% Precision Strict Matching Engine
+// server.js — 100% Strict Exact-Match Engine (0% Guesswork)
 // ============================================================
 'use strict';
 
@@ -30,7 +30,6 @@ const MAX_PENDING = 400;
 
 let pending   = {};
 let trained   = {};
-let bank      = {};
 let aiBrainDS = {};
 
 const bMap = new Map();
@@ -41,7 +40,6 @@ function initDB() {
         try {
             let d = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
             trained = d.trained || {};
-            rebuildBank();
         } catch(e) {}
     }
     if (fs.existsSync(AI_FILE)) {
@@ -59,90 +57,11 @@ function saveDB() {
     }, 1500);
 }
 
-function pKey(t) {
-    return 'K_' + (t.prompt || '').split('|||')[0].replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
-function rebuildBank() {
-    bank = {};
-    for (let id in trained) _addBank(trained[id]);
-}
-
-function _addBank(tr) {
-    if (!tr.media || tr.media.length <= 1) return;
-    let k = pKey(tr);
-    if (!bank[k]) bank[k] = new Set();
-    (tr.clicks || []).forEach(i => {
-        let m = tr.media[i];
-        if (m?.dhash && m.dhash !== '0000000000000000') bank[k].add(m.dhash);
-    });
-}
-
-function ham(h1, h2) {
-    if (!h1 || !h2 || h1.length !== h2.length) return 999;
-    try {
-        let x = BigInt('0b' + h1) ^ BigInt('0b' + h2), d = 0;
-        while (x > 0n) { d += Number(x & 1n); x >>= 1n; }
-        return d;
-    } catch(e) {
-        let d = 0;
-        for (let i = 0; i < h1.length; i++) if (h1[i] !== h2[i]) d++;
-        return d;
-    }
-}
-
-// 99% Exact Match Comparator
-function isSimilar99(s1, s2) {
-    if (!s1 || !s2) return false;
-    if (s1 === s2) return true;
-    let maxLen = Math.max(s1.length, s2.length);
-    if (maxLen === 0) return true;
-    let matches = 0;
-    let minLen = Math.min(s1.length, s2.length);
-    for (let i = 0; i < minLen; i++) {
-        if (s1[i] === s2[i]) matches++;
-    }
-    return (matches / maxLen) >= 0.99;
-}
-
+// 100% Exact Match Only
 function autoSolve(task) {
-    // 1. Exact / 99% Direct Trained Match
-    if (trained[task.taskId]) {
-        return { ok: true, clicks: trained[task.taskId].clicks || [] };
+    if (trained[task.taskId] && trained[task.taskId].clicks?.length) {
+        return { ok: true, clicks: trained[task.taskId].clicks };
     }
-
-    let taskPrompt = pKey(task);
-    for (let trId in trained) {
-        let tr = trained[trId];
-        if (tr.conceptKey === taskPrompt) {
-            let taskSig = task.media?.map(m => m.stableHash || m.dhash).join('');
-            let trSig = tr.media?.map(m => m.stableHash || m.dhash).join('');
-            if (isSimilar99(taskSig, trSig)) {
-                return { ok: true, clicks: tr.clicks || [] };
-            }
-        }
-    }
-
-    // 2. 99% AI Grid Concept Bank Matching (ham <= 1 strict match)
-    if (task.media && task.media.length > 1) {
-        let k = taskPrompt, b = bank[k];
-        if (b && b.size >= 5) {
-            let hits = [];
-            task.media.forEach((m, i) => {
-                if (!m.dhash || m.dhash === '0000000000000000') return;
-                for (let h of b) {
-                    if (ham(m.dhash, h) <= 1) { // 99% Image hash match
-                        hits.push(i);
-                        break;
-                    }
-                }
-            });
-            if (hits.length >= 2 && hits.length <= 5 && hits.length / task.media.length <= 0.60) {
-                return { ok: true, clicks: hits };
-            }
-        }
-    }
-
     return { ok: false };
 }
 
@@ -168,7 +87,6 @@ function getCounts() {
     return {
         pending: Object.keys(pending).length,
         trained: Object.keys(trained).length,
-        concepts: Object.keys(bank).length,
         browsers: bMap.size,
         dashboards: dSet.size
     };
@@ -187,6 +105,14 @@ wss.on('connection', (ws) => {
                 ws.taskId = msg.taskId;
                 if (!bMap.has(msg.taskId)) bMap.set(msg.taskId, new Set());
                 bMap.get(msg.taskId).add(ws);
+
+                if (trained[msg.taskId]) {
+                    ws.send(JSON.stringify({
+                        action: 'solve',
+                        taskId: msg.taskId,
+                        clicks: trained[msg.taskId].clicks
+                    }));
+                }
                 return;
             }
 
@@ -259,19 +185,9 @@ app.post('/api/submit-hcaptcha', (req, res) => {
             thumb: m.thumb || m.src || ''
         }));
 
-        let k = pKey(src);
-        if (lm.length > 1) {
-            if (!bank[k]) bank[k] = new Set();
-            clicks.forEach(i => {
-                let m = lm[i];
-                if (m?.dhash && m.dhash !== '0000000000000000') bank[k].add(m.dhash);
-            });
-        }
-
         trained[taskId] = {
             id: taskId,
             prompt: src.prompt,
-            conceptKey: k,
             media: lm,
             clicks,
             trainedAt: new Date().toISOString()
@@ -305,7 +221,6 @@ app.get('/api/counts', (req, res) => res.json(getCounts()));
 app.delete('/api/delete-hcaptcha/:id', (req, res) => {
     delete pending[req.params.id];
     delete trained[req.params.id];
-    rebuildBank();
     saveDB();
     pushDash('task_deleted', { taskId: req.params.id });
     pushDash('counts', getCounts());
@@ -335,5 +250,5 @@ app.get('/', (req, res) => {
 initDB();
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`🚀 99% Precision Server live on port ${PORT}`);
+    console.log(`🚀 100% Exact Matching Server online on port ${PORT}`);
 });
