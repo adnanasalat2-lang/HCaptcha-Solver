@@ -1,457 +1,521 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>hCaptcha Master Pro</title>
+<title>hCaptcha Master Pro ⚡</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
 <style>
-*{box-sizing:border-box}
-body{background:#121212;color:#fff;font-family:Arial,sans-serif;margin:0;padding:16px}
-.hdr{background:#1e1e1e;padding:12px 16px;border-bottom:3px solid #00ff88;margin-bottom:16px;position:sticky;top:0;z-index:100;display:flex;flex-direction:column;gap:10px}
-.hdr-top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
-h1{margin:0;font-size:18px;color:#00ff88}
-.tabs{display:flex;gap:8px}
-.tb{background:#333;color:#ccc;border:2px solid #444;padding:8px 16px;font-size:14px;font-weight:bold;cursor:pointer;border-radius:4px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#111;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden;padding:8px;gap:8px}
+.hdr{background:#1a1a1a;padding:8px 12px;border-bottom:2px solid #00ff88;display:flex;justify-content:space-between;align-items:center;border-radius:4px;flex-shrink:0}
+.hdr h1{font-size:15px;color:#00ff88}
+.hdr-left{display:flex;align-items:center;gap:10px}
+.tabs{display:flex;gap:4px}
+.tb{background:#222;color:#888;border:1px solid #333;padding:5px 10px;font-size:12px;font-weight:bold;cursor:pointer;border-radius:4px}
 .tb.on{background:#00ff88;color:#000;border-color:#00ff88}
-.cnt{background:#000;color:#fff;padding:1px 7px;border-radius:10px;margin-left:5px;font-size:12px}
-.bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.pill{font-size:11px;font-weight:bold;padding:3px 9px;border-radius:20px;background:#1a1a1a;border:1px solid #444;transition:all .3s}
+.cnt{background:#000;color:#fff;padding:1px 5px;border-radius:6px;font-size:11px;margin-left:3px}
+.bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.pill{font-size:11px;font-weight:bold;padding:3px 8px;border-radius:4px;background:#1a1a1a;border:1px solid #444}
 .pill.ok{border-color:#00ff88;color:#00ff88}
 .pill.warn{border-color:#ffaa00;color:#ffaa00}
-.pill.err{border-color:#ff4444;color:#ff4444}
-.tog{padding:5px 12px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:bold;border:2px solid #555;background:#333;color:#888;transition:all .2s}
+.tog{padding:4px 8px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:bold;border:1px solid #444;background:#222;color:#888}
 .tog.on{background:#00ff88;color:#000;border-color:#00ff88}
-.wbadge{background:#1a3a2a;border:1px solid #00ff88;color:#00ff88;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:bold;cursor:pointer}
-.srch input{width:100%;padding:10px;background:#222;border:1px solid #444;color:#00ff88;border-radius:4px;font-size:14px;font-weight:bold;outline:none}
-.srch input::placeholder{color:#666;font-weight:normal}
-.grid{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-start}
-.card{background:#1e1e1e;min-width:460px;flex:1;max-width:640px;padding:14px;border:1px solid #333;border-radius:6px;transition:border-color .2s}
-.card.ai-on{border-color:#ff00ff;box-shadow:0 0 8px rgba(255,0,255,.3)}
-.card.claimed{opacity:.4;pointer-events:none}
-.chead{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px}
-.cid{color:#ff4444;font-family:monospace;font-size:14px;font-weight:bold}
-.cbadge{font-size:10px;padding:2px 6px;border-radius:3px;background:#1a1a1a;color:#888;border:1px solid #444}
-.cbadge.mine{background:#002200;color:#00ff88;border-color:#00ff88}
-.pcon{display:flex;align-items:center;gap:9px;margin-bottom:11px;background:#222;padding:7px;border-radius:5px;border:1px solid #333}
-.ewrap{flex-shrink:0;width:52px;height:52px}
-.eimg{width:52px;height:52px;object-fit:cover;border-radius:4px;border:1px solid #555;display:block}
-.eph{width:52px;height:52px;border-radius:4px;background:#2a2a2a;border:1px dashed #555;display:flex;align-items:center;justify-content:center;font-size:18px}
-.prompt{color:#fff;font-size:13px;font-weight:bold;margin:0;line-height:1.4;flex:1}
+.btn-del-brain{background:#2a1111;color:#ff5555;border:1px solid #552222;padding:4px 8px;border-radius:4px;font-size:11px;font-weight:bold;cursor:pointer}
+.srch input{padding:4px 8px;background:#1a1a1a;border:1px solid #333;color:#00ff88;border-radius:4px;font-size:12px;outline:none;width:120px}
+.workspace{display:flex;gap:8px;flex:1;min-height:0}
+.col{flex:1;display:flex;flex-direction:column;background:#141414;border:1px solid #222;border-radius:4px;overflow:hidden}
+.col-hdr{padding:6px 10px;background:#1a1a1a;border-bottom:1px solid #2c2c2c;display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:bold}
+.task-list{flex:1;overflow-y:auto;padding:6px;display:flex;flex-direction:column;gap:6px}
+.card{background:#181818;border:1px solid #2c2c2c;border-radius:4px;padding:8px}
+.card.ai-on{border-color:#ff00ff;box-shadow:0 0 6px rgba(255,0,255,0.3)}
+.chead{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.cid{color:#ff5555;font-family:monospace;font-size:12px;font-weight:bold}
+.pcon{display:flex;align-items:center;gap:6px;margin-bottom:6px;background:#202020;padding:5px;border-radius:4px}
+.ewrap{flex-shrink:0;width:38px;height:38px}
+.eimg{width:38px;height:38px;object-fit:cover;border-radius:3px;border:1px solid #444;display:block}
+.eph{width:38px;height:38px;border-radius:3px;background:#252525;border:1px dashed #444;display:flex;align-items:center;justify-content:center;font-size:14px}
+.prompt{color:#fff;font-size:12px;font-weight:bold;line-height:1.2;flex:1}
 .ig{display:grid;grid-template-columns:repeat(3,1fr);gap:3px}
-.ig img{width:100%;height:135px;object-fit:cover;cursor:pointer;border:4px solid transparent;background:#222;transition:border-color .15s}
-.ig img.sel{border-color:#00ff88;opacity:.75}
-.ig img.aip{border-color:#ff00ff}
-@keyframes sh{0%{background-position:200% 0}100%{background-position:-200% 0}}
-.ig img:not([src]),.ig img[src=""]{background:linear-gradient(90deg,#1a1a1a 25%,#2d2d2d 50%,#1a1a1a 75%);background-size:200% 100%;animation:sh 1.2s infinite}
-.tg{display:grid;grid-template-columns:repeat(3,1fr);gap:3px}
-.tg img{width:100%;height:95px;object-fit:cover;border:3px solid #333;background:#222}
-.tg img.ck{border-color:#00ff88}
-.tg img.rp{border-color:#ff8800;cursor:pointer}
-.sbox{position:relative;width:100%;cursor:crosshair;display:flex;justify-content:center;background:#000;border-radius:4px;border:2px solid #444;overflow:hidden}
-.sbox img{width:100%;height:auto;min-height:420px;max-height:580px;object-fit:contain;display:block}
-.dot{position:absolute;width:16px;height:16px;background:#00ff88;border:2px solid #000;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none}
-.noimg{background:#111;color:#888;padding:18px;text-align:center;border-radius:4px;border:1px dashed #444;font-size:12px}
-.acts{display:flex;gap:7px;margin-top:11px;flex-wrap:wrap}
-.btn{flex:1;padding:11px;border:none;font-weight:bold;cursor:pointer;color:#fff;font-size:13px;border-radius:4px;transition:opacity .2s}
+.ig img{width:100%;height:95px;object-fit:cover;cursor:pointer;border:2px solid transparent;background:#222;border-radius:3px}
+.ig img.sel{border-color:#00ff88;opacity:0.8}
+.ig img.aip{border-color:#ff00ff!important;opacity:0.9}
+.sbox{position:relative;width:100%;cursor:crosshair;display:flex;justify-content:center;background:#000;border-radius:4px;border:1px solid #333;overflow:hidden}
+.sbox img{width:100%;height:auto;min-height:300px;max-height:400px;object-fit:contain;display:block}
+.dot{position:absolute;width:12px;height:12px;background:#00ff88;border:2px solid #000;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none}
+.acts{display:flex;gap:4px;margin-top:6px}
+.btn{flex:1;padding:6px;border:none;font-weight:bold;cursor:pointer;color:#fff;font-size:11px;border-radius:3px}
 .bsv{background:#00ff88;color:#000}
-.brs{background:#555}
-.bdl{background:#ff4444;flex:.3}
+.brs{background:#333}
+.bdl{background:#ee4444;flex:0.3}
 .brt{background:#ff8800;color:#000}
-.bcf{background:#ff8800;color:#000}
-.bcn{background:#555}
-.bdis{background:#222;color:#555;cursor:not-allowed}
-.rhint{font-size:11px;color:#ff8800;margin-top:5px;padding:5px 9px;background:#1a0f00;border-radius:4px}
-.pag{display:flex;align-items:center;gap:7px;justify-content:center;margin:12px 0;flex-wrap:wrap}
-.pb{background:#333;color:#ccc;border:1px solid #555;padding:6px 12px;border-radius:4px;cursor:pointer;font-size:12px}
-.pb.ap{background:#00ff88;color:#000;border-color:#00ff88;font-weight:bold}
-.pb:disabled{opacity:.4;cursor:not-allowed}
-.pi{color:#666;font-size:11px}
-.empty{text-align:center;padding:50px;color:#555;font-size:16px;width:100%}
-@keyframes fn{0%{border-color:#00ff88;box-shadow:0 0 12px #00ff88}100%{border-color:#333;box-shadow:none}}
-.card.nf{animation:fn 1.5s ease-out}
+.bcf{background:#00ff88;color:#000}
+.bcn{background:#444}
+.rhint{font-size:10px;color:#ff8800;margin-bottom:4px;padding:3px;background:#291705;border-radius:3px;font-weight:bold;text-align:center}
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-thumb{background:#333;border-radius:2px}
 </style>
 </head>
 <body>
+
 <div class="hdr">
-  <div class="hdr-top">
-    <h1>hCaptcha Master Pro 🤖</h1>
+  <div class="hdr-left">
+    <h1>⚡ hCaptcha Master Pro</h1>
     <div class="tabs">
       <button class="tb on" id="bt-pending" onclick="setTab('pending')">Pending <span class="cnt" id="cp">0</span></button>
       <button class="tb" id="bt-trained" onclick="setTab('trained')">Trained <span class="cnt" id="ct">0</span></button>
     </div>
   </div>
   <div class="bar">
-    <span class="pill warn" id="wsP">🔌 Connecting...</span>
+    <span class="pill warn" id="wsP">🔌 Live</span>
     <span class="pill warn" id="aiP">🧠 AI Loading...</span>
-    <button id="bat" class="tog on" onclick="toggleAT()">🧠 Auto Train: ON</button>
-    <button id="bas" class="tog on" onclick="toggleAS()">💾 Auto Save: ON</button>
-    <span class="wbadge" id="wb" onclick="chgW()">👤 W-?</span>
-    <span class="pi" id="oc"></span>
+    <button id="bat" class="tog on" onclick="toggleAT()">🧠 Auto: ON</button>
+    <button id="bas" class="tog on" onclick="toggleAS()">💾 Save: ON</button>
+    <button class="btn-del-brain" onclick="resetBrain()">🧹 Reset AI</button>
+    <div class="srch"><input type="text" id="si" oninput="onSrch()" placeholder="🔍 Search..."/></div>
   </div>
-  <div class="srch"><input type="text" id="si" oninput="onSrch()" placeholder="🔍 Task ID ya prompt search..."/></div>
 </div>
-<div id="pt" class="pag" style="display:none"></div>
-<div class="grid" id="ta"></div>
-<div id="pb2" class="pag" style="display:none"></div>
+
+<div class="workspace" id="pendingView">
+  <div class="col">
+    <div class="col-hdr"><span style="color:#00ff88">🤖 AI Grid Stream</span><span id="c-grid" class="cnt">0</span></div>
+    <div class="task-list" id="gridArea"></div>
+  </div>
+  <div class="col">
+    <div class="col-hdr"><span style="color:#ffaa00">👷 Manual Stream</span><span id="c-manual" class="cnt">0</span></div>
+    <div class="task-list" id="manualArea"></div>
+  </div>
+</div>
+
+<div class="workspace" id="trainedView" style="display:none">
+  <div class="col">
+    <div class="col-hdr"><span style="color:#00ff88">🗂️ Trained Database</span><span id="c-trained-total" class="cnt">0</span></div>
+    <div class="task-list" id="trainedArea" style="flex-direction:row;flex-wrap:wrap;align-content:flex-start"></div>
+  </div>
+</div>
 
 <script>
-const SRV = location.protocol==='file:'
-    ? (localStorage.getItem('hcm_srv')||'https://h-production-2c01.up.railway.app')
-    : location.origin;
-const WS_URL = SRV.replace(/^http/,'ws') + '/ws';
-const PG = 20;
+const SRV = location.origin;
+const WS_URL = SRV.replace(/^http/,'ws');
 
-let WID = localStorage.getItem('hcm_wid');
-if (!WID) { WID='W-'+Math.random().toString(36).slice(2,5).toUpperCase(); localStorage.setItem('hcm_wid',WID); }
-document.getElementById('wb').textContent = '👤 '+WID;
-function chgW(){ let n=prompt('Worker ID:',WID); if(n?.trim()){WID=n.trim().toUpperCase();localStorage.setItem('hcm_wid',WID);document.getElementById('wb').textContent='👤 '+WID;} }
-
-const ta = document.getElementById('ta');
-let tab='pending', pg=0, tpg=1, ttl=0;
-let pcache={}, store={}, vtasks=[], ghost=new Set(), claimed=new Set(), sq='';
-let atOn=true, asOn=true, rts={}, fetching=false;
+let currentTab = 'pending';
+let activeStore = {}, ghost = new Set(), rts = {};
+let atOn = true, asOn = true, sq = '';
 let autoSaveTimers = {};
 
-let bc=null; try{bc=new BroadcastChannel('hcm_v2');}catch(e){}
-if(bc) bc.onmessage = ev => {
-    let {type,taskId,workerId}=ev.data||{};
-    if(type==='claimed'&&workerId!==WID){
-        let c=document.querySelector(`.card[data-id="${taskId}"]`);
-        if(c&&tab==='pending'){c.classList.add('claimed');let b=c.querySelector('.cbadge');if(b){b.textContent=workerId;b.className='cbadge';}}
-    }
-    if(type==='saved'||type==='deleted'){
-        delete pcache[taskId]; ghost.add(taskId);
-        document.querySelector(`.card[data-id="${taskId}"]`)?.remove();
-        delete store[taskId];
-    }
-};
-function bcs(d){ try{bc?.postMessage(d);}catch(e){} }
+// ── In-Browser WebGL TFJS AI ──
+let aiModel = null, knn = null, aiReady = false;
 
-let ws=null, wrt=null, wpt=null;
-function wsConn(){
-    if(ws&&ws.readyState<2) return;
-    try{ ws=new WebSocket(WS_URL); }catch(e){ wsRec(); return; }
-    ws.onopen = () => {
-        setPill('wsP','ok','🟢 Live');
-        clearTimeout(wrt);
-        ws.send(JSON.stringify({action:'dashboard'}));
-        wpt = setInterval(()=>{ try{ws.send(JSON.stringify({type:'ping'}));}catch(e){} }, 25000);
-    };
-    ws.onmessage = ev => { try{ handleWS(JSON.parse(ev.data)); }catch(e){} };
-    ws.onclose = ws.onerror = () => {
-        setPill('wsP','warn','🔴 Reconnecting...');
-        clearInterval(wpt); wsRec();
-    };
-}
-function wsRec(){ clearTimeout(wrt); wrt=setTimeout(wsConn,3000); }
-function handleWS(m){
-    if(m.type==='counts'){
-        document.getElementById('cp').innerText = m.data.pending||0;
-        document.getElementById('ct').innerText = m.data.trained||0;
-        if(m.data.browsers!==undefined) document.getElementById('oc').textContent = `🌐 ${m.data.browsers} browsers | 👥 ${m.data.dashboards} dashboards`;
-    }
-    if(m.type==='new_pending' && !ghost.has(m.data.id) && !pcache[m.data.id]){
-        pcache[m.data.id] = m.data;
-        if(tab==='pending') addCard(m.data.id, m.data, true);
-    }
-    if(m.type==='task_solved'||m.type==='task_deleted'){
-        let tid=m.data.taskId; ghost.add(tid); delete pcache[tid];
-        document.querySelector(`.card[data-id="${tid}"]`)?.remove();
-        delete store[tid];
+async function initAI() {
+    try {
+        try { await tf.setBackend('webgl'); } catch(e) { await tf.setBackend('cpu'); }
+        await tf.ready();
+        aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
+        knn = knnClassifier.create();
+        loadLocalBrain();
+        aiReady = true;
+        updateAIStatus();
+        if (atOn) reeval();
+    } catch(e) {
+        document.getElementById('aiP').textContent = '⚠️ AI Error';
     }
 }
-function setPill(id,cls,txt){ let e=document.getElementById(id); e.className='pill '+cls; e.textContent=txt; }
 
-let aiW=null, aiReady=false, aiCbs=new Map();
-function initAI(){
-    try{
-        aiW = new SharedWorker('ai-worker.js',{name:'hcm-ai'});
-        aiW.port.start();
-        aiW.port.onmessage  = ev => handleAI(ev.data);
-        aiW.port.onerror    = ()  => setPill('aiP','err','⚠️ AI Error');
-        aiW.port.postMessage({type:'get_status'});
-    }catch(e){ setPill('aiP','err','⚠️ SharedWorker N/A'); }
+function updateAIStatus() {
+    if (!knn) return;
+    let ds = knn.getClassExampleCount();
+    let concepts = Object.keys(ds).filter(k => !k.startsWith('neg_')).length;
+    let el = document.getElementById('aiP');
+    el.textContent = `🤖 AI Ready ✅ (${concepts} concepts)`;
+    el.className = 'pill ok';
 }
-function handleAI(m){
-    if(m.type==='status'){ aiReady=m.ready; setPill('aiP',m.ready?'ok':'warn',m.text); if(m.ready&&atOn) reeval(); }
-    if(m.type==='predict_result'){ let cb=aiCbs.get(m.taskId); if(cb){cb(m.clicks||[]);aiCbs.delete(m.taskId);} }
-    if(m.type==='trained'&&atOn) reeval();
+
+function cleanLabel(raw) {
+    return (raw || '').split('|||')[0].replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
 }
-function aiTrain(task,wrong){ if(!aiW)return; aiW.port.postMessage({type:'train',task,wrongIndices:wrong||[]}); }
-function aiPredict(task){
-    return new Promise(r=>{
-        if(!aiW||!aiReady) return r([]);
-        aiCbs.set(task.id,r);
-        aiW.port.postMessage({type:'predict',task});
-        setTimeout(()=>{ if(aiCbs.has(task.id)){aiCbs.delete(task.id);r([]);} },8000);
+
+function loadLocalBrain() {
+    try {
+        let ser = localStorage.getItem('hcm_brain_v2');
+        if (!ser) return;
+        let data = JSON.parse(ser);
+        let ds = {};
+        for (let k in data) ds[k] = tf.tensor(data[k].data, data[k].shape);
+        knn.setClassifierDataset(ds);
+    } catch(e) {}
+}
+
+function saveLocalBrain() {
+    if (!knn) return;
+    try {
+        let ds = knn.getClassifierDataset();
+        let ser = {};
+        for (let k in ds) ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape };
+        localStorage.setItem('hcm_brain_v2', JSON.stringify(ser));
+        updateAIStatus();
+    } catch(e) {}
+}
+
+function resetBrain() {
+    if (!confirm("AI Brain reset karein?")) return;
+    localStorage.removeItem('hcm_brain_v2');
+    if (knn) knn.clearAllClasses();
+    location.reload();
+}
+
+function loadImg(src) {
+    return new Promise(res => {
+        if (!src) return res(null);
+        let img = new Image();
+        if (!src.startsWith('data:')) img.crossOrigin = 'anonymous';
+        img.onload = () => res(img);
+        img.onerror = () => res(null);
+        img.src = src;
+        setTimeout(() => res(img.complete && img.naturalWidth > 0 ? img : null), 1200);
     });
 }
-function toggleAT(){ atOn=!atOn; let b=document.getElementById('bat'); b.className='tog'+(atOn?' on':''); b.textContent='🧠 Auto Train: '+(atOn?'ON':'OFF'); if(atOn&&aiReady) reeval(); }
-function toggleAS(){ asOn=!asOn; let b=document.getElementById('bas'); b.className='tog'+(asOn?' on':''); b.textContent='💾 Auto Save: '+(asOn?'ON':'OFF'); }
 
-async function reeval(){
-    for(let id in store){
-        let t=store[id];
-        if(tab==='pending' && t.type==='grid' && !t.clicks.length) {
+async function trainTask(task, wrongIndices = []) {
+    if (!aiReady || task.type !== 'grid') return;
+    let pText = cleanLabel(task.prompt);
+    let negLabel = 'neg_' + pText;
+
+    for (let m of (task.media || [])) {
+        let src = m.thumb || m.src;
+        let img = await loadImg(src);
+        if (!img) continue;
+
+        try {
+            tf.tidy(() => {
+                let feat = aiModel.infer(img, true);
+                let isCorrect = (task.clicks || []).includes(m.index);
+                let isWrong = wrongIndices.includes(m.index);
+
+                if (isCorrect) {
+                    for (let i = 0; i < 4; i++) knn.addExample(feat, pText);
+                } else if (isWrong) {
+                    for (let i = 0; i < 6; i++) knn.addExample(feat, negLabel);
+                } else {
+                    knn.addExample(feat, negLabel);
+                }
+            });
+            await tf.nextFrame();
+        } catch(e) {}
+    }
+    saveLocalBrain();
+}
+
+async function predictTask(task) {
+    if (!aiReady || task.type !== 'grid') return [];
+    let pText = cleanLabel(task.prompt);
+    let dataset = knn.getClassExampleCount();
+
+    if (!dataset[pText]) {
+        let keys = Object.keys(dataset).filter(k => !k.startsWith('neg_'));
+        let matched = keys.find(k => k === pText || k.includes(pText) || pText.includes(k));
+        if (matched) pText = matched;
+        else return [];
+    }
+
+    let predicted = [];
+    for (let m of (task.media || [])) {
+        let src = m.thumb || m.src;
+        let img = await loadImg(src);
+        if (!img) continue;
+
+        try {
+            let res = null;
+            tf.tidy(() => {
+                let feat = aiModel.infer(img, true);
+                res = knn.predictClass(feat);
+            });
+            let r = await res;
+            let conf = r.confidences[pText] || 0;
+            let negConf = r.confidences['neg_' + pText] || 0;
+
+            if (r.label === pText && conf >= 0.40 && negConf < 0.45) {
+                predicted.push(m.index);
+            }
+            await tf.nextFrame();
+        } catch(e) {}
+    }
+    return predicted;
+}
+
+async function reeval() {
+    for (let id in activeStore) {
+        let t = activeStore[id];
+        if (currentTab === 'pending' && t.type === 'grid' && (!t.clicks || !t.clicks.length)) {
             await applyAI(t);
         }
     }
 }
 
-async function applyAI(task){
-    let clicks = await aiPredict(task);
-    if(!clicks.length || clicks.length > 6) return;
+async function applyAI(task) {
+    let clicks = await predictTask(task);
+    if (!clicks.length || clicks.length > 6) return;
     task.clicks = clicks;
+
     let card = document.querySelector(`.card[data-id="${task.id}"]`);
-    if(!card) return;
+    if (!card) return;
     card.classList.add('ai-on');
     clicks.forEach(idx => {
         let img = card.querySelector(`.gi[data-index="${idx}"]`);
-        if(img){ img.classList.remove('sel'); img.classList.add('aip'); }
+        if (img) { img.classList.remove('sel'); img.classList.add('aip'); }
     });
 
-    if(asOn){
+    if (asOn) {
         let btn = card.querySelector('.bsv');
-        if(btn){ btn.style.background='#ff00ff'; btn.textContent='🤖 Saving...'; }
-        if(autoSaveTimers[task.id]) clearTimeout(autoSaveTimers[task.id]);
+        if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Auto Saving...'; }
+        if (autoSaveTimers[task.id]) clearTimeout(autoSaveTimers[task.id]);
         autoSaveTimers[task.id] = setTimeout(() => {
-            saveTo(task.id, btn, card);
-        }, 2200);
+            saveTo(task.id, card);
+        }, 1800);
     }
 }
 
-function startRT(tid){
-    let t=store[tid]; if(!t) return;
-    let card=document.querySelector(`.card[data-id="${tid}"]`); if(!card) return;
-    rts[tid]={old:[...(t.clicks||[])],nw:[]};
-    card.querySelectorAll('.tg img').forEach(img=>{
-        img.classList.add('rp');
-        img.onclick=()=>{
-            let idx=parseInt(img.dataset.index),st=rts[tid];
-            if(st.nw.includes(idx)){st.nw=st.nw.filter(x=>x!==idx);img.classList.remove('ck');}
-            else{st.nw.push(idx);img.classList.add('ck');}
-        };
-    });
-    let h=document.createElement('div'); h.className='rhint'; h.id='rh-'+tid; h.textContent='🟠 Sahi images click karo → Confirm dabao';
-    card.querySelector('.acts').before(h);
-    card.querySelector('.acts').innerHTML=`<button class="btn bcf" onclick="cfRT('${tid}')">✅ Confirm</button><button class="btn bcn" onclick="cnRT('${tid}')">❌ Cancel</button>`;
-}
-async function cfRT(tid){
-    let t=store[tid],st=rts[tid]; if(!t||!st) return;
-    let wrong=(st.old||[]).filter(i=>!st.nw.includes(i)); t.clicks=st.nw;
-    let card=document.querySelector(`.card[data-id="${tid}"]`);
-    if(card){let h=card.querySelector('#rh-'+tid);if(h)h.textContent='🧠 AI seekh raha hai...';}
-    aiTrain(t,wrong);
-    await fetch(`${SRV}/api/submit-hcaptcha`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({taskId:tid,clicks:st.nw})}).catch(()=>{});
-    delete rts[tid];
-    if(card){
-        let h=card.querySelector('#rh-'+tid);if(h)h.remove();
-        card.querySelector('.acts').innerHTML=`<button class="btn bsv">Update</button><button class="btn brt" onclick="startRT('${tid}')">🔧 Retrain</button><button class="btn bdl">❌</button>`;
-    }
-}
-function cnRT(tid){
-    delete rts[tid]; let card=document.querySelector(`.card[data-id="${tid}"]`); if(!card) return;
-    let h=card.querySelector('#rh-'+tid); if(h) h.remove();
-    card.querySelectorAll('.tg img').forEach(img=>{img.classList.remove('rp');img.onclick=null;});
-    card.querySelector('.acts').innerHTML=`<button class="btn bsv">Update</button><button class="btn brt" onclick="startRT('${tid}')">🔧 Retrain</button><button class="btn bdl">❌</button>`;
+// ── WebSocket Live Push ──
+let ws = null;
+function wsConn() {
+    if (ws && ws.readyState < 2) return;
+    try { ws = new WebSocket(WS_URL); } catch(e) { setTimeout(wsConn, 3000); return; }
+    ws.onopen = () => {
+        document.getElementById('wsP').className = 'pill ok';
+        ws.send(JSON.stringify({ action: 'dashboard' }));
+    };
+    ws.onmessage = ev => {
+        try {
+            let m = JSON.parse(ev.data);
+            if (m.type === 'counts') {
+                document.getElementById('cp').innerText = m.data.pending || 0;
+                document.getElementById('ct').innerText = m.data.trained || 0;
+                document.getElementById('c-trained-total').innerText = m.data.trained || 0;
+            }
+            if (m.type === 'new_pending' && !ghost.has(m.data.id) && !activeStore[m.data.id]) {
+                addCard(m.data.id, m.data);
+            }
+            if (m.type === 'task_solved' || m.type === 'task_deleted') {
+                let tid = m.data.taskId;
+                ghost.add(tid);
+                document.querySelector(`.card[data-id="${tid}"]`)?.remove();
+                delete activeStore[tid];
+            }
+        } catch(e) {}
+    };
+    ws.onclose = () => {
+        document.getElementById('wsP').className = 'pill warn';
+        setTimeout(wsConn, 3000);
+    };
 }
 
-async function fetchPending(){
-    if(fetching) return; fetching=true;
-    try{
-        let r=await fetch(`${SRV}/api/tasks?tab=pending&page=0&size=200&t=${Date.now()}`,{cache:'no-store'});
-        if(r.ok){ let d=await r.json(); pcache={}; for(let id in(d.tasks||{})) if(!ghost.has(id)) pcache[id]=d.tasks[id]; renderPending(); document.getElementById('cp').innerText=Object.keys(pcache).length; }
-    }catch(e){}
-    fetching=false;
-}
-async function fetchTrained(page){
-    if(fetching) return; fetching=true;
-    try{
-        let r=await fetch(`${SRV}/api/tasks?tab=trained&page=${page}&size=${PG}&t=${Date.now()}`,{cache:'no-store'});
-        if(r.ok){ let d=await r.json(); pg=d.page||0; tpg=d.pages||1; ttl=d.total||0; document.getElementById('ct').innerText=ttl; renderTrained(d.tasks||{}); renderPag(); }
-    }catch(e){}
-    fetching=false;
+// ── UI Rendering ──
+const gridArea = document.getElementById('gridArea');
+const manualArea = document.getElementById('manualArea');
+const trainedArea = document.getElementById('trainedArea');
+
+async function fetchPending() {
+    try {
+        let r = await fetch(`${SRV}/api/tasks?tab=pending&page=0&size=200&t=${Date.now()}`);
+        if (r.ok) {
+            let d = await r.json();
+            gridArea.innerHTML = ''; manualArea.innerHTML = ''; activeStore = {};
+            let tasks = d.tasks || {};
+            for (let id in tasks) if (!ghost.has(id)) addCard(id, tasks[id]);
+        }
+    } catch(e) {}
 }
 
-function renderPending(){
-    ta.innerHTML=''; store={}; vtasks=[];
-    let frag=document.createDocumentFragment(), q=sq.toLowerCase(), cnt=0;
-    for(let id in pcache){
-        if(ghost.has(id)) continue;
-        if(q&&!id.includes(q)&&!(pcache[id].prompt||'').toLowerCase().includes(q)) continue;
-        let td=pcache[id], m=td.media||[], isG=m.length>1;
-        store[id]={id,clicks:[],type:isG?'grid':'coord',media:m,prompt:td.prompt||''};
-        let card=mkCard(store[id]); if(card){frag.appendChild(card);cnt++;}
-        if(aiReady&&atOn&&isG) setTimeout(() => applyAI(store[id]), 400);
-    }
-    ta.appendChild(frag);
-    if(!cnt) ta.innerHTML='<div class="empty">✅ Koi pending task nahi!</div>';
-    hidePag();
-}
-function addCard(id,td,flash=false){
-    if(ghost.has(id)||store[id]||tab!=='pending') return;
-    let q=sq.toLowerCase();
-    if(q&&!id.includes(q)&&!(td.prompt||'').toLowerCase().includes(q)) return;
-    let m=td.media||[], isG=m.length>1;
-    store[id]={id,clicks:[],type:isG?'grid':'coord',media:m,prompt:td.prompt||''};
-    let card=mkCard(store[id]); if(!card) return;
-    if(flash) card.classList.add('nf');
-    let es=ta.querySelector('.empty'); if(es) es.remove();
-    ta.prepend(card);
-    if(aiReady&&atOn&&isG) setTimeout(() => applyAI(store[id]), 400);
-}
-function renderTrained(tasks){
-    ta.innerHTML=''; store={}; vtasks=[];
-    let frag=document.createDocumentFragment(), cnt=0;
-    for(let id in tasks){
-        if(ghost.has(id)) continue;
-        let td=tasks[id], m=td.media||[], c=td.clicks||[], isG=m.length>1;
-        store[id]={id,clicks:c,type:isG?'grid':'coord',media:m,prompt:td.prompt||''};
-        let card=mkCard(store[id]); if(card){frag.appendChild(card);cnt++;}
-    }
-    ta.appendChild(frag);
-    if(!cnt) ta.innerHTML='<div class="empty">📭 Kuch nahi</div>';
-}
-function renderPag(){
-    if(tpg<=1){hidePag();return;}
-    let h=`<button class="pb" onclick="goPg(${pg-1})" ${pg===0?'disabled':''}>← Prev</button>`;
-    let s=Math.max(0,pg-3),e=Math.min(tpg-1,pg+3);
-    if(s>0) h+=`<button class="pb" onclick="goPg(0)">1</button><span class="pi">…</span>`;
-    for(let p=s;p<=e;p++) h+=`<button class="pb ${p===pg?'ap':''}" onclick="goPg(${p})">${p+1}</button>`;
-    if(e<tpg-1) h+=`<span class="pi">…</span><button class="pb" onclick="goPg(${tpg-1})">${tpg}</button>`;
-    h+=`<button class="pb" onclick="goPg(${pg+1})" ${pg>=tpg-1?'disabled':''}>Next →</button><span class="pi">${ttl} total</span>`;
-    ['pt','pb2'].forEach(pid=>{ let el=document.getElementById(pid); el.innerHTML=h; el.style.display='flex'; });
-}
-function hidePag(){ ['pt','pb2'].forEach(pid=>{ document.getElementById(pid).style.display='none'; }); }
-function goPg(p){ if(p<0||p>=tpg) return; window.scrollTo(0,0); fetchTrained(p); }
-
-function setTab(t){
-    tab=t; pg=0; sq='';
-    document.getElementById('si').value='';
-    document.querySelectorAll('.tb').forEach(b=>b.classList.remove('on'));
-    document.getElementById('bt-'+t).classList.add('on');
-    ta.innerHTML=''; store={}; vtasks=[]; hidePag();
-    t==='pending' ? renderPending() : fetchTrained(0);
-}
-let _st=null;
-function onSrch(){
-    sq=document.getElementById('si').value.trim();
-    clearTimeout(_st); _st=setTimeout(()=>{
-        if(tab==='pending') renderPending();
-        else document.querySelectorAll('.card').forEach(c=>{
-            let q=sq.toLowerCase().replace('#','');
-            c.style.display=(!q||c.dataset.id.includes(q)||(c.dataset.prompt||'').includes(q))?'':'none';
-        });
-    },300);
+async function fetchTrained() {
+    try {
+        let r = await fetch(`${SRV}/api/tasks?tab=trained&page=0&size=50&t=${Date.now()}`);
+        if (r.ok) {
+            let d = await r.json();
+            trainedArea.innerHTML = '';
+            let tasks = d.tasks || {};
+            for (let id in tasks) {
+                let td = tasks[id];
+                activeStore[id] = { id, clicks: td.clicks || [], type: td.media?.length > 1 ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '' };
+                trainedArea.appendChild(mkCard(activeStore[id], true));
+            }
+        }
+    } catch(e) {}
 }
 
-function su(u){ if(!u)return''; u=u.trim(); if(u.startsWith('data:image/'))return u; if(/^https?:\/\//.test(u))return u.replace(/"/g,'&quot;'); return''; }
-function mkCard(t){
-    let ip=tab==='pending';
-    let card=document.createElement('div');
-    card.className='card'; card.dataset.id=t.id;
-    card.dataset.prompt=(t.prompt||'').split('|||')[0].substring(0,60);
-    let pts=t.prompt.split('|||'), ex=su(pts[1]||'');
-    let exH=ex?`<img src="${ex}" class="eimg"><div class="eph" style="display:none">🖼️</div>`:`<div class="eph">🖼️</div>`;
-    let mE=!t.media.length||t.media.every(m=>!m.thumb&&!m.src&&!m.frames);
-    let mH='';
-    if(mE){ mH=`<div class="noimg">⚠️ Images nahi — Clicks: ${t.clicks.length}</div>`; }
-    else if(t.type==='grid'){
-        if(ip){ mH='<div class="ig">'; t.media.forEach(m=>{ mH+=`<img src="${m.thumb||m.src||''}" class="gi${t.clicks.includes(m.index)?' sel':''}" data-index="${m.index}" draggable="false" loading="lazy" onerror="this.style.opacity='.3'">`; }); mH+='</div>'; }
-        else{ mH='<div class="tg">'; t.media.forEach(m=>{ mH+=`<img src="${m.thumb||m.src||''}" class="${t.clicks.includes(m.index)?'ck':''}" data-index="${m.index}" loading="lazy" onerror="this.style.opacity='.2'" title="${t.clicks.includes(m.index)?'✅':'❌'}">`; }); mH+='</div>'; }
+function addCard(id, td) {
+    if (activeStore[id] || ghost.has(id)) return;
+    let m = td.media || [];
+    let isG = m.length > 1;
+    activeStore[id] = { id, clicks: [], type: isG ? 'grid' : 'coord', media: m, prompt: td.prompt || '' };
+    let card = mkCard(activeStore[id], false);
+    
+    if (isG) {
+        gridArea.prepend(card);
+        if (aiReady && atOn) setTimeout(() => applyAI(activeStore[id]), 200);
     } else {
-        let m=t.media[0], isV=m.type==='video_frames'&&m.frames?.length>0, src=isV?m.frames[0]:(m.src||'');
-        mH=`<div class="sbox"><img src="${src}" class="si${isV?' vp':''}" data-id="${t.id}" draggable="false" loading="lazy">`;
-        t.clicks.forEach(pt=>{ mH+=`<div class="dot" style="left:${pt.px}%;top:${pt.py}%"></div>`; });
-        mH+='</div>';
-        if(isV) vtasks.push({id:t.id,frames:m.frames,cur:0});
+        manualArea.prepend(card);
     }
-    let cl=claimed.has(t.id);
-    let cbH=ip?`<span class="cbadge${cl?' mine':''}" id="cb-${t.id}">${cl?WID:'---'}</span>`:'';
-    let aH=ip
-        ?`<button class="btn bsv">Save Task</button>${!mE?`<button class="btn brs">Clear</button>`:''}<button class="btn bdl">❌</button>`
-        :`${!mE?`<button class="btn bsv">Update</button><button class="btn brt" onclick="startRT('${t.id}')">🔧 Retrain</button>`:`<button class="btn bdis" disabled>No Update</button>`}<button class="btn bdl">❌</button>`;
-    card.innerHTML=`
-    <div class="chead"><span class="cid">#${t.id.substring(0,8)}</span><div style="display:flex;gap:5px;align-items:center">${cbH}${!ip?`<span style="font-size:10px;color:#666">${t.clicks.length} clicks</span>`:''}</div></div>
-    <div class="pcon"><div class="ewrap">${exH}</div><div class="prompt">${pts[0]}</div></div>
-    ${mH}<div class="acts">${aH}</div>`;
+    updateCounts();
+}
+
+function updateCounts() {
+    document.getElementById('c-grid').textContent = gridArea.children.length;
+    document.getElementById('c-manual').textContent = manualArea.children.length;
+}
+
+function mkCard(t, isTrained) {
+    let card = document.createElement('div');
+    card.className = 'card'; card.dataset.id = t.id;
+    if (isTrained) card.style.minWidth = '240px';
+
+    let pts = t.prompt.split('|||');
+    let ex = pts[1] ? `<img src="${pts[1]}" class="eimg">` : `<div class="eph">🖼️</div>`;
+
+    let mH = '';
+    if (t.type === 'grid') {
+        mH = '<div class="ig">';
+        t.media.forEach(m => {
+            let sel = t.clicks.includes(m.index) ? ' sel' : '';
+            mH += `<img src="${m.thumb || m.src || ''}" class="gi${sel}" data-index="${m.index}" draggable="false">`;
+        });
+        mH += '</div>';
+    } else {
+        let m = t.media[0] || {};
+        mH = `<div class="sbox"><img src="${m.src || m.thumb || ''}" class="si" data-id="${t.id}" draggable="false"></div>`;
+    }
+
+    let aH = isTrained
+        ? `<div class="acts" id="act-${t.id}">
+             <button class="btn brt" data-action="retrain">🔧 Retrain</button>
+             <button class="btn bdl" data-action="del-tr">❌</button>
+           </div>`
+        : `<div class="acts">
+             <button class="btn bsv" data-action="save">Save Task</button>
+             <button class="btn brs" data-action="reset">Clear</button>
+             <button class="btn bdl" data-action="del">❌</button>
+           </div>`;
+
+    card.innerHTML = `
+      <div class="chead"><span class="cid">#${t.id.substring(0,6)}</span>${isTrained ? `<span style="font-size:10px;color:#888">${t.clicks.length} clicks</span>` : ''}</div>
+      <div class="pcon"><div class="ewrap">${ex}</div><div class="prompt">${pts[0]}</div></div>
+      ${mH}${aH}`;
     return card;
 }
 
-setInterval(()=>{ vtasks.forEach(vt=>{ let el=document.querySelector(`.vp[data-id="${vt.id}"]`); if(el&&vt.frames?.length>0){vt.cur=(vt.cur+1)%vt.frames.length;el.src=vt.frames[vt.cur];} }); },200);
+// ── User Interaction ──
+document.body.addEventListener('click', async e => {
+    let card = e.target.closest('.card');
+    if (!card) return;
+    let tid = card.dataset.id;
+    let t = activeStore[tid];
+    if (!t) return;
 
-const _sv=new Set();
-ta.addEventListener('click', e => {
-    let card=e.target.closest('.card'); if(!card) return;
-    let tid=card.dataset.id, t=store[tid]; if(!t) return;
-    if(rts[tid]&&!e.target.classList.contains('bcf')&&!e.target.classList.contains('bcn')) return;
-    if(tab==='pending'&&!claimed.has(tid)){
-        claimed.add(tid); bcs({type:'claimed',taskId:tid,workerId:WID});
-        let b=document.getElementById('cb-'+tid); if(b){b.textContent=WID;b.className='cbadge mine';}
-    }
-    if(e.target.classList.contains('gi')){
-        if(autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
+    if (e.target.classList.contains('gi')) {
+        if (autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
         let btn = card.querySelector('.bsv');
-        if(btn) { btn.style.background='#00ff88'; btn.textContent='Save Task'; }
+        if (btn) { btn.style.background = '#00ff88'; btn.textContent = 'Save Task'; }
 
-        let idx=parseInt(e.target.dataset.index);
-        if(e.target.classList.contains('sel')||e.target.classList.contains('aip')){
-            e.target.classList.remove('sel','aip');
-            t.clicks=t.clicks.filter(i=>i!==idx);
+        let idx = parseInt(e.target.dataset.index);
+        if (e.target.classList.contains('sel') || e.target.classList.contains('aip') || e.target.classList.contains('retrain-pick')) {
+            e.target.classList.remove('sel', 'aip', 'retrain-pick');
+            t.clicks = t.clicks.filter(i => i !== idx);
         } else {
-            e.target.classList.add('sel');
+            e.target.classList.add(rts[tid] ? 'retrain-pick' : 'sel');
             t.clicks.push(idx);
         }
-    } else if(e.target.classList.contains('si')){
-        let r=e.target.getBoundingClientRect(), x=((e.clientX-r.left)/r.width)*100, y=((e.clientY-r.top)/r.height)*100;
-        t.clicks.push({px:x,py:y});
-        let d=document.createElement('div'); d.className='dot'; d.style.left=`${x}%`; d.style.top=`${y}%`;
-        e.target.parentElement.appendChild(d);
-    } else if(e.target.classList.contains('bsv')){ 
-        if(autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
-        saveTo(tid,e.target,card); 
     }
-    else if(e.target.classList.contains('brs')){ 
-        if(autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
-        t.clicks=[]; card.querySelectorAll('.gi').forEach(i=>i.classList.remove('sel','aip')); card.querySelectorAll('.dot').forEach(d=>d.remove()); card.classList.remove('ai-on'); 
-    }
-    else if(e.target.classList.contains('bdl')){ 
-        if(autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
-        ghost.add(tid); card.remove(); delete store[tid]; delete pcache[tid]; bcs({type:'deleted',taskId:tid,workerId:WID}); fetch(`${SRV}/api/delete-hcaptcha/${tid}`,{method:'DELETE'}).catch(()=>{}); 
+
+    let actionBtn = e.target.closest('[data-action]');
+    if (actionBtn) {
+        let act = actionBtn.dataset.action;
+        if (act === 'save') {
+            if (autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
+            saveTo(tid, card);
+        }
+        if (act === 'reset') {
+            if (autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
+            t.clicks = [];
+            card.querySelectorAll('.gi').forEach(i => i.classList.remove('sel', 'aip'));
+            card.classList.remove('ai-on');
+        }
+        if (act === 'del') {
+            ghost.add(tid); card.remove(); delete activeStore[tid]; updateCounts();
+            fetch(`${SRV}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).catch(()=>{});
+        }
+        if (act === 'retrain') {
+            rts[tid] = { old: [...t.clicks] };
+            t.clicks = [];
+            card.querySelectorAll('.gi').forEach(i => i.classList.remove('sel','aip'));
+            let bnr = document.createElement('div'); bnr.className = 'rhint'; bnr.id = `rh-${tid}`;
+            bnr.textContent = '🟠 Sahi images select karein phir Confirm dabayein';
+            card.querySelector('.pcon').after(bnr);
+            document.getElementById(`act-${tid}`).innerHTML = `
+                <button class="btn bcf" data-action="confirm-rt">✅ Confirm</button>
+                <button class="btn bcn" data-action="cancel-rt">Cancel</button>`;
+        }
+        if (act === 'confirm-rt') {
+            let wrong = (rts[tid]?.old || []).filter(i => !t.clicks.includes(i));
+            if (aiReady && t.type === 'grid') await trainTask(t, wrong);
+            fetch(`${SRV}/api/submit-hcaptcha`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ taskId: tid, clicks: t.clicks })
+            }).then(() => { delete rts[tid]; fetchTrained(); });
+        }
+        if (act === 'cancel-rt') { delete rts[tid]; fetchTrained(); }
+        if (act === 'del-tr') {
+            fetch(`${SRV}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).then(() => fetchTrained());
+            card.remove(); delete activeStore[tid];
+        }
     }
 });
 
-async function saveTo(taskId,btn,card){
-    if(_sv.has(taskId)) return; _sv.add(taskId);
-    let t=store[taskId]; if(!t){_sv.delete(taskId);return;}
-    try{
-        if(aiReady&&tab==='pending'&&t.clicks.length>0){ 
-            if(btn){btn.textContent='🧠 Learning...';btn.disabled=true;} 
-            aiTrain(t); 
-            setTimeout(() => { if(atOn) reeval(); }, 500);
-        }
-        if(tab==='pending'){ 
-            ghost.add(taskId); 
-            setTimeout(()=>ghost.delete(taskId),4000); 
-            if(card)card.remove(); 
-            delete store[taskId]; 
-            delete pcache[taskId]; 
-            bcs({type:'saved',taskId,workerId:WID}); 
-        }
-        else{ 
-            if(btn){btn.textContent='Updated!';setTimeout(()=>{if(btn){btn.textContent='Update';btn.disabled=false;}},1200);} 
-        }
-        await fetch(`${SRV}/api/submit-hcaptcha`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({taskId,clicks:t.clicks})});
-    }catch(e){ 
-        if(btn){btn.textContent='❌ Retry';btn.disabled=false;} 
+async function saveTo(taskId, card) {
+    let t = activeStore[taskId];
+    if (!t || !t.clicks.length) return;
+
+    if (aiReady && t.type === 'grid') {
+        await trainTask(t);
+        setTimeout(() => { if (atOn) reeval(); }, 300);
     }
-    finally{ 
-        _sv.delete(taskId); 
+
+    ghost.add(taskId);
+    if (card) card.remove();
+    delete activeStore[taskId];
+    updateCounts();
+
+    await fetch(`${SRV}/api/submit-hcaptcha`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId, clicks: t.clicks })
+    }).catch(()=>{});
+}
+
+function setTab(t) {
+    currentTab = t;
+    document.querySelectorAll('.tb').forEach(b => b.classList.remove('on'));
+    document.getElementById('bt-' + t).classList.add('on');
+    if (t === 'pending') {
+        document.getElementById('pendingView').style.display = 'flex';
+        document.getElementById('trainedView').style.display = 'none';
+        fetchPending();
+    } else {
+        document.getElementById('pendingView').style.display = 'none';
+        document.getElementById('trainedView').style.display = 'flex';
+        fetchTrained();
     }
 }
 
-window.addEventListener('error',e=>{ if(e.target?.tagName==='IMG'&&e.target.classList.contains('eimg')){e.target.style.display='none';if(e.target.nextElementSibling)e.target.nextElementSibling.style.display='flex';} },true);
-document.addEventListener('visibilitychange',()=>{ if(!document.hidden) wsConn(); });
+function toggleAT() { atOn = !atOn; document.getElementById('bat').className = 'tog' + (atOn ? ' on' : ''); document.getElementById('bat').textContent = '🧠 Auto: ' + (atOn ? 'ON' : 'OFF'); if (atOn && aiReady) reeval(); }
+function toggleAS() { asOn = !asOn; document.getElementById('bas').className = 'tog' + (asOn ? ' on' : ''); document.getElementById('bas').textContent = '💾 Save: ' + (asOn ? 'ON' : 'OFF'); }
+
+function onSrch() {
+    let q = document.getElementById('si').value.trim().toLowerCase();
+    document.querySelectorAll('.card').forEach(c => {
+        c.style.display = (!q || c.dataset.id.includes(q)) ? '' : 'none';
+    });
+}
 
 wsConn();
 fetchPending();
