@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>hCaptcha Master Pro ⚡ (Zero-Blink Canvas Video)</title>
+<title>hCaptcha Master Pro ⚡ (Long Video & Multi-Part)</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -15,7 +15,7 @@ body{background:#0c0c0c;color:#fff;font-family:-apple-system,BlinkMacSystemFont,
 .hdr h1{font-size:15px;color:#00ff88}
 .hdr-left{display:flex;align-items:center;gap:10px}
 .tabs{display:flex;gap:4px}
-.tb{background:#222;color:#888;border:1px solid #333;padding:5px 12px;font-size:12px;font-weight:bold;cursor:pointer;border-radius:4px}
+.tb{background:#222;color:#888;border:1px solid #333;padding:5px 12px;font-size:12px;font-weight:bold;cursor:border-radius:4px;border-radius:4px}
 .tb.on{background:#00ff88;color:#000;border-color:#00ff88}
 .cnt{background:#000;color:#fff;padding:1px 6px;border-radius:6px;font-size:11px;margin-left:4px}
 .bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
@@ -112,7 +112,6 @@ let atOn = true, asOn = true, sq = '';
 let isBatchRunning = false;
 let brainTimer = null;
 
-// Continuous Background Worker
 const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 100);`], { type: 'text/javascript' });
 const bgWorker = new Worker(URL.createObjectURL(timerBlob));
 bgWorker.onmessage = () => {
@@ -328,7 +327,7 @@ function wsConn() {
     };
 }
 
-// ── Ultra-Smooth Double Buffer Frame Player (Zero Blink) ──
+// ── Smooth Canvas Loop (4.5s Video Player) ──
 let lastTick = 0;
 function animateVideos(t) {
     if (t - lastTick > 100) {
