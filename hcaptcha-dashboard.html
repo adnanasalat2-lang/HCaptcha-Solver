@@ -1,560 +1,312 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="referrer" content="no-referrer">
-<title>hCaptcha Master Pro ⚡</title>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{background:#0c0c0c;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden;padding:8px;gap:8px}
-.hdr{background:#161616;padding:8px 12px;border-bottom:2px solid #00ff88;display:flex;justify-content:space-between;align-items:center;border-radius:4px;flex-shrink:0}
-.hdr h1{font-size:15px;color:#00ff88}
-.hdr-left{display:flex;align-items:center;gap:10px}
-.tabs{display:flex;gap:4px}
-.tb{background:#222;color:#888;border:1px solid #333;padding:5px 12px;font-size:12px;font-weight:bold;cursor:pointer;border-radius:4px}
-.tb.on{background:#00ff88;color:#000;border-color:#00ff88}
-.cnt{background:#000;color:#fff;padding:1px 6px;border-radius:6px;font-size:11px;margin-left:4px}
-.bar{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
-.pill{font-size:11px;font-weight:bold;padding:4px 8px;border-radius:4px;background:#1a1a1a;border:1px solid #444}
-.pill.ok{border-color:#00ff88;color:#00ff88}
-.pill.warn{border-color:#ffaa00;color:#ffaa00}
-.tog{padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;font-weight:bold;border:1px solid #444;background:#222;color:#888}
-.tog.on{background:#00ff88;color:#000;border-color:#00ff88}
-.btn-del-brain{background:#2a1111;color:#ff5555;border:1px solid #552222;padding:4px 8px;border-radius:4px;font-size:11px;font-weight:bold;cursor:pointer}
-.srch input{padding:4px 8px;background:#1a1a1a;border:1px solid #333;color:#00ff88;border-radius:4px;font-size:12px;outline:none;width:120px}
-.workspace{display:flex;gap:8px;flex:1;min-height:0}
-.col{flex:1;display:flex;flex-direction:column;background:#131313;border:1px solid #222;border-radius:4px;overflow:hidden}
-.col-hdr{padding:6px 10px;background:#181818;border-bottom:1px solid #282828;display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:bold}
-.task-list{flex:1;overflow-y:auto;padding:6px;display:flex;flex-direction:column;gap:6px}
-.card{background:#181818;border:1px solid #282828;border-radius:4px;padding:8px;position:relative}
-.card.ai-on{border:2px solid #ff00ff!important;box-shadow:0 0 10px rgba(255,0,255,0.4)}
-.card.retrain-mode{border:2px solid #ff8800!important;background:#1c1308!important}
-.chead{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
-.cid{color:#ff5555;font-family:monospace;font-size:12px;font-weight:bold}
-.pcon{display:flex;align-items:center;gap:6px;margin-bottom:6px;background:#1e1e1e;padding:5px;border-radius:4px;border:1px solid #282828}
-.ewrap{flex-shrink:0;width:38px;height:38px}
-.eimg{width:38px;height:38px;object-fit:cover;border-radius:3px;border:1px solid #444;display:block}
-.eph{width:38px;height:38px;border-radius:3px;background:#252525;border:1px dashed #444;display:flex;align-items:center;justify-content:center;font-size:14px}
-.prompt{color:#fff;font-size:12px;font-weight:bold;line-height:1.3;flex:1}
-.ig{display:grid;grid-template-columns:repeat(3,1fr);gap:4px}
-.ig img{width:100%;height:100px;object-fit:cover;cursor:pointer;border:3px solid #222;background:#1a1a1a;border-radius:4px}
-.ig img.sel{border-color:#00ff88!important;opacity:0.85}
-.ig img.aip{border:4px solid #ff00ff!important;box-shadow:0 0 12px rgba(255,0,255,0.9)!important}
-.ig img.retrain-pick{border:4px solid #ff8800!important}
-.sbox{position:relative;width:100%;cursor:crosshair;display:flex;justify-content:center;background:#000;border-radius:4px;border:1px solid #333;overflow:hidden;user-select:none}
-.sbox img{width:100%;height:auto;min-height:280px;max-height:360px;object-fit:contain;display:block}
-.dot{position:absolute;width:18px;height:18px;background:#00ff88;border:2px solid #000;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:10;box-shadow:0 0 8px #00ff88}
-.dot.end-dot{background:#ff8800;box-shadow:0 0 8px #ff8800}
-.acts{display:flex;gap:4px;margin-top:6px}
-.btn{flex:1;padding:7px;border:none;font-weight:bold;cursor:pointer;color:#fff;font-size:11px;border-radius:3px}
-.bsv{background:#00ff88;color:#000}
-.brs{background:#333}
-.bdl{background:#ee4444;flex:0.3}
-.brt{background:#ff8800;color:#000}
-.bcf{background:#00ff88;color:#000}
-.bcn{background:#444}
-.rhint{font-size:11px;color:#ff8800;margin-bottom:4px;padding:4px;background:#291705;border:1px dashed #ff8800;border-radius:3px;font-weight:bold;text-align:center}
-::-webkit-scrollbar{width:4px}
-::-webkit-scrollbar-thumb{background:#333;border-radius:2px}
-</style>
-</head>
-<body>
+// ============================================================
+// server.js — High-Power Persistent Scale Edition
+// ============================================================
+'use strict';
 
-<div class="hdr">
-  <div class="hdr-left">
-    <h1>⚡ hCaptcha Master Pro</h1>
-    <div class="tabs">
-      <button class="tb on" id="bt-pending" onclick="setTab('pending')">Pending <span class="cnt" id="cp">0</span></button>
-      <button class="tb" id="bt-trained" onclick="setTab('trained')">Trained <span class="cnt" id="ct">0</span></button>
-    </div>
-  </div>
-  <div class="bar">
-    <span class="pill warn" id="wsP">🔌 Live</span>
-    <span class="pill warn" id="aiP">🧠 AI Loading...</span>
-    <button id="bat" class="tog on" onclick="toggleAT()">🧠 Auto: ON</button>
-    <button id="bas" class="tog on" onclick="toggleAS()">💾 Save: ON</button>
-    <button class="btn-del-brain" onclick="resetBrain()">🧹 Reset AI</button>
-    <div class="srch"><input type="text" id="si" oninput="onSrch()" placeholder="🔍 Search..."/></div>
-  </div>
-</div>
+const express = require('express');
+const http    = require('http');
+const WS      = require('ws');
+const cors    = require('cors');
+const fs      = require('fs');
+const path    = require('path');
 
-<div class="workspace" id="pendingView">
-  <div class="col">
-    <div class="col-hdr"><span style="color:#00ff88">🤖 AI Grid Stream</span><span id="c-grid" class="cnt">0</span></div>
-    <div class="task-list" id="gridArea"></div>
-  </div>
-  <div class="col">
-    <div class="col-hdr"><span style="color:#ffaa00">👷 Manual Stream</span><span id="c-manual" class="cnt">0</span></div>
-    <div class="task-list" id="manualArea"></div>
-  </div>
-</div>
+const app    = express();
+const server = http.createServer(app);
 
-<div class="workspace" id="trainedView" style="display:none">
-  <div class="col">
-    <div class="col-hdr"><span style="color:#00ff88">🗂️ Trained Database</span><span id="c-trained-total" class="cnt">0</span></div>
-    <div class="task-list" id="trainedArea" style="flex-direction:row;flex-wrap:wrap;align-content:flex-start"></div>
-  </div>
-</div>
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
 
-<script>
-const SRV = location.origin;
-const WS_URL = SRV.replace(/^http/,'ws');
-
-let currentTab = 'pending';
-let activeStore = {}, ghost = new Set(), rts = {};
-let videoMap = new Map();
-let atOn = true, asOn = true, sq = '';
-let isBatchRunning = false;
-
-// ── TFJS AI Engine ──
-let aiModel = null, knn = null, aiReady = false;
-
-async function initAI() {
-    try {
-        try { await tf.setBackend('webgl'); } catch(e) { await tf.setBackend('cpu'); }
-        await tf.ready();
-        aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
-        knn = knnClassifier.create();
-        await loadBrain();
-        aiReady = true;
-        updateAIStatus();
-        if (atOn) triggerParallelSolve();
-    } catch(e) {
-        document.getElementById('aiP').textContent = '⚠️ AI Error';
-    }
-}
-
-function updateAIStatus() {
-    if (!knn) return;
-    let ds = knn.getClassExampleCount();
-    let concepts = Object.keys(ds).filter(k => !k.startsWith('neg_')).length;
-    let el = document.getElementById('aiP');
-    el.textContent = `🤖 AI Ready ✅ (${concepts} concepts)`;
-    el.className = 'pill ok';
-}
-
-function cleanLabel(raw) {
-    return (raw || '').split('|||')[0].replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
-}
-
-async function loadBrain() {
-    try {
-        let ser = localStorage.getItem('hcm_brain_v6');
-        if (!ser) return;
-        let data = JSON.parse(ser);
-        let ds = {};
-        for (let k in data) ds[k] = tf.tensor(data[k].data, data[k].shape);
-        knn.setClassifierDataset(ds);
-    } catch(e) {}
-}
-
-function saveBrain() {
-    if (!knn) return;
-    try {
-        let ds = knn.getClassifierDataset();
-        let ser = {};
-        for (let k in ds) ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape };
-        localStorage.setItem('hcm_brain_v6', JSON.stringify(ser));
-        updateAIStatus();
-    } catch(e) {}
-}
-
-function resetBrain() {
-    if (!confirm("AI Brain reset karein?")) return;
-    localStorage.removeItem('hcm_brain_v6');
-    if (knn) knn.clearAllClasses();
-    location.reload();
-}
-
-function getSafeFeature(src) {
-    return new Promise(res => {
-        if (!src) return res(null);
-        let img = new Image();
-        img.crossOrigin = "anonymous";
-        img.onload = () => {
-            try {
-                let feat = tf.tidy(() => aiModel.infer(img, true));
-                res(feat);
-            } catch(e) { res(null); }
-        };
-        img.onerror = () => res(null);
-        img.src = src;
-        setTimeout(() => res(null), 1000);
-    });
-}
-
-async function trainTask(task, wrongIndices = []) {
-    if (!aiReady || task.type !== 'grid') return;
-    let pText = cleanLabel(task.prompt);
-    let negLabel = 'neg_' + pText;
-
-    for (let m of (task.media || [])) {
-        let src = m.thumb || m.src;
-        let feat = await getSafeFeature(src);
-        if (!feat) continue;
-
-        let isCorrect = (task.clicks || []).includes(m.index);
-        let isWrong = wrongIndices.includes(m.index);
-
-        if (isCorrect) {
-            for (let i = 0; i < 5; i++) knn.addExample(feat, pText);
-        } else if (isWrong) {
-            for (let i = 0; i < 15; i++) knn.addExample(feat, negLabel);
-        } else {
-            knn.addExample(feat, negLabel);
-        }
-        feat.dispose();
-    }
-    saveBrain();
-}
-
-async function predictTask(task) {
-    if (!aiReady || task.type !== 'grid') return [];
-    let pText = cleanLabel(task.prompt);
-    let dataset = knn.getClassExampleCount();
-
-    if (!dataset[pText]) {
-        let keys = Object.keys(dataset).filter(k => !k.startsWith('neg_'));
-        let matched = keys.find(k => k === pText || k.includes(pText) || pText.includes(k));
-        if (matched) pText = matched;
-        else return [];
-    }
-
-    let predicted = [];
-    for (let m of (task.media || [])) {
-        let src = m.thumb || m.src;
-        let feat = await getSafeFeature(src);
-        if (!feat) continue;
-
-        try {
-            let res = await knn.predictClass(feat);
-            let conf = res.confidences[pText] || 0;
-            let negConf = res.confidences['neg_' + pText] || 0;
-
-            if (res.label === pText && conf >= 0.35 && negConf < 0.48) {
-                predicted.push(m.index);
-            }
-        } catch(e) {}
-        feat.dispose();
-    }
-    return predicted;
-}
-
-async function triggerParallelSolve() {
-    if (!aiReady || !atOn || isBatchRunning) return;
-    isBatchRunning = true;
-
-    let unassigned = Object.values(activeStore).filter(t => t.type === 'grid' && (!t.clicks || !t.clicks.length) && !ghost.has(t.id));
-    const CHUNK_SIZE = 8;
-    for (let i = 0; i < unassigned.length; i += CHUNK_SIZE) {
-        if (!atOn) break;
-        let chunk = unassigned.slice(i, i + CHUNK_SIZE);
-        await Promise.all(chunk.map(async t => {
-            let clicks = await predictTask(t);
-            if (clicks.length && clicks.length <= 6) {
-                t.clicks = clicks;
-                let card = document.querySelector(`.card[data-id="${t.id}"]`);
-                if (card) {
-                    card.classList.add('ai-on');
-                    clicks.forEach(idx => {
-                        let img = card.querySelector(`.gi[data-index="${idx}"]`);
-                        if (img) { img.classList.remove('sel'); img.classList.add('aip'); }
-                    });
-                }
-                if (asOn) {
-                    setTimeout(() => saveTo(t.id, card), 60);
-                }
-            }
-        }));
-        await tf.nextFrame();
-    }
-    isBatchRunning = false;
-}
-
-setInterval(() => {
-    if (aiReady && atOn && !isBatchRunning) triggerParallelSolve();
-}, 400);
-
-// ── WebSocket Live Push ──
-let ws = null;
-function wsConn() {
-    if (ws && ws.readyState < 2) return;
-    try { ws = new WebSocket(WS_URL); } catch(e) { setTimeout(wsConn, 3000); return; }
-    ws.onopen = () => {
-        document.getElementById('wsP').className = 'pill ok';
-        document.getElementById('wsP').textContent = '🟢 Live';
-        ws.send(JSON.stringify({ action: 'dashboard' }));
-    };
-    ws.onmessage = ev => {
-        try {
-            let m = JSON.parse(ev.data);
-            if (m.type === 'counts') {
-                document.getElementById('cp').innerText = m.data.pending || 0;
-                document.getElementById('ct').innerText = m.data.trained || 0;
-                document.getElementById('c-trained-total').innerText = m.data.trained || 0;
-            }
-            if (m.type === 'new_pending' && !ghost.has(m.data.id) && !activeStore[m.data.id]) {
-                addCard(m.data.id, m.data);
-                if (aiReady && atOn) triggerParallelSolve();
-            }
-            if (m.type === 'task_solved' || m.type === 'task_deleted') {
-                let tid = m.data.taskId;
-                ghost.add(tid);
-                document.querySelector(`.card[data-id="${tid}"]`)?.remove();
-                delete activeStore[tid];
-                videoMap.delete(tid);
-                updateCounts();
-            }
-        } catch(e) {}
-    };
-    ws.onclose = () => {
-        document.getElementById('wsP').className = 'pill warn';
-        document.getElementById('wsP').textContent = '🔴 Offline';
-        setTimeout(wsConn, 3000);
-    };
-}
-
-// ── UI Rendering ──
-const gridArea = document.getElementById('gridArea');
-const manualArea = document.getElementById('manualArea');
-const trainedArea = document.getElementById('trainedArea');
-
-async function fetchPending() {
-    try {
-        let r = await fetch(`${SRV}/api/tasks?tab=pending&page=0&size=200&t=${Date.now()}`);
-        if (r.ok) {
-            let d = await r.json();
-            gridArea.innerHTML = ''; manualArea.innerHTML = ''; activeStore = {}; videoMap.clear();
-            let tasks = d.tasks || {};
-            for (let id in tasks) if (!ghost.has(id)) addCard(id, tasks[id]);
-            if (aiReady && atOn) triggerParallelSolve();
-        }
-    } catch(e) {}
-}
-
-async function fetchTrained() {
-    try {
-        let r = await fetch(`${SRV}/api/tasks?tab=trained&page=0&size=50&t=${Date.now()}`);
-        if (r.ok) {
-            let d = await r.json();
-            trainedArea.innerHTML = '';
-            let tasks = d.tasks || {};
-            for (let id in tasks) {
-                let td = tasks[id];
-                let isG = td.media?.length > 1;
-                activeStore[id] = { id, clicks: [...(td.clicks || [])], type: isG ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '' };
-                trainedArea.appendChild(mkCard(activeStore[id], true));
-            }
-        }
-    } catch(e) {}
-}
-
-function addCard(id, td) {
-    if (activeStore[id] || ghost.has(id)) return;
-    let m = td.media || [];
-    let isG = m.length > 1;
-    activeStore[id] = { id, clicks: [], type: isG ? 'grid' : 'coord', media: m, prompt: td.prompt || '' };
-    let card = mkCard(activeStore[id], false);
-    if (isG) gridArea.prepend(card);
-    else manualArea.prepend(card);
-    updateCounts();
-}
-
-function updateCounts() {
-    document.getElementById('c-grid').textContent = gridArea.children.length;
-    document.getElementById('c-manual').textContent = manualArea.children.length;
-}
-
-function mkCard(t, isTrained) {
-    let card = document.createElement('div');
-    card.className = 'card'; card.dataset.id = t.id;
-    if (isTrained) card.style.minWidth = '250px';
-
-    let pts = t.prompt.split('|||');
-    let ex = pts[1] ? `<img src="${pts[1]}" class="eimg">` : `<div class="eph">🖼️</div>`;
-
-    let mH = '';
-    if (t.type === 'grid') {
-        mH = '<div class="ig">';
-        t.media.forEach(m => {
-            let sel = t.clicks.includes(m.index) ? ' sel' : '';
-            mH += `<img src="${m.thumb || m.src || ''}" class="gi${sel}" data-index="${m.index}" draggable="false">`;
-        });
-        mH += '</div>';
-    } else {
-        let m = t.media[0] || {};
-        let src = m.src || m.thumb || '';
-        mH = `<div class="sbox" data-id="${t.id}"><img src="${src}" class="si" draggable="false">`;
-        (t.clicks || []).forEach((pt, i) => {
-            mH += `<div class="dot${i % 2 === 1 ? ' end-dot' : ''}" style="left:${pt.px}%;top:${pt.py}%"></div>`;
-        });
-        mH += `</div>`;
-    }
-
-    let aH = isTrained
-        ? `<div class="acts" id="act-${t.id}">
-             <button class="btn brt" data-action="retrain">🔧 Retrain</button>
-             <button class="btn bdl" data-action="del-tr">❌</button>
-           </div>`
-        : `<div class="acts">
-             <button class="btn bsv" data-action="save">Save Task</button>
-             <button class="btn brs" data-action="reset">Clear</button>
-             <button class="btn bdl" data-action="del">❌</button>
-           </div>`;
-
-    card.innerHTML = `
-      <div class="chead"><span class="cid">#${t.id.substring(0,6)}</span>${isTrained ? `<span style="font-size:10px;color:#888">${t.clicks.length} clicks</span>` : ''}</div>
-      <div class="pcon"><div class="ewrap">${ex}</div><div class="prompt">${pts[0]}</div></div>
-      ${mH}${aH}`;
-    return card;
-}
-
-// ── User Interaction (Manual & Grid Clicking Fixed) ──
-document.body.addEventListener('click', async e => {
-    let card = e.target.closest('.card');
-    if (!card) return;
-    let tid = card.dataset.id;
-    let t = activeStore[tid];
-
-    // Grid Image Select
-    if (e.target.classList.contains('gi')) {
-        let idx = parseInt(e.target.dataset.index);
-        let inRetrain = !!rts[tid];
-
-        if (e.target.classList.contains('sel') || e.target.classList.contains('aip') || e.target.classList.contains('retrain-pick')) {
-            e.target.classList.remove('sel', 'aip', 'retrain-pick');
-            if (t) t.clicks = t.clicks.filter(i => i !== idx);
-        } else {
-            e.target.classList.add(inRetrain ? 'retrain-pick' : 'sel');
-            if (t && !t.clicks.includes(idx)) t.clicks.push(idx);
-        }
-    }
-
-    // Manual Canvas / Coordinate Click
-    let sbox = e.target.closest('.sbox');
-    if (sbox && !e.target.closest('.acts')) {
-        let rect = sbox.getBoundingClientRect();
-        let px = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
-        let py = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
-
-        if (t) {
-            t.clicks.push({ px, py });
-            let dot = document.createElement('div');
-            dot.className = 'dot' + (t.clicks.length % 2 === 0 ? ' end-dot' : '');
-            dot.style.left = px + '%';
-            dot.style.top = py + '%';
-            sbox.appendChild(dot);
-        }
-    }
-
-    // Action Buttons
-    let actionBtn = e.target.closest('[data-action]');
-    if (actionBtn) {
-        let act = actionBtn.dataset.action;
-        if (act === 'save') saveTo(tid, card);
-        if (act === 'reset') {
-            if (t) t.clicks = [];
-            card.querySelectorAll('.gi').forEach(i => i.classList.remove('sel', 'aip', 'retrain-pick'));
-            card.querySelectorAll('.dot').forEach(d => d.remove());
-            card.classList.remove('ai-on');
-        }
-        if (act === 'del') {
-            ghost.add(tid); card.remove(); delete activeStore[tid]; updateCounts();
-            fetch(`${SRV}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).catch(()=>{});
-        }
-        if (act === 'retrain') {
-            rts[tid] = { old: [...(t ? t.clicks : [])] };
-            if (t) t.clicks = [];
-            card.classList.add('retrain-mode');
-            card.querySelectorAll('.gi').forEach(i => i.classList.remove('sel','aip','retrain-pick'));
-            card.querySelectorAll('.dot').forEach(d => d.remove());
-            let bnr = document.createElement('div'); bnr.className = 'rhint'; bnr.id = `rh-${tid}`;
-            bnr.textContent = '🟠 Sahi images click karein phir Update dabayein';
-            card.querySelector('.pcon').after(bnr);
-            document.getElementById(`act-${tid}`).innerHTML = `
-                <button class="btn bcf" data-action="confirm-rt">✅ Update & Train</button>
-                <button class="btn bcn" data-action="cancel-rt">Cancel</button>`;
-        }
-        if (act === 'confirm-rt') {
-            let wrong = (rts[tid]?.old || []).filter(i => !(t?.clicks || []).includes(i));
-            if (aiReady && t && t.type === 'grid') await trainTask(t, wrong);
-            await fetch(`${SRV}/api/submit-hcaptcha`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ taskId: tid, clicks: t?.clicks || [] })
-            });
-            delete rts[tid];
-            card.classList.remove('retrain-mode');
-            let b = document.getElementById(`rh-${tid}`); if (b) b.remove();
-            fetchTrained();
-            if (atOn) triggerParallelSolve();
-        }
-        if (act === 'cancel-rt') {
-            delete rts[tid];
-            card.classList.remove('retrain-mode');
-            let b = document.getElementById(`rh-${tid}`); if (b) b.remove();
-            fetchTrained();
-        }
-        if (act === 'del-tr') {
-            fetch(`${SRV}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).then(() => fetchTrained());
-            card.remove(); delete activeStore[tid];
-        }
-    }
+const wss = new WS.Server({
+    server,
+    perMessageDeflate: false,
+    maxPayload: 128 * 1024
 });
 
-async function saveTo(taskId, card) {
-    let t = activeStore[taskId];
-    if (!t || !t.clicks.length) return;
+const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
+const DB_FILE  = path.join(DATA_DIR, 'database.json');
+const AI_FILE  = path.join(DATA_DIR, 'ai_brain.json');
 
-    if (aiReady && t.type === 'grid') {
-        await trainTask(t);
+const MAX_PENDING = 500;
+const MAX_TRAINED = 50000;
+
+let pending   = {};
+let trained   = {};
+let bank      = {};
+let aiBrainDS = {};
+
+const bMap = new Map();
+const dSet = new Set();
+
+function initDB() {
+    if (fs.existsSync(DB_FILE)) {
+        try {
+            let d = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+            trained = d.trained || {};
+            rebuildBank();
+        } catch(e) {}
     }
-
-    ghost.add(taskId);
-    if (card) card.remove();
-    delete activeStore[taskId];
-    updateCounts();
-
-    await fetch(`${SRV}/api/submit-hcaptcha`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskId, clicks: t.clicks })
-    }).catch(()=>{});
-
-    if (atOn) triggerParallelSolve();
-}
-
-function setTab(t) {
-    currentTab = t;
-    document.querySelectorAll('.tb').forEach(b => b.classList.remove('on'));
-    document.getElementById('bt-' + t).classList.add('on');
-    if (t === 'pending') {
-        document.getElementById('pendingView').style.display = 'flex';
-        document.getElementById('trainedView').style.display = 'none';
-        fetchPending();
-    } else {
-        document.getElementById('pendingView').style.display = 'none';
-        document.getElementById('trainedView').style.display = 'flex';
-        fetchTrained();
+    if (fs.existsSync(AI_FILE)) {
+        try {
+            aiBrainDS = JSON.parse(fs.readFileSync(AI_FILE, 'utf8'));
+        } catch(e) {}
     }
 }
 
-function toggleAT() { atOn = !atOn; document.getElementById('bat').className = 'tog' + (atOn ? ' on' : ''); document.getElementById('bat').textContent = '🧠 Auto: ' + (atOn ? 'ON' : 'OFF'); if (atOn && aiReady) triggerParallelSolve(); }
-function toggleAS() { asOn = !asOn; document.getElementById('bas').className = 'tog' + (asOn ? ' on' : ''); document.getElementById('bas').textContent = '💾 Save: ' + (asOn ? 'ON' : 'OFF'); }
+let _saveTimer = null;
+function saveDB() {
+    if (_saveTimer) clearTimeout(_saveTimer);
+    _saveTimer = setTimeout(() => {
+        try { fs.writeFileSync(DB_FILE, JSON.stringify({ trained }), 'utf8'); } catch(e) {}
+    }, 2000);
+}
 
-function onSrch() {
-    let q = document.getElementById('si').value.trim().toLowerCase();
-    document.querySelectorAll('.card').forEach(c => {
-        c.style.display = (!q || c.dataset.id.includes(q)) ? '' : 'none';
+function pKey(t) {
+    return 'K_' + (t.prompt || '').split('|||')[0].replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function rebuildBank() {
+    bank = {};
+    for (let id in trained) _addBank(trained[id]);
+}
+
+function _addBank(tr) {
+    if (!tr.media || tr.media.length <= 1) return;
+    let k = pKey(tr);
+    if (!bank[k]) bank[k] = new Set();
+    (tr.clicks || []).forEach(i => {
+        let m = tr.media[i];
+        if (m?.dhash && m.dhash !== '0000000000000000') bank[k].add(m.dhash);
     });
 }
 
-wsConn();
-fetchPending();
-initAI();
-</script>
-</body>
-</html>
+function ham(h1, h2) {
+    if (!h1 || !h2 || h1.length !== h2.length) return 999;
+    try {
+        let x = BigInt('0b' + h1) ^ BigInt('0b' + h2), d = 0;
+        while (x > 0n) { d += Number(x & 1n); x >>= 1n; }
+        return d;
+    } catch(e) {
+        let d = 0;
+        for (let i = 0; i < h1.length; i++) if (h1[i] !== h2[i]) d++;
+        return d;
+    }
+}
+
+function autoSolve(task) {
+    if (trained[task.taskId]) {
+        return { ok: true, clicks: trained[task.taskId].clicks || [] };
+    }
+
+    if (task.media?.length > 1) {
+        let k = pKey(task), b = bank[k];
+        if (b && b.size >= 3) {
+            let hits = [];
+            task.media.forEach((m, i) => {
+                if (!m.dhash || m.dhash === '0000000000000000') return;
+                for (let h of b) if (ham(m.dhash, h) <= 2) { hits.push(i); break; }
+            });
+            if (hits.length >= 2 && hits.length <= 5 && hits.length / task.media.length <= 0.65) {
+                return { ok: true, clicks: hits };
+            }
+        }
+    }
+    return { ok: false };
+}
+
+function pushBrowser(taskId, clicks) {
+    let sockets = bMap.get(taskId);
+    if (!sockets) return;
+    let msg = JSON.stringify({ action: 'solve', taskId, clicks });
+    sockets.forEach(ws => {
+        if (ws.readyState === WS.OPEN) ws.send(msg);
+    });
+    bMap.delete(taskId);
+}
+
+function pushDash(type, data) {
+    if (!dSet.size) return;
+    let msg = JSON.stringify({ type, data });
+    dSet.forEach(ws => {
+        if (ws.readyState === WS.OPEN) ws.send(msg);
+    });
+}
+
+function getCounts() {
+    return {
+        pending: Object.keys(pending).length,
+        trained: Object.keys(trained).length,
+        concepts: Object.keys(bank).length,
+        browsers: bMap.size,
+        dashboards: dSet.size
+    };
+}
+
+wss.on('connection', (ws) => {
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
+    ws.on('error', () => ws.terminate());
+
+    ws.on('message', raw => {
+        try {
+            let msg = JSON.parse(raw);
+            if (msg.action === 'register' && msg.taskId) {
+                ws.type = 'browser';
+                ws.taskId = msg.taskId;
+                if (!bMap.has(msg.taskId)) bMap.set(msg.taskId, new Set());
+                bMap.get(msg.taskId).add(ws);
+
+                if (trained[msg.taskId]) {
+                    ws.send(JSON.stringify({
+                        action: 'solve',
+                        taskId: msg.taskId,
+                        clicks: trained[msg.taskId].clicks
+                    }));
+                }
+                return;
+            }
+
+            if (msg.action === 'dashboard') {
+                ws.type = 'dashboard';
+                dSet.add(ws);
+                ws.send(JSON.stringify({ type: 'counts', data: getCounts() }));
+                return;
+            }
+        } catch(e) {}
+    });
+
+    ws.on('close', () => {
+        if (ws.type === 'browser' && ws.taskId) {
+            let s = bMap.get(ws.taskId);
+            if (s) { s.delete(ws); if (!s.size) bMap.delete(ws.taskId); }
+        }
+        if (ws.type === 'dashboard') dSet.delete(ws);
+    });
+});
+
+setInterval(() => {
+    wss.clients.forEach(ws => {
+        if (!ws.isAlive) { ws.terminate(); return; }
+        ws.isAlive = false;
+        ws.ping();
+    });
+}, 30000);
+
+// API Routes
+app.post('/api/new-hcaptcha', (req, res) => {
+    let task = req.body;
+    if (!task?.taskId) return res.json({ success: false });
+
+    let r = autoSolve(task);
+    if (r.ok) {
+        pushBrowser(task.taskId, r.clicks);
+        return res.json({ success: true, autoSolved: true, clicks: r.clicks });
+    }
+
+    let pKeys = Object.keys(pending);
+    if (pKeys.length >= MAX_PENDING) pKeys.slice(0, 30).forEach(k => delete pending[k]);
+
+    pending[task.taskId] = {
+        id: task.taskId,
+        prompt: task.prompt || '',
+        media: task.media || [],
+        timestamp: Date.now()
+    };
+
+    pushDash('new_pending', pending[task.taskId]);
+    pushDash('counts', getCounts());
+    res.json({ success: true, autoSolved: false });
+});
+
+app.post('/api/submit-hcaptcha', (req, res) => {
+    let { taskId, clicks } = req.body;
+    if (!taskId || !clicks?.length) return res.json({ success: false });
+
+    let src = pending[taskId] || trained[taskId];
+    if (!src) return res.json({ success: false });
+
+    let lm = (src.media || []).map(m => ({
+        dhash: m.dhash || '',
+        stableHash: m.stableHash || '',
+        type: m.type || 'image',
+        index: m.index ?? 0,
+        thumb: m.thumb || m.src || '',
+        frames: m.type === 'video_frames' ? (m.frames || []).slice(0, 3) : undefined
+    }));
+
+    let k = pKey(src);
+    if (lm.length > 1) {
+        if (!bank[k]) bank[k] = new Set();
+        clicks.forEach(i => {
+            let m = lm[i];
+            if (m?.dhash && m.dhash !== '0000000000000000') bank[k].add(m.dhash);
+        });
+    }
+
+    trained[taskId] = {
+        id: taskId,
+        prompt: src.prompt,
+        conceptKey: k,
+        media: lm,
+        clicks,
+        trainedAt: new Date().toISOString()
+    };
+
+    delete pending[taskId];
+    saveDB();
+
+    pushBrowser(taskId, clicks);
+    pushDash('task_solved', { taskId, clicks });
+    pushDash('counts', getCounts());
+    res.json({ success: true });
+});
+
+app.get('/api/tasks', (req, res) => {
+    let tab = req.query.tab === 'trained' ? 'trained' : 'pending';
+    let size = tab === 'trained' ? 10 : 200; // Limit trained view to 10
+    let src = tab === 'trained' ? trained : pending;
+    let ids = Object.keys(src);
+    if (tab === 'trained') ids = ids.reverse();
+    let pageIds = ids.slice(0, size);
+    let tasks = {};
+    pageIds.forEach(id => { tasks[id] = src[id]; });
+    res.json({ tasks, total: ids.length });
+});
+
+app.get('/api/counts', (req, res) => res.json(getCounts()));
+
+app.delete('/api/delete-hcaptcha/:id', (req, res) => {
+    delete pending[req.params.id];
+    delete trained[req.params.id];
+    rebuildBank();
+    saveDB();
+    pushDash('task_deleted', { taskId: req.params.id });
+    pushDash('counts', getCounts());
+    res.json({ success: true });
+});
+
+// Server-Side AI Brain Endpoints
+app.get('/api/ai-brain', (req, res) => res.json(aiBrainDS));
+app.post('/api/ai-brain', (req, res) => {
+    if (req.body && typeof req.body === 'object') {
+        aiBrainDS = req.body;
+        try { fs.writeFileSync(AI_FILE, JSON.stringify(aiBrainDS), 'utf8'); } catch(e) {}
+        return res.json({ success: true });
+    }
+    res.json({ success: false });
+});
+app.delete('/api/ai-brain', (req, res) => {
+    aiBrainDS = {};
+    try { fs.writeFileSync(AI_FILE, '{}', 'utf8'); } catch(e) {}
+    res.json({ success: true });
+});
+
+app.get('/', (req, res) => {
+    let f = path.join(__dirname, 'hcaptcha-dashboard.html');
+    fs.existsSync(f) ? res.sendFile(f) : res.status(404).send('Dashboard not found');
+});
+
+initDB();
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`🚀 Master Server ready on port ${PORT}`);
+});
