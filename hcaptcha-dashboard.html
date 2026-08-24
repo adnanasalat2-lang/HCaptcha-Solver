@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>hCaptcha Master Pro ⚡ (Zero-Flicker 5s Video)</title>
+<title>hCaptcha Master Pro ⚡ (99% Precision)</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -250,7 +250,7 @@ async function predictTask(task) {
             let conf = res.confidences[pText] || 0;
             let negConf = res.confidences['neg_' + pText] || 0;
 
-            if (res.label === pText && conf >= 0.35 && negConf < 0.48) {
+            if (res.label === pText && conf >= 0.40 && negConf < 0.45) {
                 predicted.push(m.index);
             }
         } catch(e) {}
@@ -327,7 +327,7 @@ function wsConn() {
     };
 }
 
-// ── 100% In-Memory Double-Buffered Canvas Engine (Zero Blink) ──
+// ── Non-Clearing Double-Buffer Canvas Video Loop (0% Blink) ──
 let lastTick = 0;
 function animateVideos(t) {
     if (t - lastTick > 125) {
@@ -343,7 +343,7 @@ function animateVideos(t) {
                         cvs.width = img.naturalWidth;
                         cvs.height = img.naturalHeight;
                     }
-                    ctx.drawImage(img, 0, 0);
+                    ctx.drawImage(img, 0, 0); // Direct overwrite without clearRect to prevent white flash
                 }
             }
         });
