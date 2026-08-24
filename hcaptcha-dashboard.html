@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>hCaptcha Master Pro ⚡ (100% Precision)</title>
+<title>hCaptcha Master Pro ⚡ (Fixed & Smooth)</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -51,7 +51,6 @@ body{background:#0c0c0c;color:#fff;font-family:-apple-system,BlinkMacSystemFont,
 .dot.end-dot{background:#ff8800;box-shadow:0 0 8px #ff8800}
 .acts{display:flex;gap:4px;margin-top:6px}
 .btn{flex:1;padding:7px;border:none;font-weight:bold;cursor:pointer;color:#fff;font-size:11px;border-radius:3px}
-.btn:active{opacity:0.6}
 .bsv{background:#00ff88;color:#000}
 .brs{background:#333}
 .bdl{background:#ee4444;flex:0.3}
@@ -74,7 +73,7 @@ body{background:#0c0c0c;color:#fff;font-family:-apple-system,BlinkMacSystemFont,
     </div>
   </div>
   <div class="bar">
-    <span class="pill warn" id="wsP">🔌 Live</span>
+    <span class="pill warn" id="wsP">Live...</span>
     <span class="pill warn" id="aiP">🧠 AI Loading...</span>
     <button id="bat" class="tog on" onclick="toggleAT()">🧠 Auto: ON</button>
     <button id="bas" class="tog on" onclick="toggleAS()">💾 Save: ON</button>
@@ -108,11 +107,12 @@ const WS_URL = SRV.replace(/^http/,'ws');
 let currentTab = 'pending';
 let activeStore = {}, ghost = new Set(), rts = {};
 let videoMap = new Map();
-let atOn = true, asOn = true, sq = '';
+let atOn = true, asOn = true;
 let isBatchRunning = false;
 let brainTimer = null;
 
-const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 100);`], { type: 'text/javascript' });
+// Worker Interval relaxed to 800ms (Eliminates CPU/GPU Lag)
+const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 800);`], { type: 'text/javascript' });
 const bgWorker = new Worker(URL.createObjectURL(timerBlob));
 bgWorker.onmessage = () => {
     if (aiReady && atOn && !isBatchRunning) triggerParallelSolve();
@@ -131,7 +131,7 @@ async function initAI() {
         updateAIStatus();
         if (atOn) triggerParallelSolve();
     } catch(e) {
-        document.getElementById('aiP').textContent = '⚠️ AI Error';
+        document.getElementById('aiP').textContent = '⚠️ AI Fallback';
     }
 }
 
@@ -177,7 +177,7 @@ function scheduleBrainSave() {
             });
             updateAIStatus();
         } catch(e) {}
-    }, 1000);
+    }, 1500);
 }
 
 async function resetBrain() {
@@ -233,26 +233,15 @@ async function predictTask(task) {
     let pText = cleanLabel(task.prompt);
     let dataset = knn.getClassExampleCount();
 
-    // Exact match required first
     if (!dataset[pText]) {
         let keys = Object.keys(dataset).filter(k => !k.startsWith('neg_'));
-        // Only allow match if label is EXACTLY same or very close (not partial substring)
         let matched = keys.find(k => k === pText);
-        if (!matched) {
-            // Try strict substring only if one fully contains the other AND length diff < 30%
-            matched = keys.find(k => {
-                let longer = k.length > pText.length ? k : pText;
-                let shorter = k.length <= pText.length ? k : pText;
-                return longer.includes(shorter) && shorter.length / longer.length > 0.70;
-            });
-        }
         if (matched) pText = matched;
-        else return []; // No trained concept — do NOT guess
+        else return [];
     }
 
-    // Need minimum examples to be reliable — avoid guessing with too few samples
     let exCount = dataset[pText] || 0;
-    if (exCount < 3) return [];
+    if (exCount < 2) return [];
 
     let predicted = [];
     for (let m of (task.media || [])) {
@@ -264,8 +253,7 @@ async function predictTask(task) {
             let conf = res.confidences[pText] || 0;
             let negConf = res.confidences['neg_' + pText] || 0;
 
-            // Strict thresholds: high positive confidence AND low negative confidence
-            if (res.label === pText && conf >= 0.65 && negConf < 0.30) {
+            if (res.label === pText && conf >= 0.70 && negConf < 0.25) {
                 predicted.push(m.index);
             }
         } catch(e) {}
@@ -279,13 +267,12 @@ async function triggerParallelSolve() {
     isBatchRunning = true;
 
     let unassigned = Object.values(activeStore).filter(t => t.type === 'grid' && (!t.clicks || !t.clicks.length) && !ghost.has(t.id) && !t._isTrained);
-    const CHUNK_SIZE = 12;
+    const CHUNK_SIZE = 6;
     for (let i = 0; i < unassigned.length; i += CHUNK_SIZE) {
         if (!atOn) break;
         let chunk = unassigned.slice(i, i + CHUNK_SIZE);
         await Promise.all(chunk.map(async t => {
             let clicks = await predictTask(t);
-            // Sanity check: at least 1 click, max 6, and not ALL images selected (that's wrong)
             let totalImages = t.media.length;
             if (clicks.length >= 1 && clicks.length <= Math.min(6, totalImages - 1)) {
                 t.clicks = clicks;
@@ -305,7 +292,6 @@ async function triggerParallelSolve() {
     isBatchRunning = false;
 }
 
-// ── WebSocket Push ──
 let ws = null;
 function wsConn() {
     if (ws && ws.readyState < 2) return;
@@ -324,16 +310,13 @@ function wsConn() {
                 document.getElementById('c-trained-total').innerText = m.data.trained || 0;
             }
             if (m.type === 'new_pending' && !ghost.has(m.data.id) && !activeStore[m.data.id]) {
-                // Only add to DOM if on pending tab, otherwise queue it
                 if (currentTab === 'pending') {
                     addCard(m.data.id, m.data);
                     if (aiReady && atOn) triggerParallelSolve();
                 } else {
-                    // Store in activeStore but not DOM — will appear when switching to pending tab
                     let m2 = m.data.media || [];
                     let isG = m2.length > 1 || (m2.length === 1 && m2[0]?.type === 'image');
                     activeStore[m.data.id] = { id: m.data.id, clicks: [], type: isG ? 'grid' : 'coord', media: m2, prompt: m.data.prompt || '' };
-                    // Update count badge only
                     document.getElementById('cp').innerText = parseInt(document.getElementById('cp').innerText || 0) + 1;
                 }
             }
@@ -354,10 +337,9 @@ function wsConn() {
     };
 }
 
-// ── 0% Blink Direct Video Frame Blit ──
 let lastTick = 0;
 function animateVideos(t) {
-    if (t - lastTick > 125) {
+    if (t - lastTick > 140) {
         lastTick = t;
         videoMap.forEach((v, id) => {
             let cvs = document.querySelector(`canvas.vplayer[data-id="${id}"]`);
@@ -388,9 +370,7 @@ async function fetchPending() {
         let r = await fetch(`${SRV}/api/tasks?tab=pending&t=${Date.now()}`);
         if (r.ok) {
             let d = await r.json();
-            // Clear DOM and store properly - keep trained entries in activeStore
             gridArea.innerHTML = ''; manualArea.innerHTML = ''; videoMap.clear();
-            // Only clear pending entries from store, not trained ones
             for (let id in activeStore) {
                 if (!activeStore[id]._isTrained) delete activeStore[id];
             }
@@ -423,12 +403,9 @@ async function fetchTrained() {
 function addCard(id, td) {
     if (activeStore[id] || ghost.has(id)) return;
     let m = td.media || [];
-    // Fix: single-image tasks with 1 media item were being pushed to manual (coord)
-    // but they ARE grid tasks if media[0].type === 'image'. Check properly.
     let isG = m.length > 1 || (m.length === 1 && m[0]?.type === 'image');
     activeStore[id] = { id, clicks: [], type: isG ? 'grid' : 'coord', media: m, prompt: td.prompt || '' };
     
-    // Always render card when on pending tab - don't skip if tab switched mid-load
     let card = mkCard(activeStore[id], false);
     if (isG) gridArea.prepend(card);
     else manualArea.prepend(card);
@@ -623,7 +600,6 @@ function setTab(t) {
     if (t === 'pending') {
         document.getElementById('pendingView').style.display = 'flex';
         document.getElementById('trainedView').style.display = 'none';
-        // Re-render any queued tasks that arrived while on trained tab
         let hasMissing = Object.values(activeStore).some(s => !s._isTrained && !document.querySelector(`.card[data-id="${s.id}"]`));
         if (hasMissing) fetchPending();
         else { if (aiReady && atOn) triggerParallelSolve(); }
