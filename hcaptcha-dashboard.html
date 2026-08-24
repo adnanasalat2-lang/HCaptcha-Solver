@@ -500,7 +500,7 @@ function buildCard(t, isTrained) {
         let m = t.media[0] || {};
         let isVid = m.type === 'video_frames' && m.frames?.length;
         let src = isVid ? m.frames[0] : (m.src || m.thumb || '');
-        mediaHTML = `<div class="single-box"><img src="${src}" class="s-img${isVid?' vid':'''}" data-id="${t.id}" draggable="false">`;
+        mediaHTML = `<div class="single-box"><img src="${src}" class="s-img${isVid ? ' vid' : ''}" data-id="${t.id}" draggable="false">`;
         t.clicks.forEach(pt => {
             mediaHTML += `<div class="dot" style="left:${pt.px}%;top:${pt.py}%"></div>`;
         });
