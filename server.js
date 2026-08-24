@@ -1,5 +1,5 @@
 // ============================================================
-// server.js — High-Capacity WebSocket (10MB Video Payload Ready)
+// server.js — Precision Auto-Solve & Video Stream Fix
 // ============================================================
 'use strict';
 
@@ -19,7 +19,7 @@ app.use(express.json({ limit: '50mb' }));
 const wss = new WS.Server({
     server,
     perMessageDeflate: false,
-    maxPayload: 10 * 1024 * 1024
+    maxPayload: 25 * 1024 * 1024 // 25MB for 24 video frames
 });
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
@@ -91,12 +91,12 @@ function ham(h1, h2) {
     }
 }
 
+// Fixed AutoSolve: Only solve Grid (media > 1) automatically
 function autoSolve(task) {
-    if (trained[task.taskId]) {
-        return { ok: true, clicks: trained[task.taskId].clicks || [] };
-    }
-
     if (task.media?.length > 1) {
+        if (trained[task.taskId]) {
+            return { ok: true, clicks: trained[task.taskId].clicks || [] };
+        }
         let k = pKey(task), b = bank[k];
         if (b && b.size >= 3) {
             let hits = [];
@@ -109,6 +109,7 @@ function autoSolve(task) {
             }
         }
     }
+    // Canvas / Video tasks MUST go to dashboard
     return { ok: false };
 }
 
@@ -153,14 +154,6 @@ wss.on('connection', (ws) => {
                 ws.taskId = msg.taskId;
                 if (!bMap.has(msg.taskId)) bMap.set(msg.taskId, new Set());
                 bMap.get(msg.taskId).add(ws);
-
-                if (trained[msg.taskId]) {
-                    ws.send(JSON.stringify({
-                        action: 'solve',
-                        taskId: msg.taskId,
-                        clicks: trained[msg.taskId].clicks
-                    }));
-                }
                 return;
             }
 
@@ -309,5 +302,5 @@ app.get('/', (req, res) => {
 initDB();
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`🚀 Ultra-Fast Server online on port ${PORT}`);
+    console.log(`🚀 Master Server ready on port ${PORT}`);
 });
