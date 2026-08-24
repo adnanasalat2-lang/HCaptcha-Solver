@@ -1,5 +1,5 @@
 // ============================================================
-// server.js — Instant Dispatch & Zero Queue Latency
+// server.js — Ultra-Fast WebSocket & Memory Engine
 // ============================================================
 'use strict';
 
@@ -26,7 +26,7 @@ const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE  = path.join(DATA_DIR, 'database.json');
 const AI_FILE  = path.join(DATA_DIR, 'ai_brain.json');
 
-const MAX_PENDING = 500;
+const MAX_PENDING = 400;
 
 let pending   = {};
 let trained   = {};
@@ -56,7 +56,7 @@ function saveDB() {
     if (_saveTimer) clearTimeout(_saveTimer);
     _saveTimer = setTimeout(() => {
         try { fs.writeFileSync(DB_FILE, JSON.stringify({ trained }), 'utf8'); } catch(e) {}
-    }, 2000);
+    }, 1500);
 }
 
 function pKey(t) {
@@ -219,12 +219,12 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     let { taskId, clicks } = req.body;
     if (!taskId || !clicks?.length) return res.json({ success: false });
 
-    // 1. Instant Push to Browser immediately
+    // 1ms Push to waiting browser
     pushBrowser(taskId, clicks);
     pushDash('task_solved', { taskId, clicks });
     res.json({ success: true });
 
-    // 2. Async save in background
+    // Background Concept Learning
     let src = pending[taskId] || trained[taskId];
     if (src) {
         let lm = (src.media || []).map(m => ({
@@ -311,5 +311,5 @@ app.get('/', (req, res) => {
 initDB();
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`🚀 Realtime Server ready on port ${PORT}`);
+    console.log(`🚀 Realtime Server online on port ${PORT}`);
 });
