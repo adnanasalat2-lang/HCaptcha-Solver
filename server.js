@@ -1,6 +1,5 @@
 // ============================================================
-// server.js — 50K Browser Scale Edition
-// WebSocket-first | Zero polling | Memory-optimized
+// server.js — High-Power Persistent Scale Edition
 // ============================================================
 'use strict';
 
@@ -15,65 +14,61 @@ const app    = express();
 const server = http.createServer(app);
 
 app.use(cors());
-app.use(express.json({ limit: '25mb' }));
+app.use(express.json({ limit: '50mb' }));
 
-// ── WebSocket Server ──────────────────────────────────────────
 const wss = new WS.Server({
     server,
-    perMessageDeflate: false,   // CPU save
-    maxPayload: 64 * 1024       // 64KB max
+    perMessageDeflate: false,
+    maxPayload: 128 * 1024
 });
 
-// ── Storage ──────────────────────────────────────────────────
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE  = path.join(DATA_DIR, 'database.json');
+const AI_FILE  = path.join(DATA_DIR, 'ai_brain.json');
 
 const MAX_PENDING = 500;
 const MAX_TRAINED = 50000;
-const PAGE_SIZE   = 20;
 
-let pending  = {};   // taskId → task
-let trained  = {};   // taskId → solved task
-let bank     = {};   // promptKey → Set<dhash>
+let pending   = {};
+let trained   = {};
+let bank      = {};
+let aiBrainDS = {};
 
-// ── Browser WebSocket Map ─────────────────────────────────────
-// taskId → Set<ws>  — jab solve hota hai push karo
 const bMap = new Map();
-
-// ── Dashboard WebSocket Set ───────────────────────────────────
 const dSet = new Set();
 
-// ── DB ───────────────────────────────────────────────────────
 function initDB() {
-    if (!fs.existsSync(DB_FILE)) return;
-    try {
-        let d = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-        trained = d.trained || {};
-        let keys = Object.keys(trained);
-        if (keys.length > MAX_TRAINED)
-            keys.slice(0, keys.length - MAX_TRAINED).forEach(k => delete trained[k]);
-        rebuildBank();
-        console.log(`[DB] Trained:${Object.keys(trained).length} Bank:${Object.keys(bank).length}`);
-    } catch(e) { console.error('[DB]', e.message); }
+    if (fs.existsSync(DB_FILE)) {
+        try {
+            let d = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+            trained = d.trained || {};
+            rebuildBank();
+        } catch(e) {}
+    }
+    if (fs.existsSync(AI_FILE)) {
+        try {
+            aiBrainDS = JSON.parse(fs.readFileSync(AI_FILE, 'utf8'));
+        } catch(e) {}
+    }
 }
 
 let _saveTimer = null;
 function saveDB() {
     if (_saveTimer) clearTimeout(_saveTimer);
     _saveTimer = setTimeout(() => {
-        try { fs.writeFileSync(DB_FILE, JSON.stringify({ trained }), 'utf8'); }
-        catch(e) { console.error('[DB] Save:', e.message); }
-    }, 3000);
+        try { fs.writeFileSync(DB_FILE, JSON.stringify({ trained }), 'utf8'); } catch(e) {}
+    }, 2000);
 }
 
-// ── Concept Bank ─────────────────────────────────────────────
 function pKey(t) {
-    return 'K_' + (t.prompt || '').split('|||')[0].trim().toLowerCase();
+    return 'K_' + (t.prompt || '').split('|||')[0].replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
 }
+
 function rebuildBank() {
     bank = {};
     for (let id in trained) _addBank(trained[id]);
 }
+
 function _addBank(tr) {
     if (!tr.media || tr.media.length <= 1) return;
     let k = pKey(tr);
@@ -84,7 +79,6 @@ function _addBank(tr) {
     });
 }
 
-// ── Hamming ──────────────────────────────────────────────────
 function ham(h1, h2) {
     if (!h1 || !h2 || h1.length !== h2.length) return 999;
     try {
@@ -98,31 +92,27 @@ function ham(h1, h2) {
     }
 }
 
-// ── Auto Solve ───────────────────────────────────────────────
 function autoSolve(task) {
-    // 1. Exact match
-    if (trained[task.taskId])
+    if (trained[task.taskId]) {
         return { ok: true, clicks: trained[task.taskId].clicks || [] };
+    }
 
-    // 2. Grid match — strict: bank >= 5 examples, hamming <= 2
     if (task.media?.length > 1) {
         let k = pKey(task), b = bank[k];
-        if (b && b.size >= 5) {
+        if (b && b.size >= 3) {
             let hits = [];
             task.media.forEach((m, i) => {
                 if (!m.dhash || m.dhash === '0000000000000000') return;
                 for (let h of b) if (ham(m.dhash, h) <= 2) { hits.push(i); break; }
             });
-            // 2-5 hits AND max 55% of grid
-            if (hits.length >= 2 && hits.length <= 5 &&
-                hits.length / task.media.length <= 0.55)
+            if (hits.length >= 2 && hits.length <= 5 && hits.length / task.media.length <= 0.65) {
                 return { ok: true, clicks: hits };
+            }
         }
     }
     return { ok: false };
 }
 
-// ── Push helpers ─────────────────────────────────────────────
 function pushBrowser(taskId, clicks) {
     let sockets = bMap.get(taskId);
     if (!sockets) return;
@@ -143,16 +133,15 @@ function pushDash(type, data) {
 
 function getCounts() {
     return {
-        pending:  Object.keys(pending).length,
-        trained:  Object.keys(trained).length,
+        pending: Object.keys(pending).length,
+        trained: Object.keys(trained).length,
         concepts: Object.keys(bank).length,
         browsers: bMap.size,
         dashboards: dSet.size
     };
 }
 
-// ── WebSocket Handler ─────────────────────────────────────────
-wss.on('connection', (ws, req) => {
+wss.on('connection', (ws) => {
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
     ws.on('error', () => ws.terminate());
@@ -160,15 +149,12 @@ wss.on('connection', (ws, req) => {
     ws.on('message', raw => {
         try {
             let msg = JSON.parse(raw);
-
-            // Browser register — taskId ke saath
             if (msg.action === 'register' && msg.taskId) {
                 ws.type = 'browser';
                 ws.taskId = msg.taskId;
                 if (!bMap.has(msg.taskId)) bMap.set(msg.taskId, new Set());
                 bMap.get(msg.taskId).add(ws);
 
-                // Already trained? Foran bhejo
                 if (trained[msg.taskId]) {
                     ws.send(JSON.stringify({
                         action: 'solve',
@@ -179,17 +165,10 @@ wss.on('connection', (ws, req) => {
                 return;
             }
 
-            // Dashboard register
             if (msg.action === 'dashboard') {
                 ws.type = 'dashboard';
                 dSet.add(ws);
                 ws.send(JSON.stringify({ type: 'counts', data: getCounts() }));
-                return;
-            }
-
-            // Ping
-            if (msg.type === 'ping') {
-                ws.send(JSON.stringify({ type: 'pong' }));
                 return;
             }
         } catch(e) {}
@@ -204,7 +183,6 @@ wss.on('connection', (ws, req) => {
     });
 });
 
-// Ping/pong — dead connections hatao
 setInterval(() => {
     wss.clients.forEach(ws => {
         if (!ws.isAlive) { ws.terminate(); return; }
@@ -213,12 +191,10 @@ setInterval(() => {
     });
 }, 30000);
 
-// ── API ROUTES ───────────────────────────────────────────────
-
-// Extension: naya task
+// API Routes
 app.post('/api/new-hcaptcha', (req, res) => {
     let task = req.body;
-    if (!task?.taskId) return res.json({ success: false, error: 'Missing taskId' });
+    if (!task?.taskId) return res.json({ success: false });
 
     let r = autoSolve(task);
     if (r.ok) {
@@ -226,81 +202,39 @@ app.post('/api/new-hcaptcha', (req, res) => {
         return res.json({ success: true, autoSolved: true, clicks: r.clicks });
     }
 
-    // Pending trim
     let pKeys = Object.keys(pending);
-    if (pKeys.length >= MAX_PENDING)
-        pKeys.slice(0, 30).forEach(k => delete pending[k]);
+    if (pKeys.length >= MAX_PENDING) pKeys.slice(0, 30).forEach(k => delete pending[k]);
 
     pending[task.taskId] = {
-        id:        task.taskId,
-        prompt:    task.prompt || '',
-        media:     task.media  || [],
+        id: task.taskId,
+        prompt: task.prompt || '',
+        media: task.media || [],
         timestamp: Date.now()
     };
 
-    // Dashboard ko real-time push — sirf metadata (media bhi)
-    pushDash('new_pending', {
-        id:        task.taskId,
-        prompt:    task.prompt || '',
-        media:     task.media  || [],
-        timestamp: pending[task.taskId].timestamp
-    });
+    pushDash('new_pending', pending[task.taskId]);
     pushDash('counts', getCounts());
-
     res.json({ success: true, autoSolved: false });
 });
 
-// Extension: polling fallback (WebSocket nahi chala to)
-app.get('/api/check-hcaptcha/:id', (req, res) => {
-    let t = trained[req.params.id];
-    res.json(t ? { status: 'solved', clicks: t.clicks || [] } : { status: 'pending' });
-});
-
-// Dashboard: paginated tasks
-app.get('/api/tasks', (req, res) => {
-    let tab  = req.query.tab === 'trained' ? 'trained' : 'pending';
-    let page = Math.max(0, parseInt(req.query.page) || 0);
-    let size = tab === 'pending' ? 200 : PAGE_SIZE;
-    let src  = tab === 'trained' ? trained : pending;
-    let ids  = Object.keys(src);
-    if (tab === 'trained') ids = ids.reverse();
-    let total   = ids.length;
-    let pageIds = ids.slice(page * size, (page + 1) * size);
-    let tasks   = {};
-    pageIds.forEach(id => { tasks[id] = src[id]; });
-    res.json({ tasks, total, page, pages: Math.ceil(total / size) || 1, tab });
-});
-
-// Dashboard: counts
-app.get('/api/counts', (req, res) => res.json(getCounts()));
-
-// Dashboard: submit solution
 app.post('/api/submit-hcaptcha', (req, res) => {
     let { taskId, clicks } = req.body;
-    if (!taskId) return res.json({ success: false });
-    if (!clicks?.length) return res.json({ success: false, error: 'Empty clicks' });
+    if (!taskId || !clicks?.length) return res.json({ success: false });
 
     let src = pending[taskId] || trained[taskId];
-    if (!src) return res.json({ success: false, error: 'Not found' });
+    if (!src) return res.json({ success: false });
 
-    // Light media — thumb max 50KB
-    let lm = (src.media || []).map(m => {
-        let thumb = m.thumb || m.src || '';
-        if (thumb.startsWith('data:image') && thumb.length > 50000)
-            thumb = thumb.substring(0, 50000);
-        return {
-            dhash:      m.dhash      || '',
-            stableHash: m.stableHash || '',
-            type:       m.type       || 'image',
-            index:      m.index      ?? 0,
-            thumb,
-            frames:     m.type === 'video_frames' ? (m.frames || []).slice(0, 3) : undefined
-        };
-    });
+    let lm = (src.media || []).map(m => ({
+        dhash: m.dhash || '',
+        stableHash: m.stableHash || '',
+        type: m.type || 'image',
+        index: m.index ?? 0,
+        thumb: m.thumb || m.src || '',
+        frames: m.type === 'video_frames' ? (m.frames || []).slice(0, 3) : undefined
+    }));
 
-    // Bank update
+    let k = pKey(src);
     if (lm.length > 1) {
-        let k = pKey(src);
         if (!bank[k]) bank[k] = new Set();
         clicks.forEach(i => {
             let m = lm[i];
@@ -309,18 +243,13 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     }
 
     trained[taskId] = {
-        id:         taskId,
-        prompt:     src.prompt,
-        conceptKey: pKey(src),
-        media:      lm,
+        id: taskId,
+        prompt: src.prompt,
+        conceptKey: k,
+        media: lm,
         clicks,
-        trainedAt:  new Date().toISOString()
+        trainedAt: new Date().toISOString()
     };
-
-    // Trim
-    let tKeys = Object.keys(trained);
-    if (tKeys.length > MAX_TRAINED)
-        tKeys.slice(0, tKeys.length - MAX_TRAINED).forEach(k => delete trained[k]);
 
     delete pending[taskId];
     saveDB();
@@ -328,70 +257,56 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     pushBrowser(taskId, clicks);
     pushDash('task_solved', { taskId, clicks });
     pushDash('counts', getCounts());
-
     res.json({ success: true });
 });
 
-// Restore
-app.post('/api/restore-hcaptcha', (req, res) => {
-    let { taskId } = req.body;
-    if (trained[taskId]) {
-        pending[taskId] = { ...trained[taskId], clicks: [], restoredAt: Date.now() };
-        delete trained[taskId];
-        rebuildBank();
-        saveDB();
-        pushDash('counts', getCounts());
-    }
-    res.json({ success: true });
+app.get('/api/tasks', (req, res) => {
+    let tab = req.query.tab === 'trained' ? 'trained' : 'pending';
+    let size = tab === 'trained' ? 10 : 200; // Limit trained view to 10
+    let src = tab === 'trained' ? trained : pending;
+    let ids = Object.keys(src);
+    if (tab === 'trained') ids = ids.reverse();
+    let pageIds = ids.slice(0, size);
+    let tasks = {};
+    pageIds.forEach(id => { tasks[id] = src[id]; });
+    res.json({ tasks, total: ids.length });
 });
 
-// Delete
+app.get('/api/counts', (req, res) => res.json(getCounts()));
+
 app.delete('/api/delete-hcaptcha/:id', (req, res) => {
-    let id = req.params.id;
-    delete pending[id];
-    delete trained[id];
+    delete pending[req.params.id];
+    delete trained[req.params.id];
     rebuildBank();
     saveDB();
-    pushDash('task_deleted', { taskId: id });
+    pushDash('task_deleted', { taskId: req.params.id });
     pushDash('counts', getCounts());
     res.json({ success: true });
 });
 
-// Health
-app.get('/api/health', (req, res) => {
-    let mem = process.memoryUsage();
-    res.json({
-        status:    'ok',
-        uptime:    Math.floor(process.uptime()),
-        memory_mb: Math.floor(mem.heapUsed / 1024 / 1024),
-        ...getCounts()
-    });
+// Server-Side AI Brain Endpoints
+app.get('/api/ai-brain', (req, res) => res.json(aiBrainDS));
+app.post('/api/ai-brain', (req, res) => {
+    if (req.body && typeof req.body === 'object') {
+        aiBrainDS = req.body;
+        try { fs.writeFileSync(AI_FILE, JSON.stringify(aiBrainDS), 'utf8'); } catch(e) {}
+        return res.json({ success: true });
+    }
+    res.json({ success: false });
+});
+app.delete('/api/ai-brain', (req, res) => {
+    aiBrainDS = {};
+    try { fs.writeFileSync(AI_FILE, '{}', 'utf8'); } catch(e) {}
+    res.json({ success: true });
 });
 
-// Static files
-app.get('/ai-worker.js', (req, res) =>
-    res.sendFile(path.join(__dirname, 'ai-worker.js')));
 app.get('/', (req, res) => {
     let f = path.join(__dirname, 'hcaptcha-dashboard.html');
     fs.existsSync(f) ? res.sendFile(f) : res.status(404).send('Dashboard not found');
 });
-app.get('/dashboard', (req, res) => res.redirect('/'));
-app.get('/favicon.ico', (req, res) => res.status(204).end());
-
-// Memory watchdog
-setInterval(() => {
-    let mb = Math.floor(process.memoryUsage().heapUsed / 1024 / 1024);
-    if (mb > 420) {
-        let now = Date.now();
-        let old = Object.keys(pending).filter(k =>
-            now - (pending[k].timestamp || 0) > 60000);
-        old.forEach(k => delete pending[k]);
-        if (old.length) console.log(`[MEM] ${mb}MB — Removed ${old.length} old pending`);
-    }
-}, 30000);
 
 initDB();
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`🚀 Port:${PORT} | WS ready | ${Math.floor(process.memoryUsage().heapUsed/1024/1024)}MB`);
+    console.log(`🚀 Master Server ready on port ${PORT}`);
 });
