@@ -1,5 +1,5 @@
 // ============================================================
-// ai-worker.js — SharedWorker (Aggressive 1-Task Learning Edition)
+// ai-worker.js — SharedWorker (Normalized & Fast Learning Edition)
 // ============================================================
 
 /* global importScripts, SharedWorkerGlobalScope */
@@ -21,6 +21,10 @@ const IDB_NAME  = 'hcm_knn';
 const IDB_STORE = 'knn';
 const IDB_KEY   = 'model_v3';
 
+function cleanLabel(raw) {
+    return (raw || '').split('|||')[0].replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
 function idbOpen() {
     return new Promise((res, rej) => {
         let r = indexedDB.open(IDB_NAME, 1);
@@ -29,6 +33,7 @@ function idbOpen() {
         r.onerror   = () => rej(r.error);
     });
 }
+
 async function idbGet() {
     let db = await idbOpen();
     return new Promise((res, rej) => {
@@ -37,6 +42,7 @@ async function idbGet() {
         req.onerror   = () => rej(req.error);
     });
 }
+
 async function idbSet(val) {
     let db = await idbOpen();
     return new Promise((res, rej) => {
@@ -99,10 +105,9 @@ async function getFeatures(bitmap) {
     return features;
 }
 
-// ── Train: 1-Task Aggressive Learning + Retrain Heavy Weights ──
 async function trainTask(task, wrongIndices) {
     if (!isReady || task.type !== 'grid') return;
-    let pText    = task.prompt.split('|||')[0].trim().toLowerCase();
+    let pText    = cleanLabel(task.prompt);
     let negLabel = 'negative_' + pText;
 
     for (let m of (task.media || [])) {
@@ -119,10 +124,8 @@ async function trainTask(task, wrongIndices) {
             let isWrong   = (wrongIndices || []).includes(m.index);
 
             if (isCorrect) {
-                // Sahi images ko 4x weight do taake pehle task se hi pakka seekhe
                 for (let i = 0; i < 4; i++) knn.addExample(feat, pText);
             } else if (isWrong) {
-                // Retrain mein ghalat pick ki gayi images ko 6x heavy penalty
                 for (let i = 0; i < 6; i++) knn.addExample(feat, negLabel);
             } else {
                 knn.addExample(feat, negLabel);
@@ -134,12 +137,18 @@ async function trainTask(task, wrongIndices) {
     return { type: 'trained', taskId: task.id };
 }
 
-// ── Predict: Clean Prompt + 1-Task Friendly Threshold ──
 async function predictTask(task) {
-    if (!isReady) return { type: 'predict_result', taskId: task.id, clicks: [] };
-    let pText   = task.prompt.split('|||')[0].trim().toLowerCase();
+    if (!isReady || task.type !== 'grid') return { type: 'predict_result', taskId: task.id, clicks: [] };
+    let pText   = cleanLabel(task.prompt);
     let dataset = knn.getClassExampleCount();
-    if (!dataset[pText] || dataset[pText] < 1) return { type: 'predict_result', taskId: task.id, clicks: [] };
+    
+    // Fuzzy/Clean match agar prompt formatting mein halka farq ho
+    if (!dataset[pText]) {
+        let keys = Object.keys(dataset).filter(k => !k.startsWith('negative_'));
+        let matched = keys.find(k => k === pText || k.includes(pText) || pText.includes(k));
+        if (matched) pText = matched;
+        else return { type: 'predict_result', taskId: task.id, clicks: [] };
+    }
 
     let predictedClicks = [];
     for (let m of (task.media || [])) {
@@ -156,8 +165,7 @@ async function predictTask(task) {
             let conf    = res.confidences[pText] || 0;
             let negConf = res.confidences['negative_' + pText] || 0;
 
-            // 1 task ke baad confidence 50%+ par trigger karo
-            if (res.label === pText && conf >= 0.50 && negConf < 0.45) {
+            if (res.label === pText && conf >= 0.45 && negConf < 0.40) {
                 predictedClicks.push(m.index);
             }
         } catch(e) {}
