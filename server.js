@@ -1,5 +1,5 @@
 // ============================================================
-// server.js — 98% Fuzzy Match Precision Auto-Solver
+// server.js — 99% Precision Strict Matching Engine
 // ============================================================
 'use strict';
 
@@ -91,8 +91,8 @@ function ham(h1, h2) {
     }
 }
 
-// 98% Fuzzy Tolerance String/Hash Matcher
-function isSimilar(s1, s2, threshold = 0.98) {
+// 99% Exact Match Comparator
+function isSimilar99(s1, s2) {
     if (!s1 || !s2) return false;
     if (s1 === s2) return true;
     let maxLen = Math.max(s1.length, s2.length);
@@ -102,11 +102,11 @@ function isSimilar(s1, s2, threshold = 0.98) {
     for (let i = 0; i < minLen; i++) {
         if (s1[i] === s2[i]) matches++;
     }
-    return (matches / maxLen) >= threshold;
+    return (matches / maxLen) >= 0.99;
 }
 
 function autoSolve(task) {
-    // 1. Direct 98% Trained Match (Exact or 98% Near-Exact Task ID / Media Signature)
+    // 1. Exact / 99% Direct Trained Match
     if (trained[task.taskId]) {
         return { ok: true, clicks: trained[task.taskId].clicks || [] };
     }
@@ -117,23 +117,27 @@ function autoSolve(task) {
         if (tr.conceptKey === taskPrompt) {
             let taskSig = task.media?.map(m => m.stableHash || m.dhash).join('');
             let trSig = tr.media?.map(m => m.stableHash || m.dhash).join('');
-            if (isSimilar(taskSig, trSig, 0.98)) {
+            if (isSimilar99(taskSig, trSig)) {
                 return { ok: true, clicks: tr.clicks || [] };
             }
         }
     }
 
-    // 2. AI Concept Bank (3x3 Grid Tasks with 98% DHash Precision)
+    // 2. 99% AI Grid Concept Bank Matching (ham <= 1 strict match)
     if (task.media && task.media.length > 1) {
         let k = taskPrompt, b = bank[k];
-        if (b && b.size >= 4) {
+        if (b && b.size >= 5) {
             let hits = [];
             task.media.forEach((m, i) => {
                 if (!m.dhash || m.dhash === '0000000000000000') return;
-                // ham <= 3 means 95.3% to 98.4% visual similarity
-                for (let h of b) if (ham(m.dhash, h) <= 3) { hits.push(i); break; }
+                for (let h of b) {
+                    if (ham(m.dhash, h) <= 1) { // 99% Image hash match
+                        hits.push(i);
+                        break;
+                    }
+                }
             });
-            if (hits.length >= 2 && hits.length <= 5 && hits.length / task.media.length <= 0.65) {
+            if (hits.length >= 2 && hits.length <= 5 && hits.length / task.media.length <= 0.60) {
                 return { ok: true, clicks: hits };
             }
         }
@@ -331,5 +335,5 @@ app.get('/', (req, res) => {
 initDB();
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`🚀 98% Precision Server live on port ${PORT}`);
+    console.log(`🚀 99% Precision Server live on port ${PORT}`);
 });
