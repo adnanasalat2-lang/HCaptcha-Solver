@@ -1,5 +1,5 @@
 // ============================================================
-// server.js — Ultra-Fast WebSocket & Memory Engine
+// server.js — High-Capacity WebSocket (10MB Video Payload Ready)
 // ============================================================
 'use strict';
 
@@ -19,7 +19,7 @@ app.use(express.json({ limit: '50mb' }));
 const wss = new WS.Server({
     server,
     perMessageDeflate: false,
-    maxPayload: 128 * 1024
+    maxPayload: 10 * 1024 * 1024
 });
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
@@ -219,12 +219,10 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     let { taskId, clicks } = req.body;
     if (!taskId || !clicks?.length) return res.json({ success: false });
 
-    // 1ms Push to waiting browser
     pushBrowser(taskId, clicks);
     pushDash('task_solved', { taskId, clicks });
     res.json({ success: true });
 
-    // Background Concept Learning
     let src = pending[taskId] || trained[taskId];
     if (src) {
         let lm = (src.media || []).map(m => ({
@@ -311,5 +309,5 @@ app.get('/', (req, res) => {
 initDB();
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`🚀 Realtime Server online on port ${PORT}`);
+    console.log(`🚀 Ultra-Fast Server online on port ${PORT}`);
 });
