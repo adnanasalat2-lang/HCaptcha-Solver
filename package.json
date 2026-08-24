@@ -1,14 +1,18 @@
 {
-  "name": "hcaptcha-master-server",
+"name": "hcaptcha-master-server",
+  "version": "1.0.0",
+  "description": "Backend for hCaptcha training",
   "version": "2.0.0",
-  "description": "hCaptcha Solver Backend - Railway Optimized",
-  "main": "server.js",
-  "scripts": {
-    "start": "node --max-old-space-size=400 server.js"
-  },
-  "dependencies": {
-    "cors": "^2.8.5",
+  "description": "High-Concurrency Backend for hCaptcha Solver",
+"main": "server.js",
+"scripts": {
+"start": "node server.js"
+},
+"dependencies": {
+"cors": "^2.8.5",
+    "express": "^4.19.2"
     "express": "^4.19.2",
-    "ws": "^8.21.3"
-  }
+    "ioredis": "^5.4.1",
+    "ws": "^8.18.0"
+}
 }
