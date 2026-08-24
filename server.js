@@ -295,14 +295,15 @@ app.post('/api/submit-hcaptcha', (req, res) => {
 app.get('/api/tasks', (req, res) => {
     let tab = req.query.tab === 'trained' ? 'trained' : 'pending';
     let page = Math.max(0, parseInt(req.query.page) || 0);
+    let size = tab === 'pending' ? 200 : PAGE_SIZE;
     let source = tab === 'trained' ? hcaptchaTrained : hcaptchaPending;
     let ids = Object.keys(source);
     if (tab === 'trained') ids = ids.reverse();
     let total = ids.length;
-    let pageIds = ids.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+    let pageIds = ids.slice(page * size, (page + 1) * size);
     let tasks = {};
     pageIds.forEach(id => { tasks[id] = source[id]; });
-    res.json({ tasks, total, page, pages: Math.ceil(total / PAGE_SIZE) || 1, tab });
+    res.json({ tasks, total, page, pages: Math.ceil(total / size) || 1, tab });
 });
 
 // ── Counts ──
@@ -368,6 +369,7 @@ app.get('/', (req, res) => {
     else res.status(404).send('Dashboard not found');
 });
 app.get('/dashboard', (req, res) => res.redirect('/'));
+app.get('/favicon.ico', (req, res) => res.status(204).end());
 
 // ── Memory Monitor (Railway ke liye) ──
 setInterval(() => {
