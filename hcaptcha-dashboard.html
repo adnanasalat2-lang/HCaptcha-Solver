@@ -370,22 +370,27 @@ function toggleAutoSave() {
 }
 
 // ── Fetch ──
+// ── Poll — har 800ms ──
 async function fetchTasks() {
     if (isFetching) return;
     isFetching = true;
     try {
-        let r = await fetch(`${SERVER}/api/tasks?tab=pending&page=0&t=${Date.now()}`, { cache: 'no-store' });
+        // Page 0 se saare pending lao — server max 200 deta hai
+        let r = await fetch(`${SERVER}/api/tasks?tab=pending&page=0&size=200&t=${Date.now()}`, { cache: 'no-store' });
         if (r.ok) {
             let d = await r.json();
             serverPending = d.tasks || {};
             renderPending();
         }
-        fetch(`${SERVER}/api/counts`).then(r=>r.json()).then(c => {
+        // Counts update
+        let rc = await fetch(`${SERVER}/api/counts`, { cache: 'no-store' });
+        if (rc.ok) {
+            let c = await rc.json();
             document.getElementById('c-pending').textContent = c.pending;
             document.getElementById('c-trained').textContent = c.trained;
             document.getElementById('c-trained-total').textContent = c.trained + ' Solved';
-        }).catch(()=>{});
-    } catch(e) {}
+        }
+    } catch(e) { console.log('Fetch error:', e.message); }
     isFetching = false;
 }
 
@@ -493,7 +498,7 @@ function buildCard(t, isTrained) {
         t.media.forEach(m => {
             let sel = t.clicks.includes(m.index) ? ' selected' : '';
             let src = m.thumb || m.src || '';
-            mediaHTML += `<img src="${src}" class="g-img${sel}" data-index="${m.index}" draggable="false" loading="lazy">`;
+            mediaHTML += `<img src="${src}" class="g-img${sel}" data-index="${m.index}" draggable="false">`;
         });
         mediaHTML += '</div>';
     } else {
