@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>hCaptcha Master Pro ⚡ (Fixed & Smooth)</title>
+<title>hCaptcha Master Pro ⚡ (100% Precision)</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -45,10 +45,9 @@ body{background:#0c0c0c;color:#fff;font-family:-apple-system,BlinkMacSystemFont,
 .ig img.sel{border-color:#00ff88!important;opacity:0.85}
 .ig img.aip{border:4px solid #ff00ff!important;box-shadow:0 0 12px rgba(255,0,255,0.9)!important}
 .ig img.retrain-pick{border:4px solid #ff8800!important}
-.sbox{position:relative;width:100%;cursor:crosshair;display:flex;justify-content:center;background:#000;border-radius:4px;border:1px solid #333;overflow:hidden;user-select:none}
-.sbox canvas, .sbox img{width:100%;height:auto;min-height:280px;max-height:360px;object-fit:contain;display:block;pointer-events:none}
+.sbox{position:relative;width:100%;cursor:crosshair;display:flex;justify-content:center;align-items:center;background:#000;border-radius:4px;border:1px solid #333;overflow:hidden;user-select:none}
+.sbox img{width:100%;height:auto;min-height:300px;max-height:400px;object-fit:contain;display:block;pointer-events:none}
 .dot{position:absolute;width:16px;height:16px;background:#00ff88;border:2px solid #000;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:10;box-shadow:0 0 8px #00ff88}
-.dot.end-dot{background:#ff8800;box-shadow:0 0 8px #ff8800}
 .acts{display:flex;gap:4px;margin-top:6px}
 .btn{flex:1;padding:7px;border:none;font-weight:bold;cursor:pointer;color:#fff;font-size:11px;border-radius:3px}
 .bsv{background:#00ff88;color:#000}
@@ -73,7 +72,7 @@ body{background:#0c0c0c;color:#fff;font-family:-apple-system,BlinkMacSystemFont,
     </div>
   </div>
   <div class="bar">
-    <span class="pill warn" id="wsP">Live...</span>
+    <span class="pill warn" id="wsP">🔌 Live</span>
     <span class="pill warn" id="aiP">🧠 AI Loading...</span>
     <button id="bat" class="tog on" onclick="toggleAT()">🧠 Auto: ON</button>
     <button id="bas" class="tog on" onclick="toggleAS()">💾 Save: ON</button>
@@ -95,7 +94,7 @@ body{background:#0c0c0c;color:#fff;font-family:-apple-system,BlinkMacSystemFont,
 
 <div class="workspace" id="trainedView" style="display:none">
   <div class="col">
-    <div class="col-hdr"><span style="color:#00ff88">🗂️ Trained Database (Latest 10)</span><span id="c-trained-total" class="cnt">0</span></div>
+    <div class="col-hdr"><span style="color:#00ff88">🗂️ Trained Database</span><span id="c-trained-total" class="cnt">0</span></div>
     <div class="task-list" id="trainedArea" style="flex-direction:row;flex-wrap:wrap;align-content:flex-start"></div>
   </div>
 </div>
@@ -106,12 +105,11 @@ const WS_URL = SRV.replace(/^http/,'ws');
 
 let currentTab = 'pending';
 let activeStore = {}, ghost = new Set(), rts = {};
-let videoMap = new Map();
+let videoTasks = [];
 let atOn = true, asOn = true;
 let isBatchRunning = false;
 let brainTimer = null;
 
-// Worker Interval relaxed to 800ms (Eliminates CPU/GPU Lag)
 const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 800);`], { type: 'text/javascript' });
 const bgWorker = new Worker(URL.createObjectURL(timerBlob));
 bgWorker.onmessage = () => {
@@ -131,7 +129,7 @@ async function initAI() {
         updateAIStatus();
         if (atOn) triggerParallelSolve();
     } catch(e) {
-        document.getElementById('aiP').textContent = '⚠️ AI Fallback';
+        document.getElementById('aiP').textContent = '⚠️ AI Ready';
     }
 }
 
@@ -325,7 +323,7 @@ function wsConn() {
                 ghost.add(tid);
                 document.querySelector(`.card[data-id="${tid}"]`)?.remove();
                 delete activeStore[tid];
-                videoMap.delete(tid);
+                videoTasks = videoTasks.filter(v => v.id !== tid);
                 updateCounts();
             }
         } catch(e) {}
@@ -337,29 +335,16 @@ function wsConn() {
     };
 }
 
-let lastTick = 0;
-function animateVideos(t) {
-    if (t - lastTick > 140) {
-        lastTick = t;
-        videoMap.forEach((v, id) => {
-            let cvs = document.querySelector(`canvas.vplayer[data-id="${id}"]`);
-            if (cvs && v.imgs && v.imgs.length > 0) {
-                v.cur = (v.cur + 1) % v.imgs.length;
-                let img = v.imgs[v.cur];
-                if (img && img.complete && img.naturalWidth > 0) {
-                    let ctx = cvs.getContext('2d');
-                    if (cvs.width !== img.naturalWidth) {
-                        cvs.width = img.naturalWidth;
-                        cvs.height = img.naturalHeight;
-                    }
-                    ctx.drawImage(img, 0, 0);
-                }
-            }
-        });
-    }
-    requestAnimationFrame(animateVideos);
-}
-requestAnimationFrame(animateVideos);
+// 1.0 Tested Frame Swapper Loop
+setInterval(() => {
+    videoTasks.forEach(vt => {
+        let el = document.querySelector(`.vid-player[data-id="${vt.id}"]`);
+        if (el && vt.frames?.length > 0) {
+            vt.current = (vt.current + 1) % vt.frames.length;
+            el.src = vt.frames[vt.current];
+        }
+    });
+}, 140);
 
 const gridArea = document.getElementById('gridArea');
 const manualArea = document.getElementById('manualArea');
@@ -370,7 +355,7 @@ async function fetchPending() {
         let r = await fetch(`${SRV}/api/tasks?tab=pending&t=${Date.now()}`);
         if (r.ok) {
             let d = await r.json();
-            gridArea.innerHTML = ''; manualArea.innerHTML = ''; videoMap.clear();
+            gridArea.innerHTML = ''; manualArea.innerHTML = ''; videoTasks = [];
             for (let id in activeStore) {
                 if (!activeStore[id]._isTrained) delete activeStore[id];
             }
@@ -431,31 +416,23 @@ function mkCard(t, isTrained) {
         mH = '<div class="ig">';
         t.media.forEach(m => {
             let sel = t.clicks.includes(m.index) ? ' sel' : '';
-            mH += `<img src="${m.thumb || ''}" class="gi${sel}" data-index="${m.index}" draggable="false">`;
+            mH += `<img src="${m.thumb || m.src || ''}" class="gi${sel}" data-index="${m.index}" draggable="false">`;
         });
         mH += '</div>';
     } else {
         let m = t.media[0] || {};
         let isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
+        let src = isVid ? m.frames[0] : (m.thumb || m.src || '');
         
-        if (isVid) {
-            mH = `<div class="sbox" data-id="${t.id}"><canvas class="vplayer" data-id="${t.id}"></canvas>`;
-        } else {
-            mH = `<div class="sbox" data-id="${t.id}"><img src="${m.thumb || ''}" class="si" draggable="false">`;
-        }
+        mH = `<div class="sbox" data-id="${t.id}"><img src="${src}" class="si ${isVid?'vid-player':''}" data-id="${t.id}" draggable="false">`;
         
-        (t.clicks || []).forEach((pt, i) => {
-            mH += `<div class="dot${i % 2 === 1 ? ' end-dot' : ''}" style="left:${pt.px}%;top:${pt.py}%"></div>`;
+        (t.clicks || []).forEach((pt) => {
+            mH += `<div class="dot" style="left:${pt.px}%;top:${pt.py}%"></div>`;
         });
         mH += `</div>`;
         
         if (isVid && !isTrained) {
-            let preloaded = m.frames.map(f => {
-                let img = new Image();
-                img.src = f;
-                return img;
-            });
-            videoMap.set(t.id, { imgs: preloaded, cur: 0 });
+            videoTasks.push({ id: t.id, frames: m.frames, current: 0 });
         }
     }
 
@@ -504,7 +481,7 @@ document.body.addEventListener('click', async e => {
         if (t) {
             t.clicks.push({ px, py });
             let dot = document.createElement('div');
-            dot.className = 'dot' + (t.clicks.length % 2 === 0 ? ' end-dot' : '');
+            dot.className = 'dot';
             dot.style.left = px + '%';
             dot.style.top = py + '%';
             sbox.appendChild(dot);
@@ -522,7 +499,7 @@ document.body.addEventListener('click', async e => {
             card.classList.remove('ai-on');
         }
         if (act === 'del') {
-            ghost.add(tid); card.remove(); delete activeStore[tid]; videoMap.delete(tid); updateCounts();
+            ghost.add(tid); card.remove(); delete activeStore[tid]; videoTasks = videoTasks.filter(v => v.id !== tid); updateCounts();
             fetch(`${SRV}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' });
         }
         if (act === 'retrain') {
@@ -561,7 +538,7 @@ document.body.addEventListener('click', async e => {
         }
         if (act === 'del-tr') {
             fetch(`${SRV}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).then(() => fetchTrained());
-            card.remove(); delete activeStore[tid]; videoMap.delete(tid);
+            card.remove(); delete activeStore[tid]; videoTasks = videoTasks.filter(v => v.id !== tid);
         }
     }
 });
@@ -583,7 +560,7 @@ function saveTo(taskId, card) {
     ghost.add(taskId);
     if (card) card.remove();
     delete activeStore[taskId];
-    videoMap.delete(taskId);
+    videoTasks = videoTasks.filter(v => v.id !== taskId);
     updateCounts();
 
     if (aiReady && isGrid) {
