@@ -1,5 +1,5 @@
 // ============================================================
-// server.js — High-Power Persistent Scale Edition
+// server.js — Instant Dispatch & Zero Queue Latency
 // ============================================================
 'use strict';
 
@@ -27,7 +27,6 @@ const DB_FILE  = path.join(DATA_DIR, 'database.json');
 const AI_FILE  = path.join(DATA_DIR, 'ai_brain.json');
 
 const MAX_PENDING = 500;
-const MAX_TRAINED = 50000;
 
 let pending   = {};
 let trained   = {};
@@ -191,7 +190,6 @@ setInterval(() => {
     });
 }, 30000);
 
-// API Routes
 app.post('/api/new-hcaptcha', (req, res) => {
     let task = req.body;
     if (!task?.taskId) return res.json({ success: false });
@@ -221,48 +219,54 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     let { taskId, clicks } = req.body;
     if (!taskId || !clicks?.length) return res.json({ success: false });
 
-    let src = pending[taskId] || trained[taskId];
-    if (!src) return res.json({ success: false });
-
-    let lm = (src.media || []).map(m => ({
-        dhash: m.dhash || '',
-        stableHash: m.stableHash || '',
-        type: m.type || 'image',
-        index: m.index ?? 0,
-        thumb: m.thumb || m.src || '',
-        frames: m.type === 'video_frames' ? (m.frames || []).slice(0, 3) : undefined
-    }));
-
-    let k = pKey(src);
-    if (lm.length > 1) {
-        if (!bank[k]) bank[k] = new Set();
-        clicks.forEach(i => {
-            let m = lm[i];
-            if (m?.dhash && m.dhash !== '0000000000000000') bank[k].add(m.dhash);
-        });
-    }
-
-    trained[taskId] = {
-        id: taskId,
-        prompt: src.prompt,
-        conceptKey: k,
-        media: lm,
-        clicks,
-        trainedAt: new Date().toISOString()
-    };
-
-    delete pending[taskId];
-    saveDB();
-
+    // 1. Instant Push to Browser immediately
     pushBrowser(taskId, clicks);
     pushDash('task_solved', { taskId, clicks });
-    pushDash('counts', getCounts());
     res.json({ success: true });
+
+    // 2. Async save in background
+    let src = pending[taskId] || trained[taskId];
+    if (src) {
+        let lm = (src.media || []).map(m => ({
+            dhash: m.dhash || '',
+            stableHash: m.stableHash || '',
+            type: m.type || 'image',
+            index: m.index ?? 0,
+            thumb: m.thumb || m.src || ''
+        }));
+
+        let k = pKey(src);
+        if (lm.length > 1) {
+            if (!bank[k]) bank[k] = new Set();
+            clicks.forEach(i => {
+                let m = lm[i];
+                if (m?.dhash && m.dhash !== '0000000000000000') bank[k].add(m.dhash);
+            });
+        }
+
+        trained[taskId] = {
+            id: taskId,
+            prompt: src.prompt,
+            conceptKey: k,
+            media: lm,
+            clicks,
+            trainedAt: new Date().toISOString()
+        };
+
+        delete pending[taskId];
+        saveDB();
+        pushDash('counts', getCounts());
+    }
+});
+
+app.get('/api/check-hcaptcha/:id', (req, res) => {
+    let t = trained[req.params.id];
+    res.json(t ? { status: 'solved', clicks: t.clicks || [] } : { status: 'pending' });
 });
 
 app.get('/api/tasks', (req, res) => {
     let tab = req.query.tab === 'trained' ? 'trained' : 'pending';
-    let size = tab === 'trained' ? 10 : 200; // Limit trained view to 10
+    let size = tab === 'trained' ? 10 : 200;
     let src = tab === 'trained' ? trained : pending;
     let ids = Object.keys(src);
     if (tab === 'trained') ids = ids.reverse();
@@ -284,7 +288,6 @@ app.delete('/api/delete-hcaptcha/:id', (req, res) => {
     res.json({ success: true });
 });
 
-// Server-Side AI Brain Endpoints
 app.get('/api/ai-brain', (req, res) => res.json(aiBrainDS));
 app.post('/api/ai-brain', (req, res) => {
     if (req.body && typeof req.body === 'object') {
@@ -308,5 +311,5 @@ app.get('/', (req, res) => {
 initDB();
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`🚀 Master Server ready on port ${PORT}`);
+    console.log(`🚀 Realtime Server ready on port ${PORT}`);
 });
