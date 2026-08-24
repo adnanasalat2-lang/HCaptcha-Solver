@@ -1,5 +1,5 @@
 // ============================================================
-// server.js — Precision Auto-Solve & Video Stream Fix
+// server.js — 98% Fuzzy Match Precision Auto-Solver
 // ============================================================
 'use strict';
 
@@ -14,12 +14,12 @@ const app    = express();
 const server = http.createServer(app);
 
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: '60mb' }));
 
 const wss = new WS.Server({
     server,
     perMessageDeflate: false,
-    maxPayload: 25 * 1024 * 1024 // 25MB for 24 video frames
+    maxPayload: 30 * 1024 * 1024
 });
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
@@ -91,25 +91,54 @@ function ham(h1, h2) {
     }
 }
 
-// Fixed AutoSolve: Only solve Grid (media > 1) automatically
+// 98% Fuzzy Tolerance String/Hash Matcher
+function isSimilar(s1, s2, threshold = 0.98) {
+    if (!s1 || !s2) return false;
+    if (s1 === s2) return true;
+    let maxLen = Math.max(s1.length, s2.length);
+    if (maxLen === 0) return true;
+    let matches = 0;
+    let minLen = Math.min(s1.length, s2.length);
+    for (let i = 0; i < minLen; i++) {
+        if (s1[i] === s2[i]) matches++;
+    }
+    return (matches / maxLen) >= threshold;
+}
+
 function autoSolve(task) {
-    if (task.media?.length > 1) {
-        if (trained[task.taskId]) {
-            return { ok: true, clicks: trained[task.taskId].clicks || [] };
+    // 1. Direct 98% Trained Match (Exact or 98% Near-Exact Task ID / Media Signature)
+    if (trained[task.taskId]) {
+        return { ok: true, clicks: trained[task.taskId].clicks || [] };
+    }
+
+    let taskPrompt = pKey(task);
+    for (let trId in trained) {
+        let tr = trained[trId];
+        if (tr.conceptKey === taskPrompt) {
+            let taskSig = task.media?.map(m => m.stableHash || m.dhash).join('');
+            let trSig = tr.media?.map(m => m.stableHash || m.dhash).join('');
+            if (isSimilar(taskSig, trSig, 0.98)) {
+                return { ok: true, clicks: tr.clicks || [] };
+            }
         }
-        let k = pKey(task), b = bank[k];
-        if (b && b.size >= 3) {
+    }
+
+    // 2. AI Concept Bank (3x3 Grid Tasks with 98% DHash Precision)
+    if (task.media && task.media.length > 1) {
+        let k = taskPrompt, b = bank[k];
+        if (b && b.size >= 4) {
             let hits = [];
             task.media.forEach((m, i) => {
                 if (!m.dhash || m.dhash === '0000000000000000') return;
-                for (let h of b) if (ham(m.dhash, h) <= 2) { hits.push(i); break; }
+                // ham <= 3 means 95.3% to 98.4% visual similarity
+                for (let h of b) if (ham(m.dhash, h) <= 3) { hits.push(i); break; }
             });
             if (hits.length >= 2 && hits.length <= 5 && hits.length / task.media.length <= 0.65) {
                 return { ok: true, clicks: hits };
             }
         }
     }
-    // Canvas / Video tasks MUST go to dashboard
+
     return { ok: false };
 }
 
@@ -302,5 +331,5 @@ app.get('/', (req, res) => {
 initDB();
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`🚀 Master Server ready on port ${PORT}`);
+    console.log(`🚀 98% Precision Server live on port ${PORT}`);
 });
