@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>hCaptcha Master Pro ⚡ (Realtime)</title>
+<title>hCaptcha Master Pro ⚡ (Realtime Video & Zero-Delay)</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -51,6 +51,7 @@ body{background:#0c0c0c;color:#fff;font-family:-apple-system,BlinkMacSystemFont,
 .dot.end-dot{background:#ff8800;box-shadow:0 0 8px #ff8800}
 .acts{display:flex;gap:4px;margin-top:6px}
 .btn{flex:1;padding:7px;border:none;font-weight:bold;cursor:pointer;color:#fff;font-size:11px;border-radius:3px}
+.btn:active{opacity:0.6}
 .bsv{background:#00ff88;color:#000}
 .brs{background:#333}
 .bdl{background:#ee4444;flex:0.3}
@@ -106,24 +107,13 @@ const WS_URL = SRV.replace(/^http/,'ws');
 
 let currentTab = 'pending';
 let activeStore = {}, ghost = new Set(), rts = {};
+let videoMap = new Map();
 let atOn = true, asOn = true, sq = '';
 let isBatchRunning = false;
 let brainTimer = null;
 
-// Background Audio Heartbeat to prevent browser tab sleeping
-let audioCtx = null;
-try {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    let osc = audioCtx.createOscillator();
-    let gain = audioCtx.createGain();
-    gain.gain.value = 0.0001;
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-    osc.start();
-} catch(e) {}
-
-// Background Timer Worker
-const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 150);`], { type: 'text/javascript' });
+// Worker based continuous background loop
+const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 120);`], { type: 'text/javascript' });
 const bgWorker = new Worker(URL.createObjectURL(timerBlob));
 bgWorker.onmessage = () => {
     if (aiReady && atOn && !isBatchRunning) triggerParallelSolve();
@@ -211,7 +201,7 @@ function getSafeFeature(src) {
         };
         img.onerror = () => res(null);
         img.src = src;
-        setTimeout(() => res(null), 400);
+        setTimeout(() => res(null), 350);
     });
 }
 
@@ -306,7 +296,7 @@ async function triggerParallelSolve() {
 let ws = null;
 function wsConn() {
     if (ws && ws.readyState < 2) return;
-    try { ws = new WebSocket(WS_URL); } catch(e) { setTimeout(wsConn, 2000); return; }
+    try { ws = new WebSocket(WS_URL); } catch(e) { setTimeout(wsConn, 1500); return; }
     ws.onopen = () => {
         document.getElementById('wsP').className = 'pill ok';
         document.getElementById('wsP').textContent = '🟢 Live';
@@ -329,6 +319,7 @@ function wsConn() {
                 ghost.add(tid);
                 document.querySelector(`.card[data-id="${tid}"]`)?.remove();
                 delete activeStore[tid];
+                videoMap.delete(tid);
                 updateCounts();
             }
         } catch(e) {}
@@ -336,9 +327,26 @@ function wsConn() {
     ws.onclose = () => {
         document.getElementById('wsP').className = 'pill warn';
         document.getElementById('wsP').textContent = '🔴 Offline';
-        setTimeout(wsConn, 2000);
+        setTimeout(wsConn, 1500);
     };
 }
+
+// ── Video Loop (Smooth Realtime playback) ──
+let lastTick = 0;
+function animateVideos(t) {
+    if (t - lastTick > 130) {
+        lastTick = t;
+        videoMap.forEach((v, id) => {
+            let el = document.querySelector(`.vid[data-id="${id}"]`);
+            if (el && v.frames && v.frames.length) {
+                v.cur = (v.cur + 1) % v.frames.length;
+                el.src = v.frames[v.cur];
+            }
+        });
+    }
+    requestAnimationFrame(animateVideos);
+}
+requestAnimationFrame(animateVideos);
 
 const gridArea = document.getElementById('gridArea');
 const manualArea = document.getElementById('manualArea');
@@ -349,7 +357,7 @@ async function fetchPending() {
         let r = await fetch(`${SRV}/api/tasks?tab=pending&t=${Date.now()}`);
         if (r.ok) {
             let d = await r.json();
-            gridArea.innerHTML = ''; manualArea.innerHTML = ''; activeStore = {};
+            gridArea.innerHTML = ''; manualArea.innerHTML = ''; activeStore = {}; videoMap.clear();
             let tasks = d.tasks || {};
             for (let id in tasks) if (!ghost.has(id)) addCard(id, tasks[id]);
             if (aiReady && atOn) triggerParallelSolve();
@@ -411,12 +419,14 @@ function mkCard(t, isTrained) {
         mH += '</div>';
     } else {
         let m = t.media[0] || {};
-        let src = m.src || m.thumb || '';
-        mH = `<div class="sbox" data-id="${t.id}"><img src="${src}" class="si" draggable="false">`;
+        let isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
+        let src = isVid ? (m.frames[0] || m.thumb || '') : (m.src || m.thumb || '');
+        mH = `<div class="sbox" data-id="${t.id}"><img src="${src}" class="si${isVid ? ' vid' : ''}" data-id="${t.id}" draggable="false">`;
         (t.clicks || []).forEach((pt, i) => {
             mH += `<div class="dot${i % 2 === 1 ? ' end-dot' : ''}" style="left:${pt.px}%;top:${pt.py}%"></div>`;
         });
         mH += `</div>`;
+        if (isVid && !isTrained) videoMap.set(t.id, { frames: m.frames, cur: 0 });
     }
 
     let aH = isTrained
@@ -482,7 +492,7 @@ document.body.addEventListener('click', async e => {
             card.classList.remove('ai-on');
         }
         if (act === 'del') {
-            ghost.add(tid); card.remove(); delete activeStore[tid]; updateCounts();
+            ghost.add(tid); card.remove(); delete activeStore[tid]; videoMap.delete(tid); updateCounts();
             fetch(`${SRV}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' });
         }
         if (act === 'retrain') {
@@ -521,7 +531,7 @@ document.body.addEventListener('click', async e => {
         }
         if (act === 'del-tr') {
             fetch(`${SRV}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).then(() => fetchTrained());
-            card.remove(); delete activeStore[tid];
+            card.remove(); delete activeStore[tid]; videoMap.delete(tid);
         }
     }
 });
@@ -543,10 +553,11 @@ function saveTo(taskId, card) {
     ghost.add(taskId);
     if (card) card.remove();
     delete activeStore[taskId];
+    videoMap.delete(taskId);
     updateCounts();
 
     if (aiReady && isGrid) {
-        setTimeout(() => trainTask(taskCopy), 10);
+        setTimeout(() => trainTask(taskCopy), 5);
     }
 
     if (atOn) triggerParallelSolve();
