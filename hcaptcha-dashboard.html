@@ -101,20 +101,17 @@ const SRV = location.protocol==='file:'
 const WS_URL = SRV.replace(/^http/,'ws') + '/ws';
 const PG = 20;
 
-// Worker ID
 let WID = localStorage.getItem('hcm_wid');
 if (!WID) { WID='W-'+Math.random().toString(36).slice(2,5).toUpperCase(); localStorage.setItem('hcm_wid',WID); }
 document.getElementById('wb').textContent = '👤 '+WID;
 function chgW(){ let n=prompt('Worker ID:',WID); if(n?.trim()){WID=n.trim().toUpperCase();localStorage.setItem('hcm_wid',WID);document.getElementById('wb').textContent='👤 '+WID;} }
 
-// State — Default Auto Train & Auto Save ON
 const ta = document.getElementById('ta');
 let tab='pending', pg=0, tpg=1, ttl=0;
 let pcache={}, store={}, vtasks=[], ghost=new Set(), claimed=new Set(), sq='';
 let atOn=true, asOn=true, rts={}, fetching=false;
 let autoSaveTimers = {};
 
-// BroadcastChannel
 let bc=null; try{bc=new BroadcastChannel('hcm_v2');}catch(e){}
 if(bc) bc.onmessage = ev => {
     let {type,taskId,workerId}=ev.data||{};
@@ -130,7 +127,6 @@ if(bc) bc.onmessage = ev => {
 };
 function bcs(d){ try{bc?.postMessage(d);}catch(e){} }
 
-// WebSocket
 let ws=null, wrt=null, wpt=null;
 function wsConn(){
     if(ws&&ws.readyState<2) return;
@@ -166,7 +162,6 @@ function handleWS(m){
 }
 function setPill(id,cls,txt){ let e=document.getElementById(id); e.className='pill '+cls; e.textContent=txt; }
 
-// AI SharedWorker
 let aiW=null, aiReady=false, aiCbs=new Map();
 function initAI(){
     try{
@@ -215,10 +210,9 @@ async function applyAI(task){
         if(img){ img.classList.remove('sel'); img.classList.add('aip'); }
     });
 
-    // 2.5s safe correction window before saving
     if(asOn){
         let btn = card.querySelector('.bsv');
-        if(btn){ btn.style.background='#ff00ff'; btn.textContent='🤖 Auto Saving in 2s...'; }
+        if(btn){ btn.style.background='#ff00ff'; btn.textContent='🤖 Saving...'; }
         if(autoSaveTimers[task.id]) clearTimeout(autoSaveTimers[task.id]);
         autoSaveTimers[task.id] = setTimeout(() => {
             saveTo(task.id, btn, card);
@@ -226,7 +220,6 @@ async function applyAI(task){
     }
 }
 
-// Retrain
 function startRT(tid){
     let t=store[tid]; if(!t) return;
     let card=document.querySelector(`.card[data-id="${tid}"]`); if(!card) return;
@@ -263,7 +256,6 @@ function cnRT(tid){
     card.querySelector('.acts').innerHTML=`<button class="btn bsv">Update</button><button class="btn brt" onclick="startRT('${tid}')">🔧 Retrain</button><button class="btn bdl">❌</button>`;
 }
 
-// Fetch
 async function fetchPending(){
     if(fetching) return; fetching=true;
     try{
@@ -281,7 +273,6 @@ async function fetchTrained(page){
     fetching=false;
 }
 
-// Render
 function renderPending(){
     ta.innerHTML=''; store={}; vtasks=[];
     let frag=document.createDocumentFragment(), q=sq.toLowerCase(), cnt=0;
@@ -291,7 +282,7 @@ function renderPending(){
         let td=pcache[id], m=td.media||[], isG=m.length>1;
         store[id]={id,clicks:[],type:isG?'grid':'coord',media:m,prompt:td.prompt||''};
         let card=mkCard(store[id]); if(card){frag.appendChild(card);cnt++;}
-        if(aiReady&&atOn&&isG) applyAI(store[id]);
+        if(aiReady&&atOn&&isG) setTimeout(() => applyAI(store[id]), 400);
     }
     ta.appendChild(frag);
     if(!cnt) ta.innerHTML='<div class="empty">✅ Koi pending task nahi!</div>';
@@ -307,7 +298,7 @@ function addCard(id,td,flash=false){
     if(flash) card.classList.add('nf');
     let es=ta.querySelector('.empty'); if(es) es.remove();
     ta.prepend(card);
-    if(aiReady&&atOn&&isG) applyAI(store[id]);
+    if(aiReady&&atOn&&isG) setTimeout(() => applyAI(store[id]), 400);
 }
 function renderTrained(tasks){
     ta.innerHTML=''; store={}; vtasks=[];
@@ -334,7 +325,6 @@ function renderPag(){
 function hidePag(){ ['pt','pb2'].forEach(pid=>{ document.getElementById(pid).style.display='none'; }); }
 function goPg(p){ if(p<0||p>=tpg) return; window.scrollTo(0,0); fetchTrained(p); }
 
-// Tab & Search
 function setTab(t){
     tab=t; pg=0; sq='';
     document.getElementById('si').value='';
@@ -355,7 +345,6 @@ function onSrch(){
     },300);
 }
 
-// Card builder
 function su(u){ if(!u)return''; u=u.trim(); if(u.startsWith('data:image/'))return u; if(/^https?:\/\//.test(u))return u.replace(/"/g,'&quot;'); return''; }
 function mkCard(t){
     let ip=tab==='pending';
@@ -389,10 +378,8 @@ function mkCard(t){
     return card;
 }
 
-// Video player
 setInterval(()=>{ vtasks.forEach(vt=>{ let el=document.querySelector(`.vp[data-id="${vt.id}"]`); if(el&&vt.frames?.length>0){vt.cur=(vt.cur+1)%vt.frames.length;el.src=vt.frames[vt.cur];} }); },200);
 
-// Click handler
 const _sv=new Set();
 ta.addEventListener('click', e => {
     let card=e.target.closest('.card'); if(!card) return;
@@ -403,7 +390,6 @@ ta.addEventListener('click', e => {
         let b=document.getElementById('cb-'+tid); if(b){b.textContent=WID;b.className='cbadge mine';}
     }
     if(e.target.classList.contains('gi')){
-        // User manual correction: cancel pending auto-save timer
         if(autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
         let btn = card.querySelector('.bsv');
         if(btn) { btn.style.background='#00ff88'; btn.textContent='Save Task'; }
@@ -442,7 +428,6 @@ async function saveTo(taskId,btn,card){
         if(aiReady&&tab==='pending'&&t.clicks.length>0){ 
             if(btn){btn.textContent='🧠 Learning...';btn.disabled=true;} 
             aiTrain(t); 
-            // 1 task train hotay hi bache hue tasks ko foran auto-solve karo
             setTimeout(() => { if(atOn) reeval(); }, 500);
         }
         if(tab==='pending'){ 
