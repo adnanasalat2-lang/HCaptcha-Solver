@@ -4,13 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>hCaptcha Master Pro ⚡</title>
+<title>hCaptcha Master Pro ⚡ (1K High-Power Edition)</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:#0d0d0d;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden;padding:8px;gap:8px}
+body{background:#0c0c0c;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden;padding:8px;gap:8px}
 .hdr{background:#161616;padding:8px 12px;border-bottom:2px solid #00ff88;display:flex;justify-content:space-between;align-items:center;border-radius:4px;flex-shrink:0}
 .hdr h1{font-size:15px;color:#00ff88}
 .hdr-left{display:flex;align-items:center;gap:10px}
@@ -107,8 +107,9 @@ let currentTab = 'pending';
 let activeStore = {}, ghost = new Set(), rts = {};
 let videoMap = new Map();
 let atOn = true, asOn = true, sq = '';
-let autoSaveTimers = {};
+let isBatchRunning = false;
 
+// ── WebGL AI Engine ──
 let aiModel = null, knn = null, aiReady = false;
 
 async function initAI() {
@@ -120,7 +121,7 @@ async function initAI() {
         loadLocalBrain();
         aiReady = true;
         updateAIStatus();
-        if (atOn) reeval();
+        if (atOn) triggerParallelSolve();
     } catch(e) {
         document.getElementById('aiP').textContent = '⚠️ AI Error';
     }
@@ -176,7 +177,7 @@ function loadImg(src) {
         img.onload = () => res(img);
         img.onerror = () => res(null);
         img.src = src;
-        setTimeout(() => res(img.complete && img.naturalWidth > 0 ? img : null), 800);
+        setTimeout(() => res(img.complete && img.naturalWidth > 0 ? img : null), 600);
     });
 }
 
@@ -204,7 +205,6 @@ async function trainTask(task, wrongIndices = []) {
                     knn.addExample(feat, negLabel);
                 }
             });
-            await tf.nextFrame();
         } catch(e) {}
     }
     saveLocalBrain();
@@ -241,45 +241,55 @@ async function predictTask(task) {
             if (r.label === pText && conf >= 0.38 && negConf < 0.48) {
                 predicted.push(m.index);
             }
-            await tf.nextFrame();
         } catch(e) {}
     }
     return predicted;
 }
 
-async function reeval() {
-    for (let id in activeStore) {
-        let t = activeStore[id];
-        if (currentTab === 'pending' && t.type === 'grid' && (!t.clicks || !t.clicks.length)) {
-            await applyAI(t);
-        }
+// ── Parallel Batch Solving (High-Power 1000+ Tasks Capability) ──
+async function triggerParallelSolve() {
+    if (!aiReady || !atOn || isBatchRunning) return;
+    isBatchRunning = true;
+
+    let unassigned = Object.values(activeStore).filter(t => t.type === 'grid' && (!t.clicks || !t.clicks.length) && !ghost.has(t.id));
+    
+    // Process in parallel chunks of 8 to avoid UI lag while maxing out GPU/CPU
+    const CHUNK_SIZE = 8;
+    for (let i = 0; i < unassigned.length; i += CHUNK_SIZE) {
+        if (!atOn) break;
+        let chunk = unassigned.slice(i, i + CHUNK_SIZE);
+        await Promise.all(chunk.map(async t => {
+            let clicks = await predictTask(t);
+            if (clicks.length && clicks.length <= 6) {
+                t.clicks = clicks;
+                let card = document.querySelector(`.card[data-id="${t.id}"]`);
+                if (card) {
+                    card.classList.add('ai-on');
+                    clicks.forEach(idx => {
+                        let img = card.querySelector(`.gi[data-index="${idx}"]`);
+                        if (img) { img.classList.remove('sel'); img.classList.add('aip'); }
+                    });
+                }
+                // Instant auto save when ON
+                if (asOn) {
+                    setTimeout(() => saveTo(t.id, card), 80);
+                }
+            }
+        }));
+        await tf.nextFrame();
     }
+
+    isBatchRunning = false;
 }
 
-async function applyAI(task) {
-    let clicks = await predictTask(task);
-    if (!clicks.length || clicks.length > 6) return;
-    task.clicks = clicks;
-
-    let card = document.querySelector(`.card[data-id="${task.id}"]`);
-    if (!card) return;
-    card.classList.add('ai-on');
-    clicks.forEach(idx => {
-        let img = card.querySelector(`.gi[data-index="${idx}"]`);
-        if (img) { img.classList.remove('sel'); img.classList.add('aip'); }
-    });
-
-    // Safe 3.5 Seconds Window for User to Add 3rd/4th Click before auto-saving
-    if (asOn) {
-        let btn = card.querySelector('.bsv');
-        if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Auto Saving in 3.5s...'; }
-        if (autoSaveTimers[task.id]) clearTimeout(autoSaveTimers[task.id]);
-        autoSaveTimers[task.id] = setTimeout(() => {
-            saveTo(task.id, card);
-        }, 3500);
+// ── Background Interval (Tab switch hone par bhi band nahi hoga) ──
+setInterval(() => {
+    if (aiReady && atOn && !isBatchRunning) {
+        triggerParallelSolve();
     }
-}
+}, 400);
 
+// ── WebSocket Push ──
 let ws = null;
 function wsConn() {
     if (ws && ws.readyState < 2) return;
@@ -299,6 +309,7 @@ function wsConn() {
             }
             if (m.type === 'new_pending' && !ghost.has(m.data.id) && !activeStore[m.data.id]) {
                 addCard(m.data.id, m.data);
+                if (aiReady && atOn) triggerParallelSolve();
             }
             if (m.type === 'task_solved' || m.type === 'task_deleted') {
                 let tid = m.data.taskId;
@@ -317,6 +328,7 @@ function wsConn() {
     };
 }
 
+// ── Video Animation ──
 let lastTick = 0;
 function animateVideos(t) {
     if (t - lastTick > 150) {
@@ -345,6 +357,7 @@ async function fetchPending() {
             gridArea.innerHTML = ''; manualArea.innerHTML = ''; activeStore = {}; videoMap.clear();
             let tasks = d.tasks || {};
             for (let id in tasks) if (!ghost.has(id)) addCard(id, tasks[id]);
+            if (aiReady && atOn) triggerParallelSolve();
         }
     } catch(e) {}
 }
@@ -358,8 +371,9 @@ async function fetchTrained() {
             let tasks = d.tasks || {};
             for (let id in tasks) {
                 let td = tasks[id];
-                activeStore[id] = { id, clicks: td.clicks || [], type: td.media?.length > 1 ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '' };
-                trainedArea.appendChild(mkCard(activeStore[id], true));
+                let isG = td.media?.length > 1;
+                let item = { id, clicks: td.clicks || [], type: isG ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '' };
+                trainedArea.appendChild(mkCard(item, true));
             }
         }
     } catch(e) {}
@@ -374,7 +388,6 @@ function addCard(id, td) {
 
     if (isG) {
         gridArea.prepend(card);
-        if (aiReady && atOn) setTimeout(() => applyAI(activeStore[id]), 200);
     } else {
         manualArea.prepend(card);
     }
@@ -436,33 +449,22 @@ function mkCard(t, isTrained) {
     return card;
 }
 
+// ── Click Handlers ──
 document.body.addEventListener('click', async e => {
     let card = e.target.closest('.card');
     if (!card) return;
     let tid = card.dataset.id;
     let t = activeStore[tid];
-    if (!t) return;
+    let isTrained = !!card.closest('#trainedView');
 
     if (e.target.classList.contains('gi')) {
-        // User intervention: extend timer so user can add 3rd/4th click safely
-        if (autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
-        let btn = card.querySelector('.bsv');
-        if (btn) { btn.style.background = '#00ff88'; btn.textContent = 'Save Task (Modified)'; }
-
         let idx = parseInt(e.target.dataset.index);
         if (e.target.classList.contains('sel') || e.target.classList.contains('aip') || e.target.classList.contains('retrain-pick')) {
             e.target.classList.remove('sel', 'aip', 'retrain-pick');
-            t.clicks = t.clicks.filter(i => i !== idx);
+            if (t) t.clicks = t.clicks.filter(i => i !== idx);
         } else {
             e.target.classList.add(rts[tid] ? 'retrain-pick' : 'sel');
-            t.clicks.push(idx);
-        }
-
-        // Restart 3s timer after user manual click modification
-        if (asOn) {
-            autoSaveTimers[tid] = setTimeout(() => {
-                saveTo(tid, card);
-            }, 3000);
+            if (t) t.clicks.push(idx);
         }
     }
 
@@ -472,37 +474,35 @@ document.body.addEventListener('click', async e => {
         let px = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
         let py = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
 
-        t.clicks.push({ px, py });
-
-        let dot = document.createElement('div');
-        dot.className = 'dot' + (t.clicks.length % 2 === 0 ? ' end-dot' : '');
-        dot.style.left = px + '%';
-        dot.style.top = py + '%';
-        sbox.appendChild(dot);
+        if (t) {
+            t.clicks.push({ px, py });
+            let dot = document.createElement('div');
+            dot.className = 'dot' + (t.clicks.length % 2 === 0 ? ' end-dot' : '');
+            dot.style.left = px + '%';
+            dot.style.top = py + '%';
+            sbox.appendChild(dot);
+        }
     }
 
     let actionBtn = e.target.closest('[data-action]');
     if (actionBtn) {
         let act = actionBtn.dataset.action;
         if (act === 'save') {
-            if (autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
             saveTo(tid, card);
         }
         if (act === 'reset') {
-            if (autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
-            t.clicks = [];
+            if (t) t.clicks = [];
             card.querySelectorAll('.gi').forEach(i => i.classList.remove('sel', 'aip', 'retrain-pick'));
             card.querySelectorAll('.dot').forEach(d => d.remove());
             card.classList.remove('ai-on');
         }
         if (act === 'del') {
-            if (autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
             ghost.add(tid); card.remove(); delete activeStore[tid]; videoMap.delete(tid); updateCounts();
             fetch(`${SRV}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).catch(()=>{});
         }
         if (act === 'retrain') {
-            rts[tid] = { old: [...t.clicks] };
-            t.clicks = [];
+            rts[tid] = { old: [...(t ? t.clicks : [])] };
+            if (t) t.clicks = [];
             card.querySelectorAll('.gi').forEach(i => i.classList.remove('sel','aip'));
             card.querySelectorAll('.dot').forEach(d => d.remove());
             let bnr = document.createElement('div'); bnr.className = 'rhint'; bnr.id = `rh-${tid}`;
@@ -513,14 +513,15 @@ document.body.addEventListener('click', async e => {
                 <button class="btn bcn" data-action="cancel-rt">Cancel</button>`;
         }
         if (act === 'confirm-rt') {
-            let wrong = (rts[tid]?.old || []).filter(i => !t.clicks.includes(i));
-            if (aiReady && t.type === 'grid') await trainTask(t, wrong);
+            let wrong = (rts[tid]?.old || []).filter(i => !(t?.clicks || []).includes(i));
+            if (aiReady && t && t.type === 'grid') await trainTask(t, wrong);
             await fetch(`${SRV}/api/submit-hcaptcha`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ taskId: tid, clicks: t.clicks })
+                body: JSON.stringify({ taskId: tid, clicks: t?.clicks || [] })
             });
             delete rts[tid];
             fetchTrained();
+            if (atOn) triggerParallelSolve();
         }
         if (act === 'cancel-rt') { delete rts[tid]; fetchTrained(); }
         if (act === 'del-tr') {
@@ -536,7 +537,6 @@ async function saveTo(taskId, card) {
 
     if (aiReady && t.type === 'grid') {
         await trainTask(t);
-        setTimeout(() => { if (atOn) reeval(); }, 300);
     }
 
     ghost.add(taskId);
@@ -550,6 +550,8 @@ async function saveTo(taskId, card) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taskId, clicks: t.clicks })
     }).catch(()=>{});
+
+    if (atOn) triggerParallelSolve();
 }
 
 function setTab(t) {
@@ -567,7 +569,7 @@ function setTab(t) {
     }
 }
 
-function toggleAT() { atOn = !atOn; document.getElementById('bat').className = 'tog' + (atOn ? ' on' : ''); document.getElementById('bat').textContent = '🧠 Auto: ' + (atOn ? 'ON' : 'OFF'); if (atOn && aiReady) reeval(); }
+function toggleAT() { atOn = !atOn; document.getElementById('bat').className = 'tog' + (atOn ? ' on' : ''); document.getElementById('bat').textContent = '🧠 Auto: ' + (atOn ? 'ON' : 'OFF'); if (atOn && aiReady) triggerParallelSolve(); }
 function toggleAS() { asOn = !asOn; document.getElementById('bas').className = 'tog' + (asOn ? ' on' : ''); document.getElementById('bas').textContent = '💾 Save: ' + (asOn ? 'ON' : 'OFF'); }
 
 function onSrch() {
