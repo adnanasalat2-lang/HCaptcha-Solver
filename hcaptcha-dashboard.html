@@ -109,7 +109,6 @@ let videoMap = new Map();
 let atOn = true, asOn = true, sq = '';
 let autoSaveTimers = {};
 
-// ── In-Browser TFJS AI ──
 let aiModel = null, knn = null, aiReady = false;
 
 async function initAI() {
@@ -142,7 +141,7 @@ function cleanLabel(raw) {
 
 function loadLocalBrain() {
     try {
-        let ser = localStorage.getItem('hcm_brain_v3');
+        let ser = localStorage.getItem('hcm_brain_v4');
         if (!ser) return;
         let data = JSON.parse(ser);
         let ds = {};
@@ -157,14 +156,14 @@ function saveLocalBrain() {
         let ds = knn.getClassifierDataset();
         let ser = {};
         for (let k in ds) ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape };
-        localStorage.setItem('hcm_brain_v3', JSON.stringify(ser));
+        localStorage.setItem('hcm_brain_v4', JSON.stringify(ser));
         updateAIStatus();
     } catch(e) {}
 }
 
 function resetBrain() {
     if (!confirm("AI Brain reset karein?")) return;
-    localStorage.removeItem('hcm_brain_v3');
+    localStorage.removeItem('hcm_brain_v4');
     if (knn) knn.clearAllClasses();
     location.reload();
 }
@@ -173,7 +172,7 @@ function loadImg(src) {
     return new Promise(res => {
         if (!src) return res(null);
         let img = new Image();
-        img.crossOrigin = 'anonymous';
+        if (!src.startsWith('data:')) img.crossOrigin = 'anonymous';
         img.onload = () => res(img);
         img.onerror = () => res(null);
         img.src = src;
@@ -198,9 +197,9 @@ async function trainTask(task, wrongIndices = []) {
                 let isWrong = wrongIndices.includes(m.index);
 
                 if (isCorrect) {
-                    for (let i = 0; i < 4; i++) knn.addExample(feat, pText);
+                    for (let i = 0; i < 5; i++) knn.addExample(feat, pText);
                 } else if (isWrong) {
-                    for (let i = 0; i < 10; i++) knn.addExample(feat, negLabel);
+                    for (let i = 0; i < 12; i++) knn.addExample(feat, negLabel);
                 } else {
                     knn.addExample(feat, negLabel);
                 }
@@ -239,7 +238,7 @@ async function predictTask(task) {
             let conf = r.confidences[pText] || 0;
             let negConf = r.confidences['neg_' + pText] || 0;
 
-            if (r.label === pText && conf >= 0.40 && negConf < 0.45) {
+            if (r.label === pText && conf >= 0.38 && negConf < 0.48) {
                 predicted.push(m.index);
             }
             await tf.nextFrame();
@@ -270,17 +269,17 @@ async function applyAI(task) {
         if (img) { img.classList.remove('sel'); img.classList.add('aip'); }
     });
 
+    // Safe 3.5 Seconds Window for User to Add 3rd/4th Click before auto-saving
     if (asOn) {
         let btn = card.querySelector('.bsv');
-        if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Auto Saving...'; }
+        if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Auto Saving in 3.5s...'; }
         if (autoSaveTimers[task.id]) clearTimeout(autoSaveTimers[task.id]);
         autoSaveTimers[task.id] = setTimeout(() => {
             saveTo(task.id, card);
-        }, 1800);
+        }, 3500);
     }
 }
 
-// ── WebSocket Push ──
 let ws = null;
 function wsConn() {
     if (ws && ws.readyState < 2) return;
@@ -318,7 +317,6 @@ function wsConn() {
     };
 }
 
-// ── Video Frames Animation Loop ──
 let lastTick = 0;
 function animateVideos(t) {
     if (t - lastTick > 150) {
@@ -335,7 +333,6 @@ function animateVideos(t) {
 }
 requestAnimationFrame(animateVideos);
 
-// ── UI Lists ──
 const gridArea = document.getElementById('gridArea');
 const manualArea = document.getElementById('manualArea');
 const trainedArea = document.getElementById('trainedArea');
@@ -439,7 +436,6 @@ function mkCard(t, isTrained) {
     return card;
 }
 
-// ── User Interaction ──
 document.body.addEventListener('click', async e => {
     let card = e.target.closest('.card');
     if (!card) return;
@@ -448,9 +444,10 @@ document.body.addEventListener('click', async e => {
     if (!t) return;
 
     if (e.target.classList.contains('gi')) {
+        // User intervention: extend timer so user can add 3rd/4th click safely
         if (autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
         let btn = card.querySelector('.bsv');
-        if (btn) { btn.style.background = '#00ff88'; btn.textContent = 'Save Task'; }
+        if (btn) { btn.style.background = '#00ff88'; btn.textContent = 'Save Task (Modified)'; }
 
         let idx = parseInt(e.target.dataset.index);
         if (e.target.classList.contains('sel') || e.target.classList.contains('aip') || e.target.classList.contains('retrain-pick')) {
@@ -459,6 +456,13 @@ document.body.addEventListener('click', async e => {
         } else {
             e.target.classList.add(rts[tid] ? 'retrain-pick' : 'sel');
             t.clicks.push(idx);
+        }
+
+        // Restart 3s timer after user manual click modification
+        if (asOn) {
+            autoSaveTimers[tid] = setTimeout(() => {
+                saveTo(tid, card);
+            }, 3000);
         }
     }
 
@@ -492,6 +496,7 @@ document.body.addEventListener('click', async e => {
             card.classList.remove('ai-on');
         }
         if (act === 'del') {
+            if (autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
             ghost.add(tid); card.remove(); delete activeStore[tid]; videoMap.delete(tid); updateCounts();
             fetch(`${SRV}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).catch(()=>{});
         }
