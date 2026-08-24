@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>hCaptcha Master Pro ⚡</title>
+<title>hCaptcha Master Pro ⚡ (Zero-Delay Edition)</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -112,8 +112,7 @@ let atOn = true, asOn = true, sq = '';
 let isBatchRunning = false;
 let brainTimer = null;
 
-// ── Anti-Throttle Background Timer Ping (Web Worker) ──
-const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 300);`], { type: 'text/javascript' });
+const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 200);`], { type: 'text/javascript' });
 const bgWorker = new Worker(URL.createObjectURL(timerBlob));
 bgWorker.onmessage = () => {
     if (aiReady && atOn && !isBatchRunning) triggerParallelSolve();
@@ -201,7 +200,7 @@ function getSafeFeature(src) {
         };
         img.onerror = () => res(null);
         img.src = src;
-        setTimeout(() => res(null), 700);
+        setTimeout(() => res(null), 500);
     });
 }
 
@@ -219,9 +218,9 @@ async function trainTask(task, wrongIndices = []) {
         let isWrong = wrongIndices.includes(m.index);
 
         if (isCorrect) {
-            for (let i = 0; i < 5; i++) knn.addExample(feat, pText);
+            for (let i = 0; i < 4; i++) knn.addExample(feat, pText);
         } else if (isWrong) {
-            for (let i = 0; i < 15; i++) knn.addExample(feat, negLabel);
+            for (let i = 0; i < 12; i++) knn.addExample(feat, negLabel);
         } else {
             knn.addExample(feat, negLabel);
         }
@@ -263,13 +262,12 @@ async function predictTask(task) {
     return predicted;
 }
 
-// ── Multi-Task Parallel Batch Solving ──
 async function triggerParallelSolve() {
     if (!aiReady || !atOn || isBatchRunning) return;
     isBatchRunning = true;
 
     let unassigned = Object.values(activeStore).filter(t => t.type === 'grid' && (!t.clicks || !t.clicks.length) && !ghost.has(t.id));
-    const CHUNK_SIZE = 8;
+    const CHUNK_SIZE = 10;
     for (let i = 0; i < unassigned.length; i += CHUNK_SIZE) {
         if (!atOn) break;
         let chunk = unassigned.slice(i, i + CHUNK_SIZE);
@@ -285,7 +283,7 @@ async function triggerParallelSolve() {
                         if (img) { img.classList.remove('sel'); img.classList.add('aip'); }
                     });
                 }
-                if (asOn) setTimeout(() => saveTo(t.id, card), 40);
+                if (asOn) saveTo(t.id, card);
             }
         }));
         await tf.nextFrame();
@@ -297,7 +295,7 @@ async function triggerParallelSolve() {
 let ws = null;
 function wsConn() {
     if (ws && ws.readyState < 2) return;
-    try { ws = new WebSocket(WS_URL); } catch(e) { setTimeout(wsConn, 3000); return; }
+    try { ws = new WebSocket(WS_URL); } catch(e) { setTimeout(wsConn, 2000); return; }
     ws.onopen = () => {
         document.getElementById('wsP').className = 'pill ok';
         document.getElementById('wsP').textContent = '🟢 Live';
@@ -328,14 +326,13 @@ function wsConn() {
     ws.onclose = () => {
         document.getElementById('wsP').className = 'pill warn';
         document.getElementById('wsP').textContent = '🔴 Offline';
-        setTimeout(wsConn, 3000);
+        setTimeout(wsConn, 2000);
     };
 }
 
-// ── Video Animation ──
 let lastTick = 0;
 function animateVideos(t) {
-    if (t - lastTick > 150) {
+    if (t - lastTick > 140) {
         lastTick = t;
         videoMap.forEach((v, id) => {
             let el = document.querySelector(`.vid[data-id="${id}"]`);
@@ -389,7 +386,6 @@ function addCard(id, td) {
     let isG = m.length > 1;
     activeStore[id] = { id, clicks: [], type: isG ? 'grid' : 'coord', media: m, prompt: td.prompt || '' };
     
-    // Sirf pending tab par render ho agar trained tab khula ho toh background mein memory store ho
     if (currentTab === 'pending') {
         let card = mkCard(activeStore[id], false);
         if (isG) gridArea.prepend(card);
@@ -449,25 +445,6 @@ function mkCard(t, isTrained) {
     return card;
 }
 
-function getNormalizedCoords(sbox, clientX, clientY) {
-    let img = sbox.querySelector('img');
-    if (!img) return null;
-    let r = sbox.getBoundingClientRect(), nw = img.naturalWidth || 400, nh = img.naturalHeight || 300;
-    let br = r.width / r.height, ir = nw / nh;
-    let aw = r.width, ah = r.height, ox = 0, oy = 0;
-    if (br > ir) { aw = r.height * ir; ox = (r.width - aw) / 2; }
-    else { ah = r.width / ir; oy = (r.height - ah) / 2; }
-    let cx = clientX - r.left - ox, cy = clientY - r.top - oy;
-    if (cx < 0 || cx > aw || cy < 0 || cy > ah) return null;
-    return {
-        px: Math.max(0, Math.min(100, (cx / aw) * 100)),
-        py: Math.max(0, Math.min(100, (cy / ah) * 100)),
-        dotLeft: ((clientX - r.left) / r.width) * 100,
-        dotTop: ((clientY - r.top) / r.height) * 100
-    };
-}
-
-// ── Instant Interaction Handlers ──
 document.body.addEventListener('click', async e => {
     let card = e.target.closest('.card');
     if (!card) return;
@@ -488,13 +465,16 @@ document.body.addEventListener('click', async e => {
 
     let sbox = e.target.closest('.sbox');
     if (sbox && !e.target.closest('.acts')) {
-        let c = getNormalizedCoords(sbox, e.clientX, e.clientY);
-        if (c && t) {
-            t.clicks.push({ px: c.px, py: c.py });
+        let rect = sbox.getBoundingClientRect();
+        let px = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+        let py = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
+
+        if (t) {
+            t.clicks.push({ px, py });
             let dot = document.createElement('div');
             dot.className = 'dot' + (t.clicks.length % 2 === 0 ? ' end-dot' : '');
-            dot.style.left = c.dotLeft + '%';
-            dot.style.top = c.dotTop + '%';
+            dot.style.left = px + '%';
+            dot.style.top = py + '%';
             sbox.appendChild(dot);
         }
     }
@@ -528,11 +508,16 @@ document.body.addEventListener('click', async e => {
         }
         if (act === 'confirm-rt') {
             let wrong = (rts[tid]?.old || []).filter(i => !(t?.clicks || []).includes(i));
-            if (aiReady && t && t.type === 'grid') await trainTask(t, wrong);
-            await fetch(`${SRV}/api/submit-hcaptcha`, {
+            
+            // Fast Submission
+            fetch(`${SRV}/api/submit-hcaptcha`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ taskId: tid, clicks: t?.clicks || [] })
             });
+
+            // Async Background Train
+            if (aiReady && t && t.type === 'grid') trainTask(t, wrong);
+
             delete rts[tid];
             card.classList.remove('retrain-mode');
             let b = document.getElementById(`rh-${tid}`); if (b) b.remove();
@@ -552,25 +537,33 @@ document.body.addEventListener('click', async e => {
     }
 });
 
-async function saveTo(taskId, card) {
+// Instant Asynchronous Save Pipeline
+function saveTo(taskId, card) {
     let t = activeStore[taskId];
     if (!t || !t.clicks.length) return;
 
-    if (aiReady && t.type === 'grid') {
-        await trainTask(t);
-    }
+    let clicks = [...t.clicks];
+    let isGrid = t.type === 'grid';
+    let taskCopy = { ...t, clicks };
 
+    // 1. Instant Push to Server
+    fetch(`${SRV}/api/submit-hcaptcha`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId, clicks })
+    });
+
+    // 2. Remove from Active UI Immediately
     ghost.add(taskId);
     if (card) card.remove();
     delete activeStore[taskId];
     videoMap.delete(taskId);
     updateCounts();
 
-    await fetch(`${SRV}/api/submit-hcaptcha`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskId, clicks: t.clicks })
-    });
+    // 3. Train AI in Background without blocking network
+    if (aiReady && isGrid) {
+        setTimeout(() => trainTask(taskCopy), 10);
+    }
 
     if (atOn) triggerParallelSolve();
 }
