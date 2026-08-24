@@ -1,5 +1,5 @@
 // ============================================================
-// server.js — High-Speed, Low-Memory Server
+// server.js — High Concurrency Multi-Part Server
 // ============================================================
 'use strict';
 
@@ -16,18 +16,13 @@ const server = http.createServer(app);
 app.use(cors());
 app.use(express.json({ limit: '40mb' }));
 
-const wss = new WS.Server({
-    server,
-    perMessageDeflate: false,
-    maxPayload: 20 * 1024 * 1024
-});
+const wss = new WS.Server({ server, perMessageDeflate: false });
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE  = path.join(DATA_DIR, 'database.json');
 const AI_FILE  = path.join(DATA_DIR, 'ai_brain.json');
 
 const MAX_PENDING = 60;
-
 let pending   = {};
 let trained   = {};
 let aiBrainDS = {};
@@ -57,45 +52,28 @@ function saveDB() {
     }, 1500);
 }
 
-function autoSolve(task) {
-    if (trained[task.taskId] && trained[task.taskId].clicks?.length) {
-        return { ok: true, clicks: trained[task.taskId].clicks };
-    }
-    return { ok: false };
-}
-
 function pushBrowser(taskId, clicks) {
     let sockets = bMap.get(taskId);
     if (!sockets) return;
     let msg = JSON.stringify({ action: 'solve', taskId, clicks });
-    sockets.forEach(ws => {
-        if (ws.readyState === WS.OPEN) ws.send(msg);
-    });
+    sockets.forEach(ws => { if (ws.readyState === WS.OPEN) ws.send(msg); });
     bMap.delete(taskId);
 }
 
 function pushDash(type, data) {
     if (!dSet.size) return;
     let msg = JSON.stringify({ type, data });
-    dSet.forEach(ws => {
-        if (ws.readyState === WS.OPEN) ws.send(msg);
-    });
+    dSet.forEach(ws => { if (ws.readyState === WS.OPEN) ws.send(msg); });
 }
 
 function getCounts() {
     return {
         pending: Object.keys(pending).length,
-        trained: Object.keys(trained).length,
-        browsers: bMap.size,
-        dashboards: dSet.size
+        trained: Object.keys(trained).length
     };
 }
 
 wss.on('connection', (ws) => {
-    ws.isAlive = true;
-    ws.on('pong', () => { ws.isAlive = true; });
-    ws.on('error', () => ws.terminate());
-
     ws.on('message', raw => {
         try {
             let msg = JSON.parse(raw);
@@ -106,15 +84,10 @@ wss.on('connection', (ws) => {
                 bMap.get(msg.taskId).add(ws);
 
                 if (trained[msg.taskId]) {
-                    ws.send(JSON.stringify({
-                        action: 'solve',
-                        taskId: msg.taskId,
-                        clicks: trained[msg.taskId].clicks
-                    }));
+                    ws.send(JSON.stringify({ action: 'solve', taskId: msg.taskId, clicks: trained[msg.taskId].clicks }));
                 }
                 return;
             }
-
             if (msg.action === 'dashboard') {
                 ws.type = 'dashboard';
                 dSet.add(ws);
@@ -133,22 +106,13 @@ wss.on('connection', (ws) => {
     });
 });
 
-setInterval(() => {
-    wss.clients.forEach(ws => {
-        if (!ws.isAlive) { ws.terminate(); return; }
-        ws.isAlive = false;
-        ws.ping();
-    });
-}, 30000);
-
 app.post('/api/new-hcaptcha', (req, res) => {
     let task = req.body;
     if (!task?.taskId) return res.json({ success: false });
 
-    let r = autoSolve(task);
-    if (r.ok) {
-        pushBrowser(task.taskId, r.clicks);
-        return res.json({ success: true, autoSolved: true, clicks: r.clicks });
+    if (trained[task.taskId] && trained[task.taskId].clicks?.length) {
+        pushBrowser(task.taskId, trained[task.taskId].clicks);
+        return res.json({ success: true, autoSolved: true, clicks: trained[task.taskId].clicks });
     }
 
     let pKeys = Object.keys(pending);
@@ -198,21 +162,10 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     }
 });
 
-app.get('/api/check-hcaptcha/:id', (req, res) => {
-    let t = trained[req.params.id];
-    res.json(t ? { status: 'solved', clicks: t.clicks || [] } : { status: 'pending' });
-});
-
 app.get('/api/tasks', (req, res) => {
     let tab = req.query.tab === 'trained' ? 'trained' : 'pending';
-    let size = tab === 'trained' ? 10 : 30;
     let src = tab === 'trained' ? trained : pending;
-    let ids = Object.keys(src);
-    if (tab === 'trained') ids = ids.reverse();
-    let pageIds = ids.slice(0, size);
-    let tasks = {};
-    pageIds.forEach(id => { tasks[id] = src[id]; });
-    res.json({ tasks, total: ids.length });
+    res.json({ tasks: src, total: Object.keys(src).length });
 });
 
 app.get('/api/counts', (req, res) => res.json(getCounts()));
@@ -228,14 +181,10 @@ app.delete('/api/delete-hcaptcha/:id', (req, res) => {
 
 app.get('/api/ai-brain', (req, res) => res.json(aiBrainDS));
 app.post('/api/ai-brain', (req, res) => {
-    if (req.body && typeof req.body === 'object') {
-        aiBrainDS = req.body;
-        try { fs.writeFileSync(AI_FILE, JSON.stringify(aiBrainDS), 'utf8'); } catch(e) {}
-        return res.json({ success: true });
-    }
-    res.json({ success: false });
+    aiBrainDS = req.body || {};
+    try { fs.writeFileSync(AI_FILE, JSON.stringify(aiBrainDS), 'utf8'); } catch(e) {}
+    res.json({ success: true });
 });
-
 app.delete('/api/ai-brain', (req, res) => {
     aiBrainDS = {};
     try { fs.writeFileSync(AI_FILE, '{}', 'utf8'); } catch(e) {}
@@ -249,6 +198,4 @@ app.get('/', (req, res) => {
 
 initDB();
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`🚀 Master Server 2.0 Live on Port ${PORT}`);
-});
+server.listen(PORT, () => console.log(`🚀 Server Live on Port ${PORT}`));
