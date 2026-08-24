@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>hCaptcha Master</title>
+<title>hCaptcha Master Pro</title>
 <style>
 *{box-sizing:border-box}
 body{background:#121212;color:#fff;font-family:Arial,sans-serif;margin:0;padding:16px}
@@ -74,7 +74,7 @@ h1{margin:0;font-size:18px;color:#00ff88}
 <body>
 <div class="hdr">
   <div class="hdr-top">
-    <h1>hCaptcha Master 🤖</h1>
+    <h1>hCaptcha Master Pro 🤖</h1>
     <div class="tabs">
       <button class="tb on" id="bt-pending" onclick="setTab('pending')">Pending <span class="cnt" id="cp">0</span></button>
       <button class="tb" id="bt-trained" onclick="setTab('trained')">Trained <span class="cnt" id="ct">0</span></button>
@@ -83,8 +83,8 @@ h1{margin:0;font-size:18px;color:#00ff88}
   <div class="bar">
     <span class="pill warn" id="wsP">🔌 Connecting...</span>
     <span class="pill warn" id="aiP">🧠 AI Loading...</span>
-    <button id="bat" class="tog" onclick="toggleAT()">🧠 Auto Train: OFF</button>
-    <button id="bas" class="tog" onclick="toggleAS()">💾 Auto Save: OFF</button>
+    <button id="bat" class="tog on" onclick="toggleAT()">🧠 Auto Train: ON</button>
+    <button id="bas" class="tog on" onclick="toggleAS()">💾 Auto Save: ON</button>
     <span class="wbadge" id="wb" onclick="chgW()">👤 W-?</span>
     <span class="pi" id="oc"></span>
   </div>
@@ -107,13 +107,14 @@ if (!WID) { WID='W-'+Math.random().toString(36).slice(2,5).toUpperCase(); localS
 document.getElementById('wb').textContent = '👤 '+WID;
 function chgW(){ let n=prompt('Worker ID:',WID); if(n?.trim()){WID=n.trim().toUpperCase();localStorage.setItem('hcm_wid',WID);document.getElementById('wb').textContent='👤 '+WID;} }
 
-// State
+// State — Default Auto Train & Auto Save ON
 const ta = document.getElementById('ta');
 let tab='pending', pg=0, tpg=1, ttl=0;
 let pcache={}, store={}, vtasks=[], ghost=new Set(), claimed=new Set(), sq='';
-let atOn=false, asOn=false, rts={}, fetching=false;
+let atOn=true, asOn=true, rts={}, fetching=false;
+let autoSaveTimers = {};
 
-// BroadcastChannel — same browser tabs sync
+// BroadcastChannel
 let bc=null; try{bc=new BroadcastChannel('hcm_v2');}catch(e){}
 if(bc) bc.onmessage = ev => {
     let {type,taskId,workerId}=ev.data||{};
@@ -129,7 +130,7 @@ if(bc) bc.onmessage = ev => {
 };
 function bcs(d){ try{bc?.postMessage(d);}catch(e){} }
 
-// WebSocket — Dashboard
+// WebSocket
 let ws=null, wrt=null, wpt=null;
 function wsConn(){
     if(ws&&ws.readyState<2) return;
@@ -165,7 +166,7 @@ function handleWS(m){
 }
 function setPill(id,cls,txt){ let e=document.getElementById(id); e.className='pill '+cls; e.textContent=txt; }
 
-// AI SharedWorker — ek baar load, sab tabs use karein
+// AI SharedWorker
 let aiW=null, aiReady=false, aiCbs=new Map();
 function initAI(){
     try{
@@ -192,14 +193,37 @@ function aiPredict(task){
 }
 function toggleAT(){ atOn=!atOn; let b=document.getElementById('bat'); b.className='tog'+(atOn?' on':''); b.textContent='🧠 Auto Train: '+(atOn?'ON':'OFF'); if(atOn&&aiReady) reeval(); }
 function toggleAS(){ asOn=!asOn; let b=document.getElementById('bas'); b.className='tog'+(asOn?' on':''); b.textContent='💾 Auto Save: '+(asOn?'ON':'OFF'); }
-async function reeval(){ for(let id in store){ let t=store[id]; if(tab==='pending'&&t.type==='grid'&&!t.clicks.length) await applyAI(t); } }
+
+async function reeval(){
+    for(let id in store){
+        let t=store[id];
+        if(tab==='pending' && t.type==='grid' && !t.clicks.length) {
+            await applyAI(t);
+        }
+    }
+}
+
 async function applyAI(task){
-    let clicks=await aiPredict(task); if(!clicks.length||clicks.length>6) return;
-    task.clicks=clicks;
-    let card=document.querySelector(`.card[data-id="${task.id}"]`); if(!card) return;
+    let clicks = await aiPredict(task);
+    if(!clicks.length || clicks.length > 6) return;
+    task.clicks = clicks;
+    let card = document.querySelector(`.card[data-id="${task.id}"]`);
+    if(!card) return;
     card.classList.add('ai-on');
-    clicks.forEach(idx=>{ let img=card.querySelector(`.gi[data-index="${idx}"]`); if(img){img.classList.remove('sel');img.classList.add('aip');} });
-    if(asOn){ let btn=card.querySelector('.bsv'); if(btn){btn.style.background='#ff00ff';btn.textContent='🤖 Saving...';} setTimeout(()=>saveTo(task.id,btn,card),600); }
+    clicks.forEach(idx => {
+        let img = card.querySelector(`.gi[data-index="${idx}"]`);
+        if(img){ img.classList.remove('sel'); img.classList.add('aip'); }
+    });
+
+    // 2.5s safe correction window before saving
+    if(asOn){
+        let btn = card.querySelector('.bsv');
+        if(btn){ btn.style.background='#ff00ff'; btn.textContent='🤖 Auto Saving in 2s...'; }
+        if(autoSaveTimers[task.id]) clearTimeout(autoSaveTimers[task.id]);
+        autoSaveTimers[task.id] = setTimeout(() => {
+            saveTo(task.id, btn, card);
+        }, 2200);
+    }
 }
 
 // Retrain
@@ -207,7 +231,14 @@ function startRT(tid){
     let t=store[tid]; if(!t) return;
     let card=document.querySelector(`.card[data-id="${tid}"]`); if(!card) return;
     rts[tid]={old:[...(t.clicks||[])],nw:[]};
-    card.querySelectorAll('.tg img').forEach(img=>{ img.classList.add('rp'); img.onclick=()=>{ let idx=parseInt(img.dataset.index),st=rts[tid]; if(st.nw.includes(idx)){st.nw=st.nw.filter(x=>x!==idx);img.classList.remove('ck');}else{st.nw.push(idx);img.classList.add('ck');} }; });
+    card.querySelectorAll('.tg img').forEach(img=>{
+        img.classList.add('rp');
+        img.onclick=()=>{
+            let idx=parseInt(img.dataset.index),st=rts[tid];
+            if(st.nw.includes(idx)){st.nw=st.nw.filter(x=>x!==idx);img.classList.remove('ck');}
+            else{st.nw.push(idx);img.classList.add('ck');}
+        };
+    });
     let h=document.createElement('div'); h.className='rhint'; h.id='rh-'+tid; h.textContent='🟠 Sahi images click karo → Confirm dabao';
     card.querySelector('.acts').before(h);
     card.querySelector('.acts').innerHTML=`<button class="btn bcf" onclick="cfRT('${tid}')">✅ Confirm</button><button class="btn bcn" onclick="cnRT('${tid}')">❌ Cancel</button>`;
@@ -220,7 +251,10 @@ async function cfRT(tid){
     aiTrain(t,wrong);
     await fetch(`${SRV}/api/submit-hcaptcha`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({taskId:tid,clicks:st.nw})}).catch(()=>{});
     delete rts[tid];
-    if(card){let h=card.querySelector('#rh-'+tid);if(h)h.remove(); card.querySelector('.acts').innerHTML=`<button class="btn bsv">Update</button><button class="btn brt" onclick="startRT('${tid}')">🔧 Retrain</button><button class="btn bdl">❌</button>`;}
+    if(card){
+        let h=card.querySelector('#rh-'+tid);if(h)h.remove();
+        card.querySelector('.acts').innerHTML=`<button class="btn bsv">Update</button><button class="btn brt" onclick="startRT('${tid}')">🔧 Retrain</button><button class="btn bdl">❌</button>`;
+    }
 }
 function cnRT(tid){
     delete rts[tid]; let card=document.querySelector(`.card[data-id="${tid}"]`); if(!card) return;
@@ -369,38 +403,71 @@ ta.addEventListener('click', e => {
         let b=document.getElementById('cb-'+tid); if(b){b.textContent=WID;b.className='cbadge mine';}
     }
     if(e.target.classList.contains('gi')){
+        // User manual correction: cancel pending auto-save timer
+        if(autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
+        let btn = card.querySelector('.bsv');
+        if(btn) { btn.style.background='#00ff88'; btn.textContent='Save Task'; }
+
         let idx=parseInt(e.target.dataset.index);
-        if(e.target.classList.contains('sel')||e.target.classList.contains('aip')){e.target.classList.remove('sel','aip');t.clicks=t.clicks.filter(i=>i!==idx);}
-        else{e.target.classList.add('sel');t.clicks.push(idx);}
+        if(e.target.classList.contains('sel')||e.target.classList.contains('aip')){
+            e.target.classList.remove('sel','aip');
+            t.clicks=t.clicks.filter(i=>i!==idx);
+        } else {
+            e.target.classList.add('sel');
+            t.clicks.push(idx);
+        }
     } else if(e.target.classList.contains('si')){
         let r=e.target.getBoundingClientRect(), x=((e.clientX-r.left)/r.width)*100, y=((e.clientY-r.top)/r.height)*100;
         t.clicks.push({px:x,py:y});
         let d=document.createElement('div'); d.className='dot'; d.style.left=`${x}%`; d.style.top=`${y}%`;
         e.target.parentElement.appendChild(d);
-    } else if(e.target.classList.contains('bsv')){ saveTo(tid,e.target,card); }
-    else if(e.target.classList.contains('brs')){ t.clicks=[]; card.querySelectorAll('.gi').forEach(i=>i.classList.remove('sel','aip')); card.querySelectorAll('.dot').forEach(d=>d.remove()); card.classList.remove('ai-on'); }
-    else if(e.target.classList.contains('bdl')){ ghost.add(tid); card.remove(); delete store[tid]; delete pcache[tid]; bcs({type:'deleted',taskId:tid,workerId:WID}); fetch(`${SRV}/api/delete-hcaptcha/${tid}`,{method:'DELETE'}).catch(()=>{}); }
+    } else if(e.target.classList.contains('bsv')){ 
+        if(autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
+        saveTo(tid,e.target,card); 
+    }
+    else if(e.target.classList.contains('brs')){ 
+        if(autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
+        t.clicks=[]; card.querySelectorAll('.gi').forEach(i=>i.classList.remove('sel','aip')); card.querySelectorAll('.dot').forEach(d=>d.remove()); card.classList.remove('ai-on'); 
+    }
+    else if(e.target.classList.contains('bdl')){ 
+        if(autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
+        ghost.add(tid); card.remove(); delete store[tid]; delete pcache[tid]; bcs({type:'deleted',taskId:tid,workerId:WID}); fetch(`${SRV}/api/delete-hcaptcha/${tid}`,{method:'DELETE'}).catch(()=>{}); 
+    }
 });
 
 async function saveTo(taskId,btn,card){
     if(_sv.has(taskId)) return; _sv.add(taskId);
     let t=store[taskId]; if(!t){_sv.delete(taskId);return;}
     try{
-        if(aiReady&&tab==='pending'&&t.clicks.length>0){ if(btn){btn.textContent='🧠 Learning...';btn.disabled=true;} aiTrain(t); }
-        if(tab==='pending'){ ghost.add(taskId); setTimeout(()=>ghost.delete(taskId),4000); if(card)card.remove(); delete store[taskId]; delete pcache[taskId]; bcs({type:'saved',taskId,workerId:WID}); }
-        else{ if(btn){btn.textContent='Updated!';setTimeout(()=>{if(btn){btn.textContent='Update';btn.disabled=false;}},1200);} }
+        if(aiReady&&tab==='pending'&&t.clicks.length>0){ 
+            if(btn){btn.textContent='🧠 Learning...';btn.disabled=true;} 
+            aiTrain(t); 
+            // 1 task train hotay hi bache hue tasks ko foran auto-solve karo
+            setTimeout(() => { if(atOn) reeval(); }, 500);
+        }
+        if(tab==='pending'){ 
+            ghost.add(taskId); 
+            setTimeout(()=>ghost.delete(taskId),4000); 
+            if(card)card.remove(); 
+            delete store[taskId]; 
+            delete pcache[taskId]; 
+            bcs({type:'saved',taskId,workerId:WID}); 
+        }
+        else{ 
+            if(btn){btn.textContent='Updated!';setTimeout(()=>{if(btn){btn.textContent='Update';btn.disabled=false;}},1200);} 
+        }
         await fetch(`${SRV}/api/submit-hcaptcha`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({taskId,clicks:t.clicks})});
-    }catch(e){ if(btn){btn.textContent='❌ Retry';btn.disabled=false;} }
-    finally{ _sv.delete(taskId); }
+    }catch(e){ 
+        if(btn){btn.textContent='❌ Retry';btn.disabled=false;} 
+    }
+    finally{ 
+        _sv.delete(taskId); 
+    }
 }
 
-// Image error
 window.addEventListener('error',e=>{ if(e.target?.tagName==='IMG'&&e.target.classList.contains('eimg')){e.target.style.display='none';if(e.target.nextElementSibling)e.target.nextElementSibling.style.display='flex';} },true);
-
-// Visibility
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden) wsConn(); });
 
-// Init
 wsConn();
 fetchPending();
 initAI();
