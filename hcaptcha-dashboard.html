@@ -50,8 +50,8 @@ body{background:#0c0c0c;color:#fff;font-family:-apple-system,BlinkMacSystemFont,
 .dot{position:absolute;width:16px;height:16px;background:#00ff88;border:2px solid #000;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:10;box-shadow:0 0 8px #00ff88}
 .dot.end-dot{background:#ff8800;box-shadow:0 0 8px #ff8800}
 .acts{display:flex;gap:4px;margin-top:6px}
-.btn{flex:1;padding:7px;border:none;font-weight:bold;cursor:pointer;color:#fff;font-size:11px;border-radius:3px;transition:opacity 0.1s}
-.btn:active{opacity:0.7}
+.btn{flex:1;padding:7px;border:none;font-weight:bold;cursor:pointer;color:#fff;font-size:11px;border-radius:3px}
+.btn:active{opacity:0.6}
 .bsv{background:#00ff88;color:#000}
 .brs{background:#333}
 .bdl{background:#ee4444;flex:0.3}
@@ -112,6 +112,13 @@ let atOn = true, asOn = true, sq = '';
 let isBatchRunning = false;
 let brainTimer = null;
 
+// ── Anti-Throttle Background Timer Ping (Web Worker) ──
+const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 300);`], { type: 'text/javascript' });
+const bgWorker = new Worker(URL.createObjectURL(timerBlob));
+bgWorker.onmessage = () => {
+    if (aiReady && atOn && !isBatchRunning) triggerParallelSolve();
+};
+
 let aiModel = null, knn = null, aiReady = false;
 
 async function initAI() {
@@ -171,11 +178,11 @@ function scheduleBrainSave() {
             });
             updateAIStatus();
         } catch(e) {}
-    }, 1500);
+    }, 1200);
 }
 
 async function resetBrain() {
-    if (!confirm("Reset AI Brain permanently on server?")) return;
+    if (!confirm("AI Brain permanently reset karein?")) return;
     await fetch(`${SRV}/api/ai-brain`, { method: 'DELETE' });
     if (knn) knn.clearAllClasses();
     location.reload();
@@ -194,7 +201,7 @@ function getSafeFeature(src) {
         };
         img.onerror = () => res(null);
         img.src = src;
-        setTimeout(() => res(null), 800);
+        setTimeout(() => res(null), 700);
     });
 }
 
@@ -256,6 +263,7 @@ async function predictTask(task) {
     return predicted;
 }
 
+// ── Multi-Task Parallel Batch Solving ──
 async function triggerParallelSolve() {
     if (!aiReady || !atOn || isBatchRunning) return;
     isBatchRunning = true;
@@ -277,9 +285,7 @@ async function triggerParallelSolve() {
                         if (img) { img.classList.remove('sel'); img.classList.add('aip'); }
                     });
                 }
-                if (asOn) {
-                    setTimeout(() => saveTo(t.id, card), 60);
-                }
+                if (asOn) setTimeout(() => saveTo(t.id, card), 40);
             }
         }));
         await tf.nextFrame();
@@ -287,10 +293,7 @@ async function triggerParallelSolve() {
     isBatchRunning = false;
 }
 
-setInterval(() => {
-    if (aiReady && atOn && !isBatchRunning) triggerParallelSolve();
-}, 400);
-
+// ── WebSocket Push ──
 let ws = null;
 function wsConn() {
     if (ws && ws.readyState < 2) return;
@@ -329,6 +332,7 @@ function wsConn() {
     };
 }
 
+// ── Video Animation ──
 let lastTick = 0;
 function animateVideos(t) {
     if (t - lastTick > 150) {
@@ -384,9 +388,13 @@ function addCard(id, td) {
     let m = td.media || [];
     let isG = m.length > 1;
     activeStore[id] = { id, clicks: [], type: isG ? 'grid' : 'coord', media: m, prompt: td.prompt || '' };
-    let card = mkCard(activeStore[id], false);
-    if (isG) gridArea.prepend(card);
-    else manualArea.prepend(card);
+    
+    // Sirf pending tab par render ho agar trained tab khula ho toh background mein memory store ho
+    if (currentTab === 'pending') {
+        let card = mkCard(activeStore[id], false);
+        if (isG) gridArea.prepend(card);
+        else manualArea.prepend(card);
+    }
     updateCounts();
 }
 
@@ -441,58 +449,34 @@ function mkCard(t, isTrained) {
     return card;
 }
 
-// ── Exact Coordinate Normalizer for Canvas ──
-function getNormalizedImageCoords(sbox, clientX, clientY) {
+function getNormalizedCoords(sbox, clientX, clientY) {
     let img = sbox.querySelector('img');
     if (!img) return null;
-
-    let rect = sbox.getBoundingClientRect();
-    let nw = img.naturalWidth || 400;
-    let nh = img.naturalHeight || 300;
-
-    let boxRatio = rect.width / rect.height;
-    let imgRatio = nw / nh;
-
-    let actualW = rect.width;
-    let actualH = rect.height;
-    let offsetX = 0;
-    let offsetY = 0;
-
-    if (boxRatio > imgRatio) {
-        actualW = rect.height * imgRatio;
-        offsetX = (rect.width - actualW) / 2;
-    } else {
-        actualH = rect.width / imgRatio;
-        offsetY = (rect.height - actualH) / 2;
-    }
-
-    let clickX = clientX - rect.left - offsetX;
-    let clickY = clientY - rect.top - offsetY;
-
-    if (clickX < 0 || clickX > actualW || clickY < 0 || clickY > actualH) return null;
-
-    let px = Math.max(0, Math.min(100, (clickX / actualW) * 100));
-    let py = Math.max(0, Math.min(100, (clickY / actualH) * 100));
-
-    // Render dot relative to box
-    let dotLeft = ((clientX - rect.left) / rect.width) * 100;
-    let dotTop = ((clientY - rect.top) / rect.height) * 100;
-
-    return { px, py, dotLeft, dotTop };
+    let r = sbox.getBoundingClientRect(), nw = img.naturalWidth || 400, nh = img.naturalHeight || 300;
+    let br = r.width / r.height, ir = nw / nh;
+    let aw = r.width, ah = r.height, ox = 0, oy = 0;
+    if (br > ir) { aw = r.height * ir; ox = (r.width - aw) / 2; }
+    else { ah = r.width / ir; oy = (r.height - ah) / 2; }
+    let cx = clientX - r.left - ox, cy = clientY - r.top - oy;
+    if (cx < 0 || cx > aw || cy < 0 || cy > ah) return null;
+    return {
+        px: Math.max(0, Math.min(100, (cx / aw) * 100)),
+        py: Math.max(0, Math.min(100, (cy / ah) * 100)),
+        dotLeft: ((clientX - r.left) / r.width) * 100,
+        dotTop: ((clientY - r.top) / r.height) * 100
+    };
 }
 
-// ── User Interaction (Fixed Letterbox Offset) ──
+// ── Instant Interaction Handlers ──
 document.body.addEventListener('click', async e => {
     let card = e.target.closest('.card');
     if (!card) return;
     let tid = card.dataset.id;
     let t = activeStore[tid];
 
-    // Grid Clicks
     if (e.target.classList.contains('gi')) {
         let idx = parseInt(e.target.dataset.index);
         let inRetrain = !!rts[tid];
-
         if (e.target.classList.contains('sel') || e.target.classList.contains('aip') || e.target.classList.contains('retrain-pick')) {
             e.target.classList.remove('sel', 'aip', 'retrain-pick');
             if (t) t.clicks = t.clicks.filter(i => i !== idx);
@@ -502,21 +486,19 @@ document.body.addEventListener('click', async e => {
         }
     }
 
-    // Manual Canvas Click (Exact Pixel Offset Corrected)
     let sbox = e.target.closest('.sbox');
     if (sbox && !e.target.closest('.acts')) {
-        let coords = getNormalizedImageCoords(sbox, e.clientX, e.clientY);
-        if (coords && t) {
-            t.clicks.push({ px: coords.px, py: coords.py });
+        let c = getNormalizedCoords(sbox, e.clientX, e.clientY);
+        if (c && t) {
+            t.clicks.push({ px: c.px, py: c.py });
             let dot = document.createElement('div');
             dot.className = 'dot' + (t.clicks.length % 2 === 0 ? ' end-dot' : '');
-            dot.style.left = coords.dotLeft + '%';
-            dot.style.top = coords.dotTop + '%';
+            dot.style.left = c.dotLeft + '%';
+            dot.style.top = c.dotTop + '%';
             sbox.appendChild(dot);
         }
     }
 
-    // Actions
     let actionBtn = e.target.closest('[data-action]');
     if (actionBtn) {
         let act = actionBtn.dataset.action;
