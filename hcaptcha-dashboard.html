@@ -43,9 +43,10 @@ body{background:#111;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Se
 .ig img{width:100%;height:95px;object-fit:cover;cursor:pointer;border:2px solid transparent;background:#222;border-radius:3px}
 .ig img.sel{border-color:#00ff88;opacity:0.8}
 .ig img.aip{border-color:#ff00ff!important;opacity:0.9}
-.sbox{position:relative;width:100%;cursor:crosshair;display:flex;justify-content:center;background:#000;border-radius:4px;border:1px solid #333;overflow:hidden}
-.sbox img{width:100%;height:auto;min-height:300px;max-height:400px;object-fit:contain;display:block}
-.dot{position:absolute;width:12px;height:12px;background:#00ff88;border:2px solid #000;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none}
+.sbox{position:relative;width:100%;cursor:crosshair;display:flex;justify-content:center;background:#000;border-radius:4px;border:1px solid #333;overflow:hidden;user-select:none}
+.sbox img{width:100%;height:auto;min-height:280px;max-height:360px;object-fit:contain;display:block;pointer-events:none}
+.dot{position:absolute;width:14px;height:14px;background:#00ff88;border:2px solid #000;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:10}
+.dot.end-dot{background:#ff8800}
 .acts{display:flex;gap:4px;margin-top:6px}
 .btn{flex:1;padding:6px;border:none;font-weight:bold;cursor:pointer;color:#fff;font-size:11px;border-radius:3px}
 .bsv{background:#00ff88;color:#000}
@@ -70,7 +71,7 @@ body{background:#111;color:#fff;font-family:-apple-system,BlinkMacSystemFont,"Se
     </div>
   </div>
   <div class="bar">
-    <span class="pill warn" id="wsP">🔌 Live</span>
+    <span class="pill warn" id="wsP">🔌 Connecting...</span>
     <span class="pill warn" id="aiP">🧠 AI Loading...</span>
     <button id="bat" class="tog on" onclick="toggleAT()">🧠 Auto: ON</button>
     <button id="bas" class="tog on" onclick="toggleAS()">💾 Save: ON</button>
@@ -284,6 +285,7 @@ function wsConn() {
     try { ws = new WebSocket(WS_URL); } catch(e) { setTimeout(wsConn, 3000); return; }
     ws.onopen = () => {
         document.getElementById('wsP').className = 'pill ok';
+        document.getElementById('wsP').textContent = '🟢 Live';
         ws.send(JSON.stringify({ action: 'dashboard' }));
     };
     ws.onmessage = ev => {
@@ -302,11 +304,13 @@ function wsConn() {
                 ghost.add(tid);
                 document.querySelector(`.card[data-id="${tid}"]`)?.remove();
                 delete activeStore[tid];
+                updateCounts();
             }
         } catch(e) {}
     };
     ws.onclose = () => {
         document.getElementById('wsP').className = 'pill warn';
+        document.getElementById('wsP').textContent = '🔴 Offline';
         setTimeout(wsConn, 3000);
     };
 }
@@ -383,7 +387,11 @@ function mkCard(t, isTrained) {
         mH += '</div>';
     } else {
         let m = t.media[0] || {};
-        mH = `<div class="sbox"><img src="${m.src || m.thumb || ''}" class="si" data-id="${t.id}" draggable="false"></div>`;
+        mH = `<div class="sbox" data-id="${t.id}"><img src="${m.src || m.thumb || ''}" class="si" draggable="false">`;
+        (t.clicks || []).forEach((pt, i) => {
+            mH += `<div class="dot${i % 2 === 1 ? ' end-dot' : ''}" style="left:${pt.px}%;top:${pt.py}%"></div>`;
+        });
+        mH += `</div>`;
     }
 
     let aH = isTrained
@@ -404,7 +412,7 @@ function mkCard(t, isTrained) {
     return card;
 }
 
-// ── User Interaction ──
+// ── User Interaction (Grid + Canvas Drag Points) ──
 document.body.addEventListener('click', async e => {
     let card = e.target.closest('.card');
     if (!card) return;
@@ -412,6 +420,7 @@ document.body.addEventListener('click', async e => {
     let t = activeStore[tid];
     if (!t) return;
 
+    // Grid Click
     if (e.target.classList.contains('gi')) {
         if (autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
         let btn = card.querySelector('.bsv');
@@ -427,6 +436,23 @@ document.body.addEventListener('click', async e => {
         }
     }
 
+    // Manual Canvas Click (Drag Coordinates)
+    let sbox = e.target.closest('.sbox');
+    if (sbox && !e.target.closest('.acts')) {
+        let rect = sbox.getBoundingClientRect();
+        let px = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+        let py = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
+
+        t.clicks.push({ px, py });
+
+        let dot = document.createElement('div');
+        dot.className = 'dot' + (t.clicks.length % 2 === 0 ? ' end-dot' : '');
+        dot.style.left = px + '%';
+        dot.style.top = py + '%';
+        sbox.appendChild(dot);
+    }
+
+    // Actions
     let actionBtn = e.target.closest('[data-action]');
     if (actionBtn) {
         let act = actionBtn.dataset.action;
@@ -438,6 +464,7 @@ document.body.addEventListener('click', async e => {
             if (autoSaveTimers[tid]) { clearTimeout(autoSaveTimers[tid]); delete autoSaveTimers[tid]; }
             t.clicks = [];
             card.querySelectorAll('.gi').forEach(i => i.classList.remove('sel', 'aip'));
+            card.querySelectorAll('.dot').forEach(d => d.remove());
             card.classList.remove('ai-on');
         }
         if (act === 'del') {
@@ -448,8 +475,9 @@ document.body.addEventListener('click', async e => {
             rts[tid] = { old: [...t.clicks] };
             t.clicks = [];
             card.querySelectorAll('.gi').forEach(i => i.classList.remove('sel','aip'));
+            card.querySelectorAll('.dot').forEach(d => d.remove());
             let bnr = document.createElement('div'); bnr.className = 'rhint'; bnr.id = `rh-${tid}`;
-            bnr.textContent = '🟠 Sahi images select karein phir Confirm dabayein';
+            bnr.textContent = '🟠 Sahi points/images select karein phir Confirm dabayein';
             card.querySelector('.pcon').after(bnr);
             document.getElementById(`act-${tid}`).innerHTML = `
                 <button class="btn bcf" data-action="confirm-rt">✅ Confirm</button>
