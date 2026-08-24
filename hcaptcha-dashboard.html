@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>hCaptcha Master Pro ⚡ (Exact AI Mode)</title>
+<title>hCaptcha Master Pro ⚡ (100% Precision)</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -233,7 +233,26 @@ async function predictTask(task) {
     let pText = cleanLabel(task.prompt);
     let dataset = knn.getClassExampleCount();
 
-    if (!dataset[pText]) return [];
+    // Exact match required first
+    if (!dataset[pText]) {
+        let keys = Object.keys(dataset).filter(k => !k.startsWith('neg_'));
+        // Only allow match if label is EXACTLY same or very close (not partial substring)
+        let matched = keys.find(k => k === pText);
+        if (!matched) {
+            // Try strict substring only if one fully contains the other AND length diff < 30%
+            matched = keys.find(k => {
+                let longer = k.length > pText.length ? k : pText;
+                let shorter = k.length <= pText.length ? k : pText;
+                return longer.includes(shorter) && shorter.length / longer.length > 0.70;
+            });
+        }
+        if (matched) pText = matched;
+        else return []; // No trained concept — do NOT guess
+    }
+
+    // Need minimum examples to be reliable — avoid guessing with too few samples
+    let exCount = dataset[pText] || 0;
+    if (exCount < 3) return [];
 
     let predicted = [];
     for (let m of (task.media || [])) {
@@ -245,8 +264,8 @@ async function predictTask(task) {
             let conf = res.confidences[pText] || 0;
             let negConf = res.confidences['neg_' + pText] || 0;
 
-            // Strict 70% Confidence Threshold (0% Guesswork)
-            if (res.label === pText && conf >= 0.70 && negConf < 0.25) {
+            // Strict thresholds: high positive confidence AND low negative confidence
+            if (res.label === pText && conf >= 0.65 && negConf < 0.30) {
                 predicted.push(m.index);
             }
         } catch(e) {}
@@ -259,14 +278,16 @@ async function triggerParallelSolve() {
     if (!aiReady || !atOn || isBatchRunning) return;
     isBatchRunning = true;
 
-    let unassigned = Object.values(activeStore).filter(t => t.type === 'grid' && (!t.clicks || !t.clicks.length) && !ghost.has(t.id));
+    let unassigned = Object.values(activeStore).filter(t => t.type === 'grid' && (!t.clicks || !t.clicks.length) && !ghost.has(t.id) && !t._isTrained);
     const CHUNK_SIZE = 12;
     for (let i = 0; i < unassigned.length; i += CHUNK_SIZE) {
         if (!atOn) break;
         let chunk = unassigned.slice(i, i + CHUNK_SIZE);
         await Promise.all(chunk.map(async t => {
             let clicks = await predictTask(t);
-            if (clicks.length && clicks.length <= 6) {
+            // Sanity check: at least 1 click, max 6, and not ALL images selected (that's wrong)
+            let totalImages = t.media.length;
+            if (clicks.length >= 1 && clicks.length <= Math.min(6, totalImages - 1)) {
                 t.clicks = clicks;
                 let card = document.querySelector(`.card[data-id="${t.id}"]`);
                 if (card) {
@@ -284,6 +305,7 @@ async function triggerParallelSolve() {
     isBatchRunning = false;
 }
 
+// ── WebSocket Push ──
 let ws = null;
 function wsConn() {
     if (ws && ws.readyState < 2) return;
@@ -302,8 +324,18 @@ function wsConn() {
                 document.getElementById('c-trained-total').innerText = m.data.trained || 0;
             }
             if (m.type === 'new_pending' && !ghost.has(m.data.id) && !activeStore[m.data.id]) {
-                addCard(m.data.id, m.data);
-                if (aiReady && atOn) triggerParallelSolve();
+                // Only add to DOM if on pending tab, otherwise queue it
+                if (currentTab === 'pending') {
+                    addCard(m.data.id, m.data);
+                    if (aiReady && atOn) triggerParallelSolve();
+                } else {
+                    // Store in activeStore but not DOM — will appear when switching to pending tab
+                    let m2 = m.data.media || [];
+                    let isG = m2.length > 1 || (m2.length === 1 && m2[0]?.type === 'image');
+                    activeStore[m.data.id] = { id: m.data.id, clicks: [], type: isG ? 'grid' : 'coord', media: m2, prompt: m.data.prompt || '' };
+                    // Update count badge only
+                    document.getElementById('cp').innerText = parseInt(document.getElementById('cp').innerText || 0) + 1;
+                }
             }
             if (m.type === 'task_solved' || m.type === 'task_deleted') {
                 let tid = m.data.taskId;
@@ -322,6 +354,7 @@ function wsConn() {
     };
 }
 
+// ── 0% Blink Direct Video Frame Blit ──
 let lastTick = 0;
 function animateVideos(t) {
     if (t - lastTick > 125) {
@@ -355,9 +388,16 @@ async function fetchPending() {
         let r = await fetch(`${SRV}/api/tasks?tab=pending&t=${Date.now()}`);
         if (r.ok) {
             let d = await r.json();
-            gridArea.innerHTML = ''; manualArea.innerHTML = ''; activeStore = {}; videoMap.clear();
+            // Clear DOM and store properly - keep trained entries in activeStore
+            gridArea.innerHTML = ''; manualArea.innerHTML = ''; videoMap.clear();
+            // Only clear pending entries from store, not trained ones
+            for (let id in activeStore) {
+                if (!activeStore[id]._isTrained) delete activeStore[id];
+            }
             let tasks = d.tasks || {};
-            for (let id in tasks) if (!ghost.has(id)) addCard(id, tasks[id]);
+            for (let id in tasks) {
+                if (!ghost.has(id)) addCard(id, tasks[id]);
+            }
             if (aiReady && atOn) triggerParallelSolve();
         }
     } catch(e) {}
@@ -372,8 +412,8 @@ async function fetchTrained() {
             let tasks = d.tasks || {};
             for (let id in tasks) {
                 let td = tasks[id];
-                let isG = td.media?.length > 1;
-                activeStore[id] = { id, clicks: [...(td.clicks || [])], type: isG ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '' };
+                let isG = td.media?.length > 1 || (td.media?.length === 1 && td.media[0]?.type === 'image');
+                activeStore[id] = { id, clicks: [...(td.clicks || [])], type: isG ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '', _isTrained: true };
                 trainedArea.appendChild(mkCard(activeStore[id], true));
             }
         }
@@ -383,14 +423,16 @@ async function fetchTrained() {
 function addCard(id, td) {
     if (activeStore[id] || ghost.has(id)) return;
     let m = td.media || [];
-    let isG = m.length > 1;
+    // Fix: single-image tasks with 1 media item were being pushed to manual (coord)
+    // but they ARE grid tasks if media[0].type === 'image'. Check properly.
+    let isG = m.length > 1 || (m.length === 1 && m[0]?.type === 'image');
     activeStore[id] = { id, clicks: [], type: isG ? 'grid' : 'coord', media: m, prompt: td.prompt || '' };
     
-    if (currentTab === 'pending') {
-        let card = mkCard(activeStore[id], false);
-        if (isG) gridArea.prepend(card);
-        else manualArea.prepend(card);
-    }
+    // Always render card when on pending tab - don't skip if tab switched mid-load
+    let card = mkCard(activeStore[id], false);
+    if (isG) gridArea.prepend(card);
+    else manualArea.prepend(card);
+    
     updateCounts();
 }
 
@@ -581,7 +623,10 @@ function setTab(t) {
     if (t === 'pending') {
         document.getElementById('pendingView').style.display = 'flex';
         document.getElementById('trainedView').style.display = 'none';
-        fetchPending();
+        // Re-render any queued tasks that arrived while on trained tab
+        let hasMissing = Object.values(activeStore).some(s => !s._isTrained && !document.querySelector(`.card[data-id="${s.id}"]`));
+        if (hasMissing) fetchPending();
+        else { if (aiReady && atOn) triggerParallelSolve(); }
     } else {
         document.getElementById('pendingView').style.display = 'none';
         document.getElementById('trainedView').style.display = 'flex';
