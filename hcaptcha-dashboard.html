@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<title>hCaptcha Master Pro ⚡ (Zero-Blink 3s Video)</title>
+<title>hCaptcha Master Pro ⚡ (Zero-Blink Canvas Video)</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -112,6 +112,7 @@ let atOn = true, asOn = true, sq = '';
 let isBatchRunning = false;
 let brainTimer = null;
 
+// Continuous Background Worker
 const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 100);`], { type: 'text/javascript' });
 const bgWorker = new Worker(URL.createObjectURL(timerBlob));
 bgWorker.onmessage = () => {
@@ -181,7 +182,7 @@ function scheduleBrainSave() {
 }
 
 async function resetBrain() {
-    if (!confirm("AI Brain reset karein?")) return;
+    if (!confirm("AI Brain permanently reset karein?")) return;
     await fetch(`${SRV}/api/ai-brain`, { method: 'DELETE' });
     if (knn) knn.clearAllClasses();
     location.reload();
@@ -327,10 +328,10 @@ function wsConn() {
     };
 }
 
-// ── Zero-Blink Smooth Canvas Frame Renderer ──
+// ── Ultra-Smooth Double Buffer Frame Player (Zero Blink) ──
 let lastTick = 0;
 function animateVideos(t) {
-    if (t - lastTick > 120) {
+    if (t - lastTick > 100) {
         lastTick = t;
         videoMap.forEach((v, id) => {
             let cvs = document.querySelector(`canvas.vplayer[data-id="${id}"]`);
