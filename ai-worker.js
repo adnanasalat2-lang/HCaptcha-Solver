@@ -1,7 +1,5 @@
 // ============================================================
-// ai-worker.js — SharedWorker
-// Ek baar load hota hai, sab dashboard tabs use karte hain
-// TensorFlow + MobileNet + KNN — sab yahan
+// ai-worker.js — SharedWorker (Aggressive 1-Task Learning Edition)
 // ============================================================
 
 /* global importScripts, SharedWorkerGlobalScope */
@@ -12,15 +10,13 @@ importScripts(
     'https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js'
 );
 
-// Connected tabs (ports)
 const ports = new Set();
 
 let isReady  = false;
 let aiModel  = null;
 let knn      = null;
-let knnStore = {};  // { label: { data, shape } } — IDB se load/save
+let knnStore = {};
 
-// ── IDB helpers (worker mein) ──────────────────────────────
 const IDB_NAME  = 'hcm_knn';
 const IDB_STORE = 'knn';
 const IDB_KEY   = 'model_v3';
@@ -50,12 +46,10 @@ async function idbSet(val) {
     });
 }
 
-// ── Broadcast to all tabs ──────────────────────────────────
 function broadcast(msg) {
     ports.forEach(p => { try { p.postMessage(msg); } catch(e) {} });
 }
 
-// ── AI Init ───────────────────────────────────────────────
 async function initAI() {
     broadcast({ type: 'status', text: '🧠 AI Loading...', ready: false });
     try {
@@ -94,7 +88,6 @@ async function saveKNN() {
     } catch(e) {}
 }
 
-// ── Feature Extraction (from ImageBitmap) ─────────────────
 async function getFeatures(bitmap) {
     let canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
     let ctx = canvas.getContext('2d');
@@ -106,7 +99,7 @@ async function getFeatures(bitmap) {
     return features;
 }
 
-// ── Train ─────────────────────────────────────────────────
+// ── Train: 1-Task Aggressive Learning + Retrain Heavy Weights ──
 async function trainTask(task, wrongIndices) {
     if (!isReady || task.type !== 'grid') return;
     let pText    = task.prompt.split('|||')[0].trim().toLowerCase();
@@ -125,21 +118,28 @@ async function trainTask(task, wrongIndices) {
             let isCorrect = (task.clicks || []).includes(m.index);
             let isWrong   = (wrongIndices || []).includes(m.index);
 
-            if (isCorrect)      { knn.addExample(feat, pText); knn.addExample(feat, pText); }
-            else if (isWrong)   { knn.addExample(feat, negLabel); knn.addExample(feat, negLabel); knn.addExample(feat, negLabel); }
-            else                { knn.addExample(feat, negLabel); }
+            if (isCorrect) {
+                // Sahi images ko 4x weight do taake pehle task se hi pakka seekhe
+                for (let i = 0; i < 4; i++) knn.addExample(feat, pText);
+            } else if (isWrong) {
+                // Retrain mein ghalat pick ki gayi images ko 6x heavy penalty
+                for (let i = 0; i < 6; i++) knn.addExample(feat, negLabel);
+            } else {
+                knn.addExample(feat, negLabel);
+                knn.addExample(feat, negLabel);
+            }
         } catch(e) {}
     }
     await saveKNN();
     return { type: 'trained', taskId: task.id };
 }
 
-// ── Predict ───────────────────────────────────────────────
+// ── Predict: Clean Prompt + 1-Task Friendly Threshold ──
 async function predictTask(task) {
     if (!isReady) return { type: 'predict_result', taskId: task.id, clicks: [] };
     let pText   = task.prompt.split('|||')[0].trim().toLowerCase();
     let dataset = knn.getClassExampleCount();
-    if (!dataset[pText]) return { type: 'predict_result', taskId: task.id, clicks: [] };
+    if (!dataset[pText] || dataset[pText] < 1) return { type: 'predict_result', taskId: task.id, clicks: [] };
 
     let predictedClicks = [];
     for (let m of (task.media || [])) {
@@ -155,18 +155,20 @@ async function predictTask(task) {
             let res     = await knn.predictClass(feat);
             let conf    = res.confidences[pText] || 0;
             let negConf = res.confidences['negative_' + pText] || 0;
-            if (res.label === pText && conf > 0.85 && negConf < 0.30) predictedClicks.push(m.index);
+
+            // 1 task ke baad confidence 50%+ par trigger karo
+            if (res.label === pText && conf >= 0.50 && negConf < 0.45) {
+                predictedClicks.push(m.index);
+            }
         } catch(e) {}
     }
     return { type: 'predict_result', taskId: task.id, clicks: predictedClicks };
 }
 
-// ── Port handler ──────────────────────────────────────────
 self.onconnect = (e) => {
     let port = e.ports[0];
     ports.add(port);
 
-    // Foran status bhejo
     if (isReady) {
         let concepts = Object.keys(knn.getClassExampleCount()).filter(k => !k.startsWith('negative_')).length;
         port.postMessage({ type: 'status', text: `🤖 AI Ready ✅ (${concepts} concepts)`, ready: true });
@@ -179,7 +181,10 @@ self.onconnect = (e) => {
         try {
             if (msg.type === 'train') {
                 let result = await trainTask(msg.task, msg.wrongIndices || []);
-                if (result) port.postMessage(result);
+                if (result) {
+                    port.postMessage(result);
+                    broadcast({ type: 'trained' });
+                }
             }
             else if (msg.type === 'predict') {
                 let result = await predictTask(msg.task);
@@ -196,10 +201,7 @@ self.onconnect = (e) => {
 
     port.onmessageerror = () => {};
     port.start();
-
-    // Tab disconnect detect
     port.addEventListener('close', () => ports.delete(port));
 };
 
-// ── Start ─────────────────────────────────────────────────
 initAI();
