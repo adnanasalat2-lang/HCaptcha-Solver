@@ -15,6 +15,7 @@ const wss = new WebSocket.Server({ server });
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE = path.join(DATA_DIR, 'database.json');
+const KNN_BRAIN_FILE = path.join(DATA_DIR, 'knn_brain.json');
 
 const MAX_PENDING = 100;
 const MAX_TRAINED = 50000;
@@ -23,10 +24,9 @@ const DASHBOARD_PAGE_SIZE = 20;
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
 let conceptBank = {};
+let centralizedKnnDataset = {}; // Shared tensor memory across all workers
 
-// Sockets Management
 const browserSockets = new Map();
-// Dashboard workers registry: ws -> { id, name, mode, assignedTasks: Set }
 const activeWorkers = new Map();
 
 let gridWorkerIndex = 0;
@@ -96,6 +96,12 @@ function initDB() {
             console.error("[DB] Error loading database:", e.message);
         }
     }
+    if (fs.existsSync(KNN_BRAIN_FILE)) {
+        try {
+            centralizedKnnDataset = JSON.parse(fs.readFileSync(KNN_BRAIN_FILE, 'utf8'));
+            console.log(`[AI] Centralized Brain Loaded (${Object.keys(centralizedKnnDataset).length} classes)`);
+        } catch(e) {}
+    }
 }
 initDB();
 
@@ -103,9 +109,8 @@ let saveTimeout = null;
 function persistDatabase() {
     if (saveTimeout) clearTimeout(saveTimeout);
     saveTimeout = setTimeout(() => {
-        fs.writeFile(DB_FILE, JSON.stringify({ trained: hcaptchaTrained }), 'utf8', (err) => {
-            if (err) console.error('[DB] PERSIST ERROR:', err.message);
-        });
+        fs.writeFile(DB_FILE, JSON.stringify({ trained: hcaptchaTrained }), 'utf8', () => {});
+        fs.writeFile(KNN_BRAIN_FILE, JSON.stringify(centralizedKnnDataset), 'utf8', () => {});
     }, 2000);
 }
 
@@ -174,9 +179,7 @@ function broadcastCounts() {
             trained: Object.keys(hcaptchaTrained).length,
             concepts: Object.keys(conceptBank).length,
             gridWorkersOnline: gridWorkers.length,
-            manualWorkersOnline: manualWorkers.length,
-            gridWorkerNames: gridWorkers,
-            manualWorkerNames: manualWorkers
+            manualWorkersOnline: manualWorkers.length
         }
     });
 
@@ -196,15 +199,12 @@ function notifyBrowsers(taskId, clicks) {
     }
 }
 
-// ── Smart Dynamic Load Balancer ──
 function dispatchTaskToWorker(taskData) {
     let isGrid = taskData.media && taskData.media.length > 1;
     let mode = isGrid ? 'grid' : 'manual';
     let workers = getOnlineWorkers(mode);
 
-    if (workers.length === 0) {
-        return; // Pending pool mein rahega, jab worker aayega tab receive karega
-    }
+    if (workers.length === 0) return;
 
     let targetWorker = null;
     if (mode === 'grid') {
@@ -237,7 +237,6 @@ function handleNewTask(task, wsSource) {
     if (keys.length >= MAX_PENDING) {
         let deletedKeys = keys.slice(0, 15);
         deletedKeys.forEach(k => delete hcaptchaPending[k]);
-        
         activeWorkers.forEach((_, ws) => {
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ action: 'bulk_remove_pending', taskIds: deletedKeys }));
@@ -256,25 +255,6 @@ function handleNewTask(task, wsSource) {
     dispatchTaskToWorker(taskData);
     broadcastCounts();
     return { success: true, autoSolved: false };
-}
-
-function handleTileUpdate(payload) {
-    const { taskId, index, thumb, dhash, stableHash } = payload;
-    if (!taskId || index === undefined) return;
-
-    let target = hcaptchaPending[taskId];
-    if (target && target.media && target.media[index]) {
-        target.media[index].thumb = thumb || target.media[index].thumb;
-        target.media[index].dhash = dhash || target.media[index].dhash;
-        if (stableHash) target.media[index].stableHash = stableHash;
-    }
-
-    const msg = JSON.stringify({ action: 'tile_patch', taskId, index, thumb, dhash });
-    activeWorkers.forEach((meta, ws) => {
-        if (ws.readyState === WebSocket.OPEN && meta.assignedTasks.has(taskId)) {
-            ws.send(msg);
-        }
-    });
 }
 
 function handleSubmitTask(taskId, clicks) {
@@ -316,7 +296,6 @@ function handleSubmitTask(taskId, clicks) {
 
         delete hcaptchaPending[taskId];
         persistDatabase();
-        
         notifyBrowsers(taskId, clicks);
 
         const solveMsg = JSON.stringify({ action: 'task_solved', taskId, trainedTask: hcaptchaTrained[taskId] });
@@ -345,14 +324,12 @@ wss.on('connection', (ws) => {
                 };
                 activeWorkers.set(ws, workerMeta);
 
-                // Initial task balancing for newly connected worker
                 let isGrid = workerMeta.mode === 'grid';
                 let availablePending = {};
                 
                 Object.values(hcaptchaPending).forEach(task => {
                     let taskIsGrid = task.media && task.media.length > 1;
                     if ((isGrid && taskIsGrid) || (!isGrid && !taskIsGrid)) {
-                        // Check if not actively assigned or share if worker count is small
                         workerMeta.assignedTasks.add(task.id);
                         availablePending[task.id] = task;
                     }
@@ -361,6 +338,7 @@ wss.on('connection', (ws) => {
                 ws.send(JSON.stringify({
                     action: 'init_state',
                     pending: availablePending,
+                    knnBrain: centralizedKnnDataset,
                     counts: {
                         pending: Object.keys(hcaptchaPending).length,
                         trained: Object.keys(hcaptchaTrained).length,
@@ -372,6 +350,20 @@ wss.on('connection', (ws) => {
                 return;
             }
 
+            // Sync AI Brain Updates across all connected grid instances
+            if (data.action === 'sync_knn_update' && data.knnUpdates) {
+                Object.assign(centralizedKnnDataset, data.knnUpdates);
+                persistDatabase();
+                
+                const syncPayload = JSON.stringify({ action: 'knn_sync_broadcast', knnUpdates: data.knnUpdates });
+                activeWorkers.forEach((meta, clientWs) => {
+                    if (clientWs !== ws && clientWs.readyState === WebSocket.OPEN && meta.mode === 'grid') {
+                        clientWs.send(syncPayload);
+                    }
+                });
+                return;
+            }
+
             if (data.action === 'new_task') {
                 boundTaskId = data.task?.taskId;
                 if (boundTaskId) {
@@ -380,11 +372,6 @@ wss.on('connection', (ws) => {
                 }
                 const res = handleNewTask(data.task, ws);
                 ws.send(JSON.stringify({ action: 'new_task_ack', taskId: boundTaskId, ...res }));
-                return;
-            }
-
-            if (data.action === 'tile_update') {
-                handleTileUpdate(data);
                 return;
             }
 
@@ -412,11 +399,8 @@ wss.on('connection', (ws) => {
             const orphanedTasks = Array.from(leavingWorker.assignedTasks);
             activeWorkers.delete(ws);
 
-            // Re-dispatch remaining tasks to other available workers
             orphanedTasks.forEach(tid => {
-                if (hcaptchaPending[tid]) {
-                    dispatchTaskToWorker(hcaptchaPending[tid]);
-                }
+                if (hcaptchaPending[tid]) dispatchTaskToWorker(hcaptchaPending[tid]);
             });
 
             broadcastCounts();
@@ -430,13 +414,8 @@ wss.on('connection', (ws) => {
     });
 });
 
-app.post('/api/new-hcaptcha', (req, res) => {
-    res.json(handleNewTask(req.body));
-});
-
-app.post('/api/submit-hcaptcha', (req, res) => {
-    res.json(handleSubmitTask(req.body.taskId, req.body.clicks));
-});
+app.post('/api/new-hcaptcha', (req, res) => res.json(handleNewTask(req.body)));
+app.post('/api/submit-hcaptcha', (req, res) => res.json(handleSubmitTask(req.body.taskId, req.body.clicks)));
 
 app.get('/api/tasks', (req, res) => {
     const tab = req.query.tab === 'trained' ? 'trained' : 'pending';
@@ -463,9 +442,7 @@ app.get('/api/counts', (req, res) => {
         trained: Object.keys(hcaptchaTrained).length,
         concepts: Object.keys(conceptBank).length,
         gridWorkersOnline: gridWorkers.length,
-        manualWorkersOnline: manualWorkers.length,
-        gridWorkerNames: gridWorkers,
-        manualWorkerNames: manualWorkers
+        manualWorkersOnline: manualWorkers.length
     });
 });
 
