@@ -15,6 +15,7 @@ const wss = new WebSocket.Server({ server, perMessageDeflate: false });
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE = path.join(DATA_DIR, 'database.json');
+const AI_FILE = path.join(DATA_DIR, 'ai_brain.json');
 
 const MAX_PENDING = 60;
 const MAX_TRAINED = 50000;
@@ -23,6 +24,7 @@ const DASHBOARD_PAGE_SIZE = 40;
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
 let conceptBank = {};
+let aiBrainStore = {};
 
 const browserSockets = new Map();
 const dashboardSockets = new Set();
@@ -90,6 +92,12 @@ function initDB() {
         } catch (e) {
             console.error("[DB] Error loading database:", e.message);
         }
+    }
+    if (fs.existsSync(AI_FILE)) {
+        try {
+            aiBrainStore = JSON.parse(fs.readFileSync(AI_FILE, 'utf8'));
+            console.log(`[AI Brain] Loaded persistent memory.`);
+        } catch (e) {}
     }
 }
 initDB();
@@ -321,6 +329,23 @@ app.delete('/api/delete-hcaptcha/:id', (req, res) => {
     persistDatabase();
     notifyDashboard('task_deleted', { taskId: req.params.id });
     notifyDashboard('counts', getCountsData());
+    res.json({ success: true });
+});
+
+// ── Persistent AI Brain Central Endpoints (Railway Volume) ──
+app.get('/api/ai-brain', (req, res) => {
+    res.json(aiBrainStore);
+});
+
+app.post('/api/ai-brain', (req, res) => {
+    aiBrainStore = req.body || {};
+    fs.writeFile(AI_FILE, JSON.stringify(aiBrainStore), 'utf8', () => {});
+    res.json({ success: true });
+});
+
+app.delete('/api/ai-brain', (req, res) => {
+    aiBrainStore = {};
+    fs.writeFile(AI_FILE, '{}', 'utf8', () => {});
     res.json({ success: true });
 });
 
