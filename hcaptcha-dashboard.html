@@ -4,7 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — 50k Concurrent Lightweight</title>
+    <title>hCaptcha Master Pro — Guided AI Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
     <style>
         * { box-sizing: border-box; }
         body { background-color: #0c0c0c; color: #ffffff; font-family: Arial, sans-serif; margin: 0; padding: 12px; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
@@ -18,7 +21,11 @@
         .count-badge { background: #000; color: #fff; padding: 1px 6px; border-radius: 8px; font-size: 11px; margin-left: 4px; }
 
         .ai-bar { display: flex; align-items: center; gap: 8px; }
-        .sync-status { font-size: 12px; color: #00ff88; font-weight: bold; }
+        .sync-status { font-size: 12px; color: #ffaa00; font-weight: bold; }
+        .sync-status.active { color: #00ff88; }
+        .btn-toggle { padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; border: 1px solid #555; background: #222; color: #888; }
+        .btn-toggle.on { background: #00ff88; color: #000; border-color: #00ff88; }
+        .btn-clear-ai { background: #331111; color: #ff5555; border: 1px solid #772222; padding: 6px 10px; border-radius: 4px; font-size: 11px; font-weight: bold; cursor: pointer; }
         .search-box input { padding: 6px 10px; background: #222; border: 1px solid #444; color: #00ff88; border-radius: 4px; font-size: 12px; outline: none; width: 140px; }
 
         .workspace-split { display: flex; gap: 12px; flex: 1; min-height: 0; margin-top: 10px; }
@@ -32,6 +39,7 @@
         .task-list { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
         
         .task-card { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; padding: 10px; }
+        .task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 8px rgba(255,0,255,0.3); }
         .task-card.in-retrain { border: 2px solid #ff8800 !important; background: #221405 !important; }
         .task-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
         .task-id { color: #ff4444; font-family: monospace; font-size: 13px; font-weight: bold; }
@@ -45,6 +53,7 @@
         .img-grid { display: grid; gap: 4px; width: 100%; }
         .img-grid img { width: 100%; height: 105px; object-fit: cover; cursor: pointer; border: 3px solid transparent; background: #222; border-radius: 3px; }
         .img-grid img.selected { border-color: #00ff88; opacity: 0.85; }
+        .img-grid img.ai-pick { border-color: #ff00ff; opacity: 0.9; }
         .img-grid img.retrain-pick { border-color: #ff8800 !important; opacity: 0.95; }
         
         .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; align-items: center; background: #000; border-radius: 4px; border: 1px solid #444; overflow: hidden; }
@@ -78,7 +87,10 @@
         </div>
     </div>
     <div class="ai-bar">
-        <span class="sync-status" id="syncStatus">⚡ Server AI Active (High Speed)</span>
+        <span class="sync-status" id="syncStatus">🧠 Loading Brain...</span>
+        <button id="btnAutoTrain" class="btn-toggle on" onclick="toggleAutoTrain()">🧠 AI Suggestions: ON</button>
+        <button id="btnAutoSave" class="btn-toggle" onclick="toggleAutoSave()">⚡ Auto-Submit: OFF</button>
+        <button class="btn-clear-ai" onclick="resetAIBrain()">🧹 Reset Brain</button>
         <div class="search-box">
             <input type="text" id="searchInput" oninput="filterTasks()" placeholder="🔍 Task ID..."/>
         </div>
@@ -88,7 +100,7 @@
 <div class="workspace-split" id="pendingView">
     <div class="column">
         <div class="column-header">
-            <span class="col-title-ai">🤖 Fast-Train Stream (Grids)</span>
+            <span class="col-title-ai">🤖 Fast-Train AI Stream (Grids)</span>
             <span class="stream-count" id="c-grid">0 Tasks</span>
         </div>
         <div class="task-list" id="gridArea"></div>
@@ -117,6 +129,7 @@ const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.
 const gridArea = document.getElementById('gridArea');
 const manualArea = document.getElementById('manualArea');
 const trainedArea = document.getElementById('trainedArea');
+const syncStatus = document.getElementById('syncStatus');
 
 let currentTab = 'pending';
 let serverData = { pending: {}, trained: {} }, activeTasksStore = {}, videoTasks = [];
@@ -125,6 +138,192 @@ let retrainEditingTasks = new Set();
 let trainedPage = 0;
 let dashWS = null;
 
+let isAIReady = false, aiModel, knn;
+let autoTrainEnabled = true;
+let autoSaveEnabled = false; // By default OFF taake AI khud se ghalti na kare jab tak aap na chahein
+let isEvaluatingAI = false;
+
+// ── MobileNet + KNN Classifier Integration ──
+async function initAI() {
+    try {
+        await tf.setBackend('webgl');
+        await tf.ready();
+        aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
+        knn = knnClassifier.create();
+        await loadKNN();
+        isAIReady = true;
+        updateAIStatus();
+        reEvaluatePending();
+    } catch(e) {
+        syncStatus.innerHTML = "⚠️ AI Fallback";
+    }
+}
+
+function updateAIStatus() {
+    if (!knn) return;
+    try {
+        let ds = knn.getClassExampleCount();
+        let concepts = Object.keys(ds).filter(k => !k.startsWith('negative_')).length;
+        syncStatus.innerHTML = `🧠 AI Active ✅ (${concepts} Concepts Learned)`;
+        syncStatus.classList.add('active');
+    } catch(e) {}
+}
+
+const IDB = { name:'hcm_knn_master', store:'knn', key:'model_v7' };
+function idbOpen() {
+    return new Promise((res,rej)=>{
+        let r = indexedDB.open(IDB.name,1);
+        r.onupgradeneeded = e => e.target.result.createObjectStore(IDB.store);
+        r.onsuccess = e => res(e.target.result);
+        r.onerror = () => rej(r.error);
+    });
+}
+async function idbSet(val) {
+    let db = await idbOpen();
+    return new Promise((res,rej)=>{
+        let tx = db.transaction(IDB.store,'readwrite');
+        tx.objectStore(IDB.store).put(val, IDB.key);
+        tx.oncomplete = res; tx.onerror = ()=>rej(tx.error);
+    });
+}
+async function idbGet() {
+    let db = await idbOpen();
+    return new Promise((res,rej)=>{
+        let tx = db.transaction(IDB.store,'readonly');
+        let req = tx.objectStore(IDB.store).get(IDB.key);
+        req.onsuccess = () => res(req.result||null);
+        req.onerror = () => rej(req.error);
+    });
+}
+async function saveKNN() {
+    if (!knn) return;
+    try {
+        let ds = knn.getClassifierDataset();
+        let ser = {};
+        for (let k in ds) { ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape }; }
+        await idbSet(ser);
+        updateAIStatus();
+    } catch(e) {}
+}
+async function loadKNN() {
+    try {
+        let ser = await idbGet();
+        if (!ser) return;
+        let ds = {};
+        for (let k in ser) { ds[k] = tf.tensor(ser[k].data, ser[k].shape); }
+        knn.setClassifierDataset(ds);
+    } catch(e) {}
+}
+
+async function resetAIBrain() {
+    if (confirm("Kya aap AI Brain ki tamam trained memory reset karna chahte hain?")) {
+        indexedDB.deleteDatabase(IDB.name);
+        if (knn) knn.clearAllClasses();
+        location.reload();
+    }
+}
+
+// ── 3X Weighted Instant Learning on User Click / Retrain ──
+async function trainAIBrainAsync(task) {
+    if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
+    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
+    let negLabel = 'negative_' + pText;
+
+    for (let m of task.media) {
+        let imgSrc = m.thumb || m.src;
+        if (!imgSrc) continue;
+        try {
+            let img = new Image();
+            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
+            img.src = imgSrc;
+            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 400); });
+            if (!img.complete || img.naturalWidth === 0) continue;
+            
+            tf.tidy(() => {
+                let tfImg = tf.browser.fromPixels(img);
+                let features = aiModel.infer(tfImg, true);
+                
+                if (task.clicks.includes(m.index)) {
+                    knn.addExample(features, pText);
+                    knn.addExample(features, pText);
+                    knn.addExample(features, pText); // 3x positive weight
+                } else {
+                    knn.addExample(features, negLabel);
+                }
+            });
+            await tf.nextFrame();
+        } catch(e) {}
+    }
+    await saveKNN();
+    reEvaluatePending();
+}
+
+// ── Visual Prediction (Marks boxes in Pink for user review) ──
+async function predictWithAI(task) {
+    if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
+    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
+    let dataset = knn.getClassExampleCount();
+    if (!dataset[pText] || dataset[pText] < 1) return;
+
+    let predictedClicks = [];
+    for (let m of task.media) {
+        let imgSrc = m.thumb || m.src;
+        if (!imgSrc) continue;
+        try {
+            let img = new Image();
+            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
+            img.src = imgSrc;
+            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 300); });
+            if (!img.complete || img.naturalWidth === 0) continue;
+            
+            let res = null;
+            tf.tidy(() => {
+                let tfImg = tf.browser.fromPixels(img);
+                let features = aiModel.infer(tfImg, true);
+                res = knn.predictClass(features);
+            });
+            let resolvedRes = await res;
+            let conf = resolvedRes.confidences[pText] || 0;
+            let negConf = resolvedRes.confidences['negative_' + pText] || 0;
+            
+            if (resolvedRes.label === pText && conf >= 0.75 && negConf < 0.35) {
+                predictedClicks.push(m.index);
+            }
+            await tf.nextFrame();
+        } catch(e) {}
+    }
+
+    if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
+        task.clicks = predictedClicks;
+        let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
+        if (card) {
+            card.classList.add('ai-processing');
+            predictedClicks.forEach(idx => {
+                let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
+                if (imgEl) { imgEl.classList.add('ai-pick'); }
+            });
+            if (autoSaveEnabled) {
+                let btn = card.querySelector('.btn-save');
+                if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Auto Solved'; }
+                sendToServer(task.id, btn, card);
+            }
+        }
+    }
+}
+
+async function reEvaluatePending() {
+    if (isEvaluatingAI) return;
+    isEvaluatingAI = true;
+    for (let id in serverData.pending) {
+        let t = activeTasksStore[id];
+        if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
+            await predictWithAI(t);
+        }
+    }
+    isEvaluatingAI = false;
+}
+
+// ── WebSocket Real-Time Connection ──
 function connectDashboardWS() {
     try {
         dashWS = new WebSocket(WS_URL);
@@ -141,24 +340,15 @@ function connectDashboardWS() {
                     serverData.pending = msg.pending || {};
                     renderPendingStreams();
                     updateCounts(msg.counts);
+                    if (isAIReady && autoTrainEnabled) reEvaluatePending();
                 }
 
                 if (msg.action === 'new_task') {
                     serverData.pending[msg.task.id] = msg.task;
                     renderPendingStreams();
-                }
-
-                if (msg.action === 'tile_patch') {
-                    let card = document.querySelector(`.task-card[data-id="${msg.taskId}"]`);
-                    if (card) {
-                        let imgEl = card.querySelector(`.g-img[data-index="${msg.index}"]`);
-                        if (imgEl && msg.thumb) {
-                            imgEl.src = msg.thumb;
-                        }
-                    }
-                    if (activeTasksStore[msg.taskId] && activeTasksStore[msg.taskId].media[msg.index]) {
-                        activeTasksStore[msg.taskId].media[msg.index].thumb = msg.thumb;
-                        activeTasksStore[msg.taskId].media[msg.index].dhash = msg.dhash;
+                    if (isAIReady && autoTrainEnabled) {
+                        let t = activeTasksStore[msg.task.id];
+                        if (t && t.type === 'grid') predictWithAI(t);
                     }
                 }
 
@@ -167,15 +357,6 @@ function connectDashboardWS() {
                     let card = document.querySelector(`.task-card[data-id="${msg.taskId}"]`);
                     if (card) card.remove();
                     delete activeTasksStore[msg.taskId];
-                }
-
-                if (msg.action === 'bulk_remove_pending') {
-                    (msg.taskIds || []).forEach(id => {
-                        delete serverData.pending[id];
-                        let card = document.querySelector(`.task-card[data-id="${id}"]`);
-                        if (card) card.remove();
-                        delete activeTasksStore[id];
-                    });
                 }
 
                 if (msg.action === 'counts_update') {
@@ -215,6 +396,21 @@ function setTab(tab) {
     }
 }
 
+function toggleAutoTrain() {
+    autoTrainEnabled = !autoTrainEnabled;
+    let btn = document.getElementById('btnAutoTrain');
+    btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
+    btn.textContent = '🧠 AI Suggestions: ' + (autoTrainEnabled ? 'ON' : 'OFF');
+    if (autoTrainEnabled && isAIReady) reEvaluatePending();
+}
+
+function toggleAutoSave() {
+    autoSaveEnabled = !autoSaveEnabled;
+    let btn = document.getElementById('btnAutoSave');
+    btn.className = 'btn-toggle' + (autoSaveEnabled ? ' on' : '');
+    btn.textContent = '⚡ Auto-Submit: ' + (autoSaveEnabled ? 'ON' : 'OFF');
+}
+
 function renderPendingStreams() {
     let pending = serverData.pending;
     let gridCount = 0, manualCount = 0;
@@ -242,6 +438,7 @@ function renderPendingStreams() {
 
         if (isGrid) {
             gridFrag.appendChild(card);
+            if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[id]);
         } else {
             manualFrag.appendChild(card);
         }
@@ -334,6 +531,7 @@ function buildCard(t, isTrained = false) {
     return card;
 }
 
+// ── Interactive UI Handlers ──
 document.body.addEventListener('click', (e) => {
     let actionBtn = e.target.closest('[data-action]');
     let card = e.target.closest('.task-card');
@@ -373,6 +571,7 @@ document.body.addEventListener('click', (e) => {
             if (dashWS && dashWS.readyState === WebSocket.OPEN) {
                 dashWS.send(JSON.stringify({ action: 'submit_task', taskId: tid, clicks: t.clicks }));
             }
+            if (isAIReady && t.type === 'grid') trainAIBrainAsync(t); // Re-trains AI model instantly
             retrainEditingTasks.delete(tid);
             card.classList.remove('in-retrain');
             let b = card.querySelector(`#banner-${tid}`); if (b) b.remove();
@@ -386,7 +585,7 @@ document.body.addEventListener('click', (e) => {
 
         if (act === 'clear-retrain') {
             t.clicks = [];
-            card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'retrain-pick'));
+            card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick', 'retrain-pick'));
             card.querySelectorAll('.dot').forEach(d => d.remove());
             return;
         }
@@ -416,8 +615,9 @@ document.body.addEventListener('click', (e) => {
 
         if (act === 'reset') {
             t.clicks = [];
-            card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected'));
+            card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick'));
             card.querySelectorAll('.dot').forEach(d => d.remove());
+            card.classList.remove('ai-processing');
             return;
         }
 
@@ -437,8 +637,8 @@ document.body.addEventListener('click', (e) => {
 
     if (e.target.classList.contains('g-img')) {
         let idx = parseInt(e.target.dataset.index);
-        if (e.target.classList.contains('selected') || e.target.classList.contains('retrain-pick')) {
-            e.target.classList.remove('selected', 'retrain-pick');
+        if (e.target.classList.contains('selected') || e.target.classList.contains('retrain-pick') || e.target.classList.contains('ai-pick')) {
+            e.target.classList.remove('selected', 'ai-pick', 'retrain-pick');
             t.clicks = t.clicks.filter(i => i !== idx);
         } else {
             e.target.classList.add('selected');
@@ -475,7 +675,10 @@ document.body.addEventListener('click', (e) => {
 
 function sendToServer(taskId, btnEl, card) {
     let t = activeTasksStore[taskId];
-    if (!t || !t.clicks || t.clicks.length === 0) return;
+    if (!t || !t.clicks || t.clicks.length === 0) {
+        if (card) card.classList.remove('ai-processing');
+        return;
+    }
 
     if (dashWS && dashWS.readyState === WebSocket.OPEN) {
         dashWS.send(JSON.stringify({ action: 'submit_task', taskId, clicks: t.clicks }));
@@ -490,6 +693,11 @@ function sendToServer(taskId, btnEl, card) {
     ghostBlocker.add(taskId);
     if (card) card.remove();
     delete activeTasksStore[taskId];
+
+    // Trains the AI brain on every manual save
+    if (isAIReady && t.type === 'grid' && t.clicks.length > 0) {
+        trainAIBrainAsync(t);
+    }
 }
 
 document.addEventListener('keydown', (e) => {
@@ -525,9 +733,10 @@ setInterval(() => {
             el.src = vt.frames[vt.current];
         }
     });
-}, 150); // 4.5s Smooth Video Playback Loop
+}, 150);
 
 connectDashboardWS();
+setTimeout(initAI, 100);
 </script>
 </body>
 </html>
