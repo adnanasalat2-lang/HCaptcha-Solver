@@ -24,9 +24,8 @@ const DASHBOARD_PAGE_SIZE = 20;
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
 let conceptBank = {};
-let centralizedKnnDataset = {};
+let centralizedKnnDataset = {}; // Shared tensor memory across all workers
 
-const taskAssignments = new Map();
 const browserSockets = new Map();
 const activeWorkers = new Map();
 
@@ -44,13 +43,6 @@ if (process.env.REDIS_URL) {
 function getCleanKey(task) {
     let p = (task.prompt || "").split("|||")[0].trim().toLowerCase();
     return "TXT_" + p;
-}
-
-function isGridTask(task) {
-    if (!task || !task.media || task.media.length < 4) return false;
-    let p = (task.prompt || "").toLowerCase();
-    if (p.includes('drag') || p.includes('move') || p.includes('pattern') || p.includes('fit') || p.includes('spot')) return false;
-    return task.media.every(m => m.type === 'image');
 }
 
 function dhashToBigInt(hexOrBin) {
@@ -105,7 +97,10 @@ function initDB() {
         }
     }
     if (fs.existsSync(KNN_BRAIN_FILE)) {
-        try { centralizedKnnDataset = JSON.parse(fs.readFileSync(KNN_BRAIN_FILE, 'utf8')); } catch(e) {}
+        try {
+            centralizedKnnDataset = JSON.parse(fs.readFileSync(KNN_BRAIN_FILE, 'utf8'));
+            console.log(`[AI] Centralized Brain Loaded (${Object.keys(centralizedKnnDataset).length} classes)`);
+        } catch(e) {}
     }
 }
 initDB();
@@ -144,7 +139,7 @@ function evaluateAutoSolve(task) {
     let cKey = getCleanKey(task);
     let targetDhashes = conceptBank[cKey];
 
-    if (targetDhashes && targetDhashes.size > 0 && isGridTask(task)) {
+    if (targetDhashes && targetDhashes.size > 0 && task.media && task.media.length > 1) {
         let matchedClicks = [];
         task.media.forEach((item, idx) => {
             if (!item.dhash || item.dhash === "0000000000000000") return;
@@ -170,19 +165,12 @@ function getOnlineWorkers(mode) {
             list.push({ ws, meta });
         }
     });
-    if (list.length === 0) {
-        activeWorkers.forEach((meta, ws) => {
-            if (ws.readyState === WebSocket.OPEN) list.push({ ws, meta });
-        });
-    }
     return list;
 }
 
 function broadcastCounts() {
-    let gridWorkers = 0, manualWorkers = 0;
-    activeWorkers.forEach(meta => {
-        if (meta.mode === 'grid') gridWorkers++; else manualWorkers++;
-    });
+    let gridWorkers = getOnlineWorkers('grid').map(w => w.meta.name);
+    let manualWorkers = getOnlineWorkers('manual').map(w => w.meta.name);
 
     const payload = JSON.stringify({
         action: 'counts_update',
@@ -190,8 +178,8 @@ function broadcastCounts() {
             pending: Object.keys(hcaptchaPending).length,
             trained: Object.keys(hcaptchaTrained).length,
             concepts: Object.keys(conceptBank).length,
-            gridWorkersOnline: gridWorkers,
-            manualWorkersOnline: manualWorkers
+            gridWorkersOnline: gridWorkers.length,
+            manualWorkersOnline: manualWorkers.length
         }
     });
 
@@ -212,15 +200,14 @@ function notifyBrowsers(taskId, clicks) {
 }
 
 function dispatchTaskToWorker(taskData) {
-    if (taskAssignments.has(taskData.id)) return;
-
-    let targetMode = isGridTask(taskData) ? 'grid' : 'manual';
-    let workers = getOnlineWorkers(targetMode);
+    let isGrid = taskData.media && taskData.media.length > 1;
+    let mode = isGrid ? 'grid' : 'manual';
+    let workers = getOnlineWorkers(mode);
 
     if (workers.length === 0) return;
 
     let targetWorker = null;
-    if (targetMode === 'grid') {
+    if (mode === 'grid') {
         gridWorkerIndex = (gridWorkerIndex + 1) % workers.length;
         targetWorker = workers[gridWorkerIndex];
     } else {
@@ -229,7 +216,6 @@ function dispatchTaskToWorker(taskData) {
     }
 
     if (targetWorker && targetWorker.ws.readyState === WebSocket.OPEN) {
-        taskAssignments.set(taskData.id, targetWorker.ws);
         targetWorker.meta.assignedTasks.add(taskData.id);
         targetWorker.ws.send(JSON.stringify({ action: 'new_task', task: taskData }));
     }
@@ -237,10 +223,6 @@ function dispatchTaskToWorker(taskData) {
 
 function handleNewTask(task, wsSource) {
     if (!task || !task.taskId) return { success: false };
-
-    if (hcaptchaPending[task.taskId]) {
-        return { success: true, autoSolved: false };
-    }
 
     let autoRes = evaluateAutoSolve(task);
     if (autoRes.solved) {
@@ -254,10 +236,7 @@ function handleNewTask(task, wsSource) {
     const keys = Object.keys(hcaptchaPending);
     if (keys.length >= MAX_PENDING) {
         let deletedKeys = keys.slice(0, 15);
-        deletedKeys.forEach(k => {
-            delete hcaptchaPending[k];
-            taskAssignments.delete(k);
-        });
+        deletedKeys.forEach(k => delete hcaptchaPending[k]);
         activeWorkers.forEach((_, ws) => {
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ action: 'bulk_remove_pending', taskIds: deletedKeys }));
@@ -276,25 +255,6 @@ function handleNewTask(task, wsSource) {
     dispatchTaskToWorker(taskData);
     broadcastCounts();
     return { success: true, autoSolved: false };
-}
-
-function handleTileUpdate(payload) {
-    const { taskId, index, thumb, dhash, stableHash } = payload;
-    if (!taskId || index === undefined) return;
-
-    let target = hcaptchaPending[taskId];
-    if (target && target.media && target.media[index]) {
-        target.media[index].thumb = thumb || target.media[index].thumb;
-        target.media[index].dhash = dhash || target.media[index].dhash;
-        if (stableHash) target.media[index].stableHash = stableHash;
-    }
-
-    const msg = JSON.stringify({ action: 'tile_patch', taskId, index, thumb, dhash });
-    activeWorkers.forEach((meta, ws) => {
-        if (ws.readyState === WebSocket.OPEN && meta.assignedTasks.has(taskId)) {
-            ws.send(msg);
-        }
-    });
 }
 
 function handleSubmitTask(taskId, clicks) {
@@ -335,12 +295,10 @@ function handleSubmitTask(taskId, clicks) {
         }
 
         delete hcaptchaPending[taskId];
-        taskAssignments.delete(taskId);
         persistDatabase();
         notifyBrowsers(taskId, clicks);
 
-        // Broadcast remove command to all active dashboards so no lingering cards remain
-        const solveMsg = JSON.stringify({ action: 'task_solved', taskId });
+        const solveMsg = JSON.stringify({ action: 'task_solved', taskId, trainedTask: hcaptchaTrained[taskId] });
         activeWorkers.forEach((meta, ws) => {
             meta.assignedTasks.delete(taskId);
             if (ws.readyState === WebSocket.OPEN) ws.send(solveMsg);
@@ -361,7 +319,7 @@ wss.on('connection', (ws) => {
             if (data.action === 'register_dashboard') {
                 const workerMeta = {
                     name: data.workerName || 'Worker_' + Math.floor(Math.random()*1000),
-                    mode: data.mode || 'manual',
+                    mode: data.mode || 'grid',
                     assignedTasks: new Set()
                 };
                 activeWorkers.set(ws, workerMeta);
@@ -370,9 +328,8 @@ wss.on('connection', (ws) => {
                 let availablePending = {};
                 
                 Object.values(hcaptchaPending).forEach(task => {
-                    let taskIsGrid = isGridTask(task);
-                    if (((isGrid && taskIsGrid) || (!isGrid && !taskIsGrid)) && !taskAssignments.has(task.id)) {
-                        taskAssignments.set(task.id, ws);
+                    let taskIsGrid = task.media && task.media.length > 1;
+                    if ((isGrid && taskIsGrid) || (!isGrid && !taskIsGrid)) {
                         workerMeta.assignedTasks.add(task.id);
                         availablePending[task.id] = task;
                     }
@@ -393,11 +350,7 @@ wss.on('connection', (ws) => {
                 return;
             }
 
-            if (data.action === 'tile_update') {
-                handleTileUpdate(data);
-                return;
-            }
-
+            // Sync AI Brain Updates across all connected grid instances
             if (data.action === 'sync_knn_update' && data.knnUpdates) {
                 Object.assign(centralizedKnnDataset, data.knnUpdates);
                 persistDatabase();
@@ -443,10 +396,10 @@ wss.on('connection', (ws) => {
     ws.on('close', () => {
         if (activeWorkers.has(ws)) {
             const leavingWorker = activeWorkers.get(ws);
+            const orphanedTasks = Array.from(leavingWorker.assignedTasks);
             activeWorkers.delete(ws);
 
-            leavingWorker.assignedTasks.forEach(tid => {
-                taskAssignments.delete(tid);
+            orphanedTasks.forEach(tid => {
                 if (hcaptchaPending[tid]) dispatchTaskToWorker(hcaptchaPending[tid]);
             });
 
@@ -465,22 +418,37 @@ app.post('/api/new-hcaptcha', (req, res) => res.json(handleNewTask(req.body)));
 app.post('/api/submit-hcaptcha', (req, res) => res.json(handleSubmitTask(req.body.taskId, req.body.clicks)));
 
 app.get('/api/tasks', (req, res) => {
-    let source = req.query.tab === 'trained' ? hcaptchaTrained : hcaptchaPending;
-    res.json({ tasks: source, total: Object.keys(source).length });
+    const tab = req.query.tab === 'trained' ? 'trained' : 'pending';
+    const page = Math.max(0, parseInt(req.query.page) || 0);
+    const size = Math.min(30, Math.max(1, parseInt(req.query.size) || DASHBOARD_PAGE_SIZE));
+
+    let source = tab === 'trained' ? hcaptchaTrained : hcaptchaPending;
+    let ids = Object.keys(source);
+
+    if (tab === 'trained') ids = ids.reverse();
+    let total = ids.length;
+    let pageIds = ids.slice(page * size, (page + 1) * size);
+    let tasks = {};
+    pageIds.forEach(id => { tasks[id] = source[id]; });
+
+    res.json({ tasks, total, page, pages: Math.ceil(total / size), tab });
 });
 
 app.get('/api/counts', (req, res) => {
+    let gridWorkers = getOnlineWorkers('grid').map(w => w.meta.name);
+    let manualWorkers = getOnlineWorkers('manual').map(w => w.meta.name);
     res.json({
         pending: Object.keys(hcaptchaPending).length,
         trained: Object.keys(hcaptchaTrained).length,
-        concepts: Object.keys(conceptBank).length
+        concepts: Object.keys(conceptBank).length,
+        gridWorkersOnline: gridWorkers.length,
+        manualWorkersOnline: manualWorkers.length
     });
 });
 
 app.delete('/api/delete-hcaptcha/:id', (req, res) => {
     delete hcaptchaPending[req.params.id];
     delete hcaptchaTrained[req.params.id];
-    taskAssignments.delete(req.params.id);
     rebuildConceptBank(); 
     persistDatabase();
     
