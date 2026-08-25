@@ -16,7 +16,7 @@ const wss = new WebSocket.Server({ server });
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE = path.join(DATA_DIR, 'database.json');
 
-const MAX_PENDING = 60;
+const MAX_PENDING = 100;
 const MAX_TRAINED = 50000;
 const DASHBOARD_PAGE_SIZE = 20;
 
@@ -24,8 +24,13 @@ let hcaptchaPending = {};
 let hcaptchaTrained = {};
 let conceptBank = {};
 
+// Sockets Management
 const browserSockets = new Map();
-const dashboardSockets = new Set();
+// Dashboard workers registry: ws -> { id, name, mode, assignedTasks: Set }
+const activeWorkers = new Map();
+
+let gridWorkerIndex = 0;
+let manualWorkerIndex = 0;
 
 let redis = null;
 if (process.env.REDIS_URL) {
@@ -105,12 +110,10 @@ function persistDatabase() {
 }
 
 function evaluateAutoSolve(task) {
-    // 1. Direct match by Task ID
     if (hcaptchaTrained[task.taskId]) {
         return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
     }
 
-    // 2. Direct match by Fingerprint Hash for Single Canvas/Image
     if (task.media && task.media.length === 1) {
         const item = task.media[0];
         for (let tid in hcaptchaTrained) {
@@ -128,7 +131,6 @@ function evaluateAutoSolve(task) {
         return { solved: false };
     }
 
-    // 3. Grid Tasks Concept Matching
     let cKey = getCleanKey(task);
     let targetDhashes = conceptBank[cKey];
 
@@ -151,21 +153,35 @@ function evaluateAutoSolve(task) {
     return { solved: false };
 }
 
-function broadcastDashboard(payload) {
-    const msg = JSON.stringify(payload);
-    dashboardSockets.forEach(ws => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+function getOnlineWorkers(mode) {
+    let list = [];
+    activeWorkers.forEach((meta, ws) => {
+        if (ws.readyState === WebSocket.OPEN && meta.mode === mode) {
+            list.push({ ws, meta });
+        }
     });
+    return list;
 }
 
 function broadcastCounts() {
-    broadcastDashboard({
+    let gridWorkers = getOnlineWorkers('grid').map(w => w.meta.name);
+    let manualWorkers = getOnlineWorkers('manual').map(w => w.meta.name);
+
+    const payload = JSON.stringify({
         action: 'counts_update',
         counts: {
             pending: Object.keys(hcaptchaPending).length,
             trained: Object.keys(hcaptchaTrained).length,
-            concepts: Object.keys(conceptBank).length
+            concepts: Object.keys(conceptBank).length,
+            gridWorkersOnline: gridWorkers.length,
+            manualWorkersOnline: manualWorkers.length,
+            gridWorkerNames: gridWorkers,
+            manualWorkerNames: manualWorkers
         }
+    });
+
+    activeWorkers.forEach((_, ws) => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(payload);
     });
 }
 
@@ -174,11 +190,34 @@ function notifyBrowsers(taskId, clicks) {
         const sockets = browserSockets.get(taskId);
         const payload = JSON.stringify({ action: 'solve', taskId, clicks });
         sockets.forEach(ws => {
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.send(payload);
-            }
+            if (ws.readyState === WebSocket.OPEN) ws.send(payload);
         });
         browserSockets.delete(taskId);
+    }
+}
+
+// ── Smart Dynamic Load Balancer ──
+function dispatchTaskToWorker(taskData) {
+    let isGrid = taskData.media && taskData.media.length > 1;
+    let mode = isGrid ? 'grid' : 'manual';
+    let workers = getOnlineWorkers(mode);
+
+    if (workers.length === 0) {
+        return; // Pending pool mein rahega, jab worker aayega tab receive karega
+    }
+
+    let targetWorker = null;
+    if (mode === 'grid') {
+        gridWorkerIndex = (gridWorkerIndex + 1) % workers.length;
+        targetWorker = workers[gridWorkerIndex];
+    } else {
+        manualWorkerIndex = (manualWorkerIndex + 1) % workers.length;
+        targetWorker = workers[manualWorkerIndex];
+    }
+
+    if (targetWorker && targetWorker.ws.readyState === WebSocket.OPEN) {
+        targetWorker.meta.assignedTasks.add(taskData.id);
+        targetWorker.ws.send(JSON.stringify({ action: 'new_task', task: taskData }));
     }
 }
 
@@ -198,7 +237,12 @@ function handleNewTask(task, wsSource) {
     if (keys.length >= MAX_PENDING) {
         let deletedKeys = keys.slice(0, 15);
         deletedKeys.forEach(k => delete hcaptchaPending[k]);
-        broadcastDashboard({ action: 'bulk_remove_pending', taskIds: deletedKeys });
+        
+        activeWorkers.forEach((_, ws) => {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: 'bulk_remove_pending', taskIds: deletedKeys }));
+            }
+        });
     }
 
     const taskData = {
@@ -209,7 +253,7 @@ function handleNewTask(task, wsSource) {
     };
     hcaptchaPending[task.taskId] = taskData;
 
-    broadcastDashboard({ action: 'new_task', task: taskData });
+    dispatchTaskToWorker(taskData);
     broadcastCounts();
     return { success: true, autoSolved: false };
 }
@@ -225,12 +269,11 @@ function handleTileUpdate(payload) {
         if (stableHash) target.media[index].stableHash = stableHash;
     }
 
-    broadcastDashboard({
-        action: 'tile_patch',
-        taskId,
-        index,
-        thumb,
-        dhash
+    const msg = JSON.stringify({ action: 'tile_patch', taskId, index, thumb, dhash });
+    activeWorkers.forEach((meta, ws) => {
+        if (ws.readyState === WebSocket.OPEN && meta.assignedTasks.has(taskId)) {
+            ws.send(msg);
+        }
     });
 }
 
@@ -274,10 +317,14 @@ function handleSubmitTask(taskId, clicks) {
         delete hcaptchaPending[taskId];
         persistDatabase();
         
-        // Instant Browser Notification
         notifyBrowsers(taskId, clicks);
 
-        broadcastDashboard({ action: 'task_solved', taskId, trainedTask: hcaptchaTrained[taskId] });
+        const solveMsg = JSON.stringify({ action: 'task_solved', taskId, trainedTask: hcaptchaTrained[taskId] });
+        activeWorkers.forEach((meta, ws) => {
+            meta.assignedTasks.delete(taskId);
+            if (ws.readyState === WebSocket.OPEN) ws.send(solveMsg);
+        });
+
         broadcastCounts();
     }
     return { success: true };
@@ -285,24 +332,43 @@ function handleSubmitTask(taskId, clicks) {
 
 wss.on('connection', (ws) => {
     let boundTaskId = null;
-    let isDashboard = false;
 
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
 
             if (data.action === 'register_dashboard') {
-                isDashboard = true;
-                dashboardSockets.add(ws);
+                const workerMeta = {
+                    name: data.workerName || 'Worker_' + Math.floor(Math.random()*1000),
+                    mode: data.mode || 'grid',
+                    assignedTasks: new Set()
+                };
+                activeWorkers.set(ws, workerMeta);
+
+                // Initial task balancing for newly connected worker
+                let isGrid = workerMeta.mode === 'grid';
+                let availablePending = {};
+                
+                Object.values(hcaptchaPending).forEach(task => {
+                    let taskIsGrid = task.media && task.media.length > 1;
+                    if ((isGrid && taskIsGrid) || (!isGrid && !taskIsGrid)) {
+                        // Check if not actively assigned or share if worker count is small
+                        workerMeta.assignedTasks.add(task.id);
+                        availablePending[task.id] = task;
+                    }
+                });
+
                 ws.send(JSON.stringify({
                     action: 'init_state',
-                    pending: hcaptchaPending,
+                    pending: availablePending,
                     counts: {
                         pending: Object.keys(hcaptchaPending).length,
                         trained: Object.keys(hcaptchaTrained).length,
                         concepts: Object.keys(conceptBank).length
                     }
                 }));
+
+                broadcastCounts();
                 return;
             }
 
@@ -341,7 +407,21 @@ wss.on('connection', (ws) => {
     });
 
     ws.on('close', () => {
-        if (isDashboard) dashboardSockets.delete(ws);
+        if (activeWorkers.has(ws)) {
+            const leavingWorker = activeWorkers.get(ws);
+            const orphanedTasks = Array.from(leavingWorker.assignedTasks);
+            activeWorkers.delete(ws);
+
+            // Re-dispatch remaining tasks to other available workers
+            orphanedTasks.forEach(tid => {
+                if (hcaptchaPending[tid]) {
+                    dispatchTaskToWorker(hcaptchaPending[tid]);
+                }
+            });
+
+            broadcastCounts();
+        }
+
         if (boundTaskId && browserSockets.has(boundTaskId)) {
             const set = browserSockets.get(boundTaskId);
             set.delete(ws);
@@ -376,10 +456,16 @@ app.get('/api/tasks', (req, res) => {
 });
 
 app.get('/api/counts', (req, res) => {
+    let gridWorkers = getOnlineWorkers('grid').map(w => w.meta.name);
+    let manualWorkers = getOnlineWorkers('manual').map(w => w.meta.name);
     res.json({
         pending: Object.keys(hcaptchaPending).length,
         trained: Object.keys(hcaptchaTrained).length,
-        concepts: Object.keys(conceptBank).length
+        concepts: Object.keys(conceptBank).length,
+        gridWorkersOnline: gridWorkers.length,
+        manualWorkersOnline: manualWorkers.length,
+        gridWorkerNames: gridWorkers,
+        manualWorkerNames: manualWorkers
     });
 });
 
@@ -388,7 +474,13 @@ app.delete('/api/delete-hcaptcha/:id', (req, res) => {
     delete hcaptchaTrained[req.params.id];
     rebuildConceptBank(); 
     persistDatabase();
-    broadcastDashboard({ action: 'task_deleted', taskId: req.params.id });
+    
+    const delMsg = JSON.stringify({ action: 'task_deleted', taskId: req.params.id });
+    activeWorkers.forEach((meta, ws) => {
+        meta.assignedTasks.delete(req.params.id);
+        if (ws.readyState === WebSocket.OPEN) ws.send(delMsg);
+    });
+
     broadcastCounts();
     res.json({ success: true });
 });
