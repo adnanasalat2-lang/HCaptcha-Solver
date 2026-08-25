@@ -212,7 +212,6 @@ function notifyBrowsers(taskId, clicks) {
 }
 
 function dispatchTaskToWorker(taskData) {
-    // If task is already assigned, don't re-dispatch
     if (taskAssignments.has(taskData.id)) return;
 
     let targetMode = isGridTask(taskData) ? 'grid' : 'manual';
@@ -273,6 +272,25 @@ function handleNewTask(task, wsSource) {
     dispatchTaskToWorker(taskData);
     broadcastCounts();
     return { success: true, autoSolved: false };
+}
+
+function handleTileUpdate(payload) {
+    const { taskId, index, thumb, dhash, stableHash } = payload;
+    if (!taskId || index === undefined) return;
+
+    let target = hcaptchaPending[taskId];
+    if (target && target.media && target.media[index]) {
+        target.media[index].thumb = thumb || target.media[index].thumb;
+        target.media[index].dhash = dhash || target.media[index].dhash;
+        if (stableHash) target.media[index].stableHash = stableHash;
+    }
+
+    const msg = JSON.stringify({ action: 'tile_patch', taskId, index, thumb, dhash });
+    activeWorkers.forEach((meta, ws) => {
+        if (ws.readyState === WebSocket.OPEN && meta.assignedTasks.has(taskId)) {
+            ws.send(msg);
+        }
+    });
 }
 
 function handleSubmitTask(taskId, clicks) {
@@ -370,6 +388,11 @@ wss.on('connection', (ws) => {
                 return;
             }
 
+            if (data.action === 'tile_update') {
+                handleTileUpdate(data);
+                return;
+            }
+
             if (data.action === 'sync_knn_update' && data.knnUpdates) {
                 Object.assign(centralizedKnnDataset, data.knnUpdates);
                 persistDatabase();
@@ -442,14 +465,10 @@ app.get('/api/tasks', (req, res) => {
 });
 
 app.get('/api/counts', (req, res) => {
-    let gridWorkers = getOnlineWorkers('grid').map(w => w.meta.name);
-    let manualWorkers = getOnlineWorkers('manual').map(w => w.meta.name);
     res.json({
         pending: Object.keys(hcaptchaPending).length,
         trained: Object.keys(hcaptchaTrained).length,
-        concepts: Object.keys(conceptBank).length,
-        gridWorkersOnline: gridWorkers.length,
-        manualWorkersOnline: manualWorkers.length
+        concepts: Object.keys(conceptBank).length
     });
 });
 
