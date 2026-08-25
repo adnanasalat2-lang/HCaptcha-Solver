@@ -142,73 +142,77 @@ let isAIReady = false, aiModel, knn;
 let autoTrainEnabled = true, autoSaveEnabled = true;
 let isEvaluatingAI = false;
 
-// ── WebSocket Live Sync Layer ──
+// ── WebSocket + Fallback Sync ──
 function connectDashboardWS() {
-    dashWS = new WebSocket(WS_URL);
+    try {
+        dashWS = new WebSocket(WS_URL);
 
-    dashWS.onopen = () => {
-        dashWS.send(JSON.stringify({ action: 'register_dashboard' }));
-    };
+        dashWS.onopen = () => {
+            dashWS.send(JSON.stringify({ action: 'register_dashboard' }));
+        };
 
-    dashWS.onmessage = (event) => {
-        try {
-            const msg = JSON.parse(event.data);
+        dashWS.onmessage = (event) => {
+            try {
+                const msg = JSON.parse(event.data);
 
-            if (msg.action === 'init_state') {
-                serverData.pending = msg.pending || {};
-                renderPendingStreams();
-                updateCounts(msg.counts);
-                if (isAIReady && autoTrainEnabled) reEvaluatePending();
-            }
-
-            if (msg.action === 'new_task') {
-                serverData.pending[msg.task.id] = msg.task;
-                renderPendingStreams();
-                if (isAIReady && autoTrainEnabled) {
-                    let t = activeTasksStore[msg.task.id];
-                    if (t && t.type === 'grid') predictWithAI(t);
+                if (msg.action === 'init_state') {
+                    serverData.pending = msg.pending || {};
+                    renderPendingStreams();
+                    updateCounts(msg.counts);
+                    if (isAIReady && autoTrainEnabled) reEvaluatePending();
                 }
-            }
 
-            if (msg.action === 'tile_patch') {
-                let card = document.querySelector(`.task-card[data-id="${msg.taskId}"]`);
-                if (card) {
-                    let imgEl = card.querySelector(`.g-img[data-index="${msg.index}"]`);
-                    if (imgEl && msg.thumb) {
-                        imgEl.src = msg.thumb;
+                if (msg.action === 'new_task') {
+                    serverData.pending[msg.task.id] = msg.task;
+                    renderPendingStreams();
+                    if (isAIReady && autoTrainEnabled) {
+                        let t = activeTasksStore[msg.task.id];
+                        if (t && t.type === 'grid') predictWithAI(t);
                     }
                 }
-                if (activeTasksStore[msg.taskId] && activeTasksStore[msg.taskId].media[msg.index]) {
-                    activeTasksStore[msg.taskId].media[msg.index].thumb = msg.thumb;
-                    activeTasksStore[msg.taskId].media[msg.index].dhash = msg.dhash;
+
+                if (msg.action === 'tile_patch') {
+                    let card = document.querySelector(`.task-card[data-id="${msg.taskId}"]`);
+                    if (card) {
+                        let imgEl = card.querySelector(`.g-img[data-index="${msg.index}"]`);
+                        if (imgEl && msg.thumb) {
+                            imgEl.src = msg.thumb;
+                        }
+                    }
+                    if (activeTasksStore[msg.taskId] && activeTasksStore[msg.taskId].media[msg.index]) {
+                        activeTasksStore[msg.taskId].media[msg.index].thumb = msg.thumb;
+                        activeTasksStore[msg.taskId].media[msg.index].dhash = msg.dhash;
+                    }
                 }
-            }
 
-            if (msg.action === 'task_solved' || msg.action === 'task_deleted') {
-                delete serverData.pending[msg.taskId];
-                let card = document.querySelector(`.task-card[data-id="${msg.taskId}"]`);
-                if (card) card.remove();
-                delete activeTasksStore[msg.taskId];
-            }
-
-            if (msg.action === 'bulk_remove_pending') {
-                (msg.taskIds || []).forEach(id => {
-                    delete serverData.pending[id];
-                    let card = document.querySelector(`.task-card[data-id="${id}"]`);
+                if (msg.action === 'task_solved' || msg.action === 'task_deleted') {
+                    delete serverData.pending[msg.taskId];
+                    let card = document.querySelector(`.task-card[data-id="${msg.taskId}"]`);
                     if (card) card.remove();
-                    delete activeTasksStore[id];
-                });
-            }
+                    delete activeTasksStore[msg.taskId];
+                }
 
-            if (msg.action === 'counts_update') {
-                updateCounts(msg.counts);
-            }
-        } catch(e) {}
-    };
+                if (msg.action === 'bulk_remove_pending') {
+                    (msg.taskIds || []).forEach(id => {
+                        delete serverData.pending[id];
+                        let card = document.querySelector(`.task-card[data-id="${id}"]`);
+                        if (card) card.remove();
+                        delete activeTasksStore[id];
+                    });
+                }
 
-    dashWS.onclose = () => {
-        setTimeout(connectDashboardWS, 1500);
-    };
+                if (msg.action === 'counts_update') {
+                    updateCounts(msg.counts);
+                }
+            } catch(e) {}
+        };
+
+        dashWS.onclose = () => {
+            setTimeout(connectDashboardWS, 2000);
+        };
+    } catch(e) {
+        setTimeout(connectDashboardWS, 2000);
+    }
 }
 
 function updateCounts(c) {
@@ -290,7 +294,7 @@ async function loadKNN() {
 }
 
 async function resetAIBrain() {
-    if (confirm("Kya aap AI Brain ki sari memory reset karna chahte hain?")) {
+    if (confirm("Kya aap AI Brain ki memory reset karna chahte hain?")) {
         indexedDB.deleteDatabase(IDB.name);
         if (knn) knn.clearAllClasses();
         location.reload();
@@ -735,6 +739,11 @@ function filterTasks() {
         c.style.display = c.dataset.id.toLowerCase().includes(f) ? "" : "none";
     });
 }
+
+// Polling fallback to keep counts in sync if WS drops
+setInterval(() => {
+    fetch(`${SERVER_URL}/api/counts`).then(r => r.json()).then(updateCounts).catch(()=>{});
+}, 3000);
 
 setInterval(() => {
     videoTasks.forEach(vt => {
