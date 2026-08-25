@@ -218,8 +218,6 @@ const syncStatus = document.getElementById('syncStatus');
 
 let currentTab = 'pending';
 let serverData = { pending: {}, trained: {} }, activeTasksStore = {}, videoTasks = [];
-let ghostBlocker = new Set();
-let retrainEditingTasks = new Set();
 let trainedPage = 0;
 let dashWS = null;
 
@@ -278,9 +276,7 @@ function reopenModeModal() {
 }
 
 function setTaskFocus(taskId) {
-    if (currentlyFocusedTaskId === taskId) return;
     currentlyFocusedTaskId = taskId;
-
     document.querySelectorAll('.task-card').forEach(c => {
         if (c.dataset.id === taskId) {
             c.classList.add('focused-task');
@@ -310,7 +306,7 @@ function connectDashboardWS() {
 
                 if (msg.action === 'init_state') {
                     serverData.pending = msg.pending || {};
-                    renderPendingStreams();
+                    renderAllPendingCards();
                     updateCounts(msg.counts);
                     
                     if (msg.knnBrain && knn) {
@@ -324,9 +320,9 @@ function connectDashboardWS() {
                     if (isAIReady && autoTrainEnabled && selectedAppMode === 'grid') reEvaluatePending();
                 }
 
-                if (msg.action === 'new_task') {
+                if (msg.action === 'new_task' && msg.task) {
                     serverData.pending[msg.task.id] = msg.task;
-                    renderPendingStreams();
+                    appendSingleTaskCard(msg.task);
                     if (isAIReady && autoTrainEnabled && selectedAppMode === 'grid') {
                         let t = activeTasksStore[msg.task.id];
                         if (t && t.type === 'grid') predictWithAI(t);
@@ -338,6 +334,8 @@ function connectDashboardWS() {
                     let card = document.querySelector(`.task-card[data-id="${msg.taskId}"]`);
                     if (card) card.remove();
                     delete activeTasksStore[msg.taskId];
+                    videoTasks = videoTasks.filter(v => v.id !== msg.taskId);
+                    updateStreamCounts();
 
                     if (currentlyFocusedTaskId === msg.taskId) {
                         currentlyFocusedTaskId = null;
@@ -353,6 +351,7 @@ function connectDashboardWS() {
                         if (card) card.remove();
                         delete activeTasksStore[id];
                     });
+                    updateStreamCounts();
                 }
 
                 if (msg.action === 'counts_update') {
@@ -375,6 +374,15 @@ function updateCounts(c) {
 
     let activeInMyMode = selectedAppMode === 'grid' ? (c.gridWorkersOnline || 1) : (c.manualWorkersOnline || 1);
     document.getElementById('teamCountText').innerText = `${selectedAppMode.toUpperCase()} Online: ${activeInMyMode}`;
+}
+
+function updateStreamCounts() {
+    let count = Object.keys(activeTasksStore).length;
+    if (selectedAppMode === 'grid') {
+        document.getElementById('c-grid').innerText = `${count} Assigned`;
+    } else {
+        document.getElementById('c-manual').innerText = `${count} Assigned`;
+    }
 }
 
 async function initAI() {
@@ -623,56 +631,39 @@ async function reEvaluatePending() {
     isEvaluatingAI = false;
 }
 
-function renderPendingStreams() {
-    let pending = serverData.pending;
-    let gridCount = 0, manualCount = 0;
+function appendSingleTaskCard(td) {
+    let id = td.id || td.taskId;
+    if (!id || activeTasksStore[id]) return;
 
-    document.querySelectorAll('#pendingView .task-card').forEach(card => {
-        let id = card.dataset.id;
-        if (!pending[id] || ghostBlocker.has(id)) {
-            card.remove();
-            delete activeTasksStore[id];
-        }
-    });
+    let media = td.media || [];
+    let isGrid = media.length > 1;
 
-    let gridFrag = document.createDocumentFragment();
-    let manualFrag = document.createDocumentFragment();
+    if (selectedAppMode === 'manual' && isGrid) return;
+    if (selectedAppMode === 'grid' && !isGrid) return;
 
-    for (let id of Object.keys(pending)) {
-        if (ghostBlocker.has(id)) continue;
-        let td = pending[id], media = td.media || [], isGrid = media.length > 1;
+    activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
+    let card = buildCard(activeTasksStore[id]);
 
-        if (isGrid) {
-            gridCount++;
-            if (selectedAppMode === 'manual') continue;
-        } else {
-            manualCount++;
-            if (selectedAppMode === 'grid') continue;
-        }
+    let targetArea = isGrid ? gridArea : manualArea;
+    targetArea.prepend(card);
 
-        if (activeTasksStore[id]) continue;
-
-        activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
-        let card = buildCard(activeTasksStore[id]);
-
-        if (isGrid) {
-            gridFrag.appendChild(card);
-            if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[id]);
-        } else {
-            manualFrag.appendChild(card);
-        }
-    }
-
-    if (selectedAppMode === 'grid') gridArea.appendChild(gridFrag);
-    if (selectedAppMode === 'manual') manualArea.appendChild(manualFrag);
+    updateStreamCounts();
 
     if (!currentlyFocusedTaskId) {
-        let firstCard = document.querySelector('#pendingView .task-card');
-        if (firstCard) setTaskFocus(firstCard.dataset.id);
+        setTaskFocus(id);
     }
+}
 
-    document.getElementById('c-grid').innerText = `${gridCount} Assigned`;
-    document.getElementById('c-manual').innerText = `${manualCount} Assigned`;
+function renderAllPendingCards() {
+    gridArea.innerHTML = '';
+    manualArea.innerHTML = '';
+    activeTasksStore = {};
+    videoTasks = [];
+    currentlyFocusedTaskId = null;
+
+    for (let id of Object.keys(serverData.pending)) {
+        appendSingleTaskCard(serverData.pending[id]);
+    }
 }
 
 function fetchTrainedList() {
@@ -854,7 +845,9 @@ document.body.addEventListener('click', (e) => {
         }
 
         if (act === 'del') {
-            ghostBlocker.add(tid); card.remove(); delete activeTasksStore[tid];
+            card.remove(); delete activeTasksStore[tid];
+            videoTasks = videoTasks.filter(v => v.id !== tid);
+            updateStreamCounts();
             fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).catch(()=>{});
             let nextCard = document.querySelector('#pendingView .task-card');
             if (nextCard) setTaskFocus(nextCard.dataset.id);
@@ -924,9 +917,10 @@ function sendToServer(taskId, btnEl, card) {
         }).catch(()=>{});
     }
 
-    ghostBlocker.add(taskId);
     if (card) card.remove();
     delete activeTasksStore[taskId];
+    videoTasks = videoTasks.filter(v => v.id !== taskId);
+    updateStreamCounts();
 
     if (isAIReady && t.type === 'grid' && t.clicks.length > 0) {
         trainAIBrainAsync(t);
@@ -935,7 +929,7 @@ function sendToServer(taskId, btnEl, card) {
     setTimeout(() => {
         let nextCard = document.querySelector('#pendingView .task-card');
         if (nextCard) setTaskFocus(nextCard.dataset.id);
-    }, 50);
+    }, 40);
 }
 
 document.addEventListener('keydown', (e) => {
