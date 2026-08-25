@@ -124,6 +124,7 @@
 
 <script>
 const SERVER_URL = location.origin;
+const WS_URL = SERVER_URL.replace(/^http/, 'ws');
 const gridArea = document.getElementById('gridArea');
 const manualArea = document.getElementById('manualArea');
 const trainedArea = document.getElementById('trainedArea');
@@ -139,6 +140,61 @@ let trainedPage = 0;
 let isAIReady = false, aiModel, knn;
 let autoTrainEnabled = true, autoSaveEnabled = true;
 let isEvaluatingAI = false;
+
+// ── WEBSOCKET LIVE STREAM ──
+let ws = null;
+function initWS() {
+    if (ws && ws.readyState < 2) return;
+    try {
+        ws = new WebSocket(WS_URL);
+        ws.onopen = () => {
+            ws.send(JSON.stringify({ action: 'dashboard' }));
+        };
+        ws.onmessage = (ev) => {
+            try {
+                let msg = JSON.parse(ev.data);
+                if (msg.type === 'counts') {
+                    document.getElementById('c-pending').innerText = msg.data.pending;
+                    document.getElementById('c-trained').innerText = msg.data.trained;
+                    document.getElementById('c-trained-total').innerText = `${msg.data.trained} Solved`;
+                }
+                if (msg.type === 'new_task' && currentTab === 'pending') {
+                    let td = msg.data;
+                    if (!ghostBlocker.has(td.id) && !activeTasksStore[td.id]) {
+                        serverData.pending[td.id] = td;
+                        let isGrid = (td.media || []).length > 1;
+                        activeTasksStore[td.id] = { id: td.id, clicks: [], type: isGrid ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '' };
+                        let card = buildCard(activeTasksStore[td.id]);
+                        if (isGrid) {
+                            gridArea.prepend(card);
+                            if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[td.id]);
+                        } else {
+                            manualArea.prepend(card);
+                        }
+                        updateCountsDisplay();
+                    }
+                }
+                if (msg.type === 'task_solved' || msg.type === 'task_deleted') {
+                    let tid = msg.data.taskId;
+                    ghostBlocker.add(tid);
+                    document.querySelector(`.task-card[data-id="${tid}"]`)?.remove();
+                    delete activeTasksStore[tid];
+                    delete serverData.pending[tid];
+                    videoTasks = videoTasks.filter(v => v.id !== tid);
+                    updateCountsDisplay();
+                }
+            } catch(e) {}
+        };
+        ws.onclose = () => setTimeout(initWS, 1500);
+    } catch(e) {
+        setTimeout(initWS, 1500);
+    }
+}
+
+function updateCountsDisplay() {
+    document.getElementById('c-grid').innerText = `${gridArea.children.length} Grids`;
+    document.getElementById('c-manual').innerText = `${manualArea.children.length} Tasks`;
+}
 
 async function initAI() {
     try {
@@ -250,7 +306,6 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
-// ── 3X FAST-LEARNING AI ENGINE (Learns instantly on Manual Save & Retrain) ──
 async function trainAIBrainAsync(task) {
     if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
@@ -270,7 +325,6 @@ async function trainAIBrainAsync(task) {
                 let tfImg = tf.browser.fromPixels(img);
                 let features = aiModel.infer(tfImg, true);
                 
-                // 3X Positive Weighting for instant learning
                 if (task.clicks.includes(m.index)) {
                     knn.addExample(features, pText);
                     knn.addExample(features, pText);
@@ -313,7 +367,6 @@ async function predictWithAI(task) {
             let conf = resolvedRes.confidences[pText] || 0;
             let negConf = resolvedRes.confidences['negative_' + pText] || 0;
             
-            // Realistic confidence balance
             if (resolvedRes.label === pText && conf >= 0.80 && negConf < 0.30) {
                 predictedClicks.push(m.index);
             }
@@ -367,19 +420,12 @@ async function fetchTasks() {
                 renderTrainedStream();
             }
         }
-        
-        fetch(`${SERVER_URL}/api/counts`).then(r => r.json()).then(counts => {
-            document.getElementById('c-pending').innerText = counts.pending;
-            document.getElementById('c-trained').innerText = counts.trained;
-            document.getElementById('c-trained-total').innerText = `${counts.trained} Solved`;
-        }).catch(()=>{});
     } catch(e) {}
     isFetching = false;
 }
 
 function renderPendingStreams() {
     let pending = serverData.pending;
-    let gridCount = 0, manualCount = 0;
 
     document.querySelectorAll('#pendingView .task-card').forEach(card => {
         let id = card.dataset.id;
@@ -389,32 +435,21 @@ function renderPendingStreams() {
         }
     });
 
-    let gridFrag = document.createDocumentFragment();
-    let manualFrag = document.createDocumentFragment();
-
     for (let id of Object.keys(pending)) {
-        if (ghostBlocker.has(id)) continue;
+        if (ghostBlocker.has(id) || activeTasksStore[id]) continue;
         let td = pending[id], media = td.media || [], isGrid = media.length > 1;
-
-        if (isGrid) gridCount++; else manualCount++;
-        if (activeTasksStore[id]) continue;
 
         activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
         let card = buildCard(activeTasksStore[id]);
 
         if (isGrid) {
-            gridFrag.appendChild(card);
+            gridArea.prepend(card);
             if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[id]);
         } else {
-            manualFrag.appendChild(card);
+            manualArea.prepend(card);
         }
     }
-
-    gridArea.appendChild(gridFrag);
-    manualArea.appendChild(manualFrag);
-
-    document.getElementById('c-grid').innerText = `${gridCount} Grids`;
-    document.getElementById('c-manual').innerText = `${manualCount} Tasks`;
+    updateCountsDisplay();
 }
 
 function renderTrainedStream() {
@@ -487,7 +522,6 @@ function buildCard(t, isTrained = false) {
     return card;
 }
 
-// ── Complete Interactive Handlers ──
 document.body.addEventListener('click', (e) => {
     let actionBtn = e.target.closest('[data-action]');
     let card = e.target.closest('.task-card');
@@ -528,7 +562,7 @@ document.body.addEventListener('click', (e) => {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ taskId: tid, clicks: t.clicks })
             }).then(() => {
-                if (isAIReady && t.type === 'grid') trainAIBrainAsync(t); // Instant Re-train Brain
+                if (isAIReady && t.type === 'grid') trainAIBrainAsync(t);
                 retrainEditingTasks.delete(tid);
                 card.classList.remove('in-retrain');
                 let b = card.querySelector(`#banner-${tid}`); if (b) b.remove();
@@ -581,6 +615,7 @@ document.body.addEventListener('click', (e) => {
 
         if (act === 'del') {
             ghostBlocker.add(tid); card.remove(); delete activeTasksStore[tid];
+            updateCountsDisplay();
             fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).catch(()=>{});
             return;
         }
@@ -651,8 +686,8 @@ function sendToServer(taskId, btnEl, card) {
     ghostBlocker.add(taskId);
     if (card) card.remove();
     delete activeTasksStore[taskId];
+    updateCountsDisplay();
 
-    // Train 3x Weights on user save
     if (isAIReady && t.type === 'grid' && t.clicks.length > 0) {
         trainAIBrainAsync(t);
     }
@@ -675,7 +710,7 @@ setInterval(() => {
     });
 }, 150);
 
-setInterval(fetchTasks, 500);
+initWS();
 fetchTasks();
 setTimeout(initAI, 100);
 </script>
