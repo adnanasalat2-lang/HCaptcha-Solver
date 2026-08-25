@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="referrer" content="no-referrer">
-<title>hCaptcha Master Pro ⚡</title>
+<title>hCaptcha Master Pro ⚡ (Controlled AI & Fast-Lane)</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -20,8 +20,8 @@ body { background-color: #0c0c0c; color: #ffffff; font-family: -apple-system, Bl
 .tab-btn.active { background: #00ff88; color: #000; border-color: #00ff88; }
 .count-badge { background: #000; color: #fff; padding: 1px 6px; border-radius: 6px; font-size: 11px; margin-left: 4px; }
 
-.ai-bar { display: flex; align-items: center; gap: 6px; }
-.sync-status { font-size: 11px; color: #ffaa00; font-weight: bold; padding: 4px 8px; background: #1a1a1a; border-radius: 4px; border: 1px solid #333; }
+.ai-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sync-status { font-size: 11px; font-weight: bold; padding: 4px 8px; background: #1a1a1a; border-radius: 4px; border: 1px solid #444; color: #ffaa00; }
 .sync-status.active { color: #00ff88; border-color: #00ff88; }
 .btn-toggle { padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: bold; border: 1px solid #555; background: #222; color: #888; }
 .btn-toggle.on { background: #00ff88; color: #000; border-color: #00ff88; }
@@ -37,7 +37,7 @@ body { background-color: #0c0c0c; color: #ffffff; font-family: -apple-system, Bl
 
 .task-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
 .task-card { background: #1c1c1c; border: 1px solid #333; border-radius: 4px; padding: 8px; contain: layout; }
-.task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 8px rgba(255,0,255,0.3); }
+.task-card.ai-processing { border: 2px solid #ff00ff !important; box-shadow: 0 0 10px rgba(255,0,255,0.4); }
 .task-card.in-retrain { border: 2px solid #ff8800 !important; background: #221405 !important; }
 .task-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
 .task-id { color: #ff4444; font-family: monospace; font-size: 12px; font-weight: bold; }
@@ -51,7 +51,7 @@ body { background-color: #0c0c0c; color: #ffffff; font-family: -apple-system, Bl
 .img-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
 .img-grid img { width: 100%; height: 95px; object-fit: cover; cursor: pointer; border: 3px solid transparent; background: #222; border-radius: 3px; }
 .img-grid img.selected { border-color: #00ff88; opacity: 0.85; }
-.img-grid img.ai-pick { border-color: #ff00ff; }
+.img-grid img.ai-pick { border-color: #ff00ff !important; box-shadow: 0 0 8px #ff00ff; }
 .img-grid img.retrain-pick { border-color: #ff8800 !important; }
 
 .single-box { position: relative; width: 100%; height: 320px; cursor: crosshair; display: flex; justify-content: center; align-items: center; background: #000; border-radius: 4px; border: 1px solid #444; overflow: hidden; user-select: none; }
@@ -88,9 +88,10 @@ body { background-color: #0c0c0c; color: #ffffff; font-family: -apple-system, Bl
         </div>
     </div>
     <div class="ai-bar">
-        <span class="sync-status" id="syncStatus">🔴 Offline</span>
-        <button id="btnAutoTrain" class="btn-toggle on" onclick="toggleAutoTrain()">🧠 Auto: ON</button>
-        <button id="btnAutoSave" class="btn-toggle on" onclick="toggleAutoSave()">💾 Save: ON</button>
+        <span class="sync-status" id="wsStatus">🔌 Live...</span>
+        <span class="sync-status" id="syncStatus">🧠 AI Loading...</span>
+        <button id="btnAutoTrain" class="btn-toggle on" onclick="toggleAutoTrain()">🧠 AI Assist: ON</button>
+        <button id="btnAutoSave" class="btn-toggle" onclick="toggleAutoSave()">💾 Auto-Save: OFF</button>
         <button class="btn-del-brain" onclick="resetBrain()">🧹 Reset AI</button>
         <div class="search-box"><input type="text" id="searchInput" oninput="filterTasks()" placeholder="🔍 Task ID..."/></div>
     </div>
@@ -100,7 +101,7 @@ body { background-color: #0c0c0c; color: #ffffff; font-family: -apple-system, Bl
     <div class="column">
         <div class="column-header">
             <span class="col-title-ai">🤖 AI Grid Stream</span>
-            <span class="stream-count" id="c-grid">0 Tasks</span>
+            <span class="stream-count" id="c-grid">0 Grids</span>
         </div>
         <div class="task-list" id="gridArea"></div>
     </div>
@@ -128,13 +129,14 @@ const gridArea = document.getElementById('gridArea');
 const manualArea = document.getElementById('manualArea');
 const trainedArea = document.getElementById('trainedArea');
 const syncStatus = document.getElementById('syncStatus');
+const wsStatus = document.getElementById('wsStatus');
 
 let currentTab = 'pending';
 let activeTasksStore = {};
 let videoControllers = new Map();
 let ghostBlocker = new Set(), retrainEditingTasks = new Set();
-let isAIReady = false, aiModel, knn;
-let autoTrainEnabled = true, autoSaveEnabled = true;
+let isAIReady = false, aiModel = null, knn = null;
+let autoTrainEnabled = true, autoSaveEnabled = false; // Safe default: Operator controlled
 let isEvaluatingAI = false;
 let brainSaveTimer = null;
 
@@ -146,7 +148,19 @@ async function initAI() {
         knn = knnClassifier.create();
         await loadBrainFromServer();
         isAIReady = true;
-    } catch(e) {}
+        updateAIStatus();
+        reEvaluatePending();
+    } catch(e) {
+        syncStatus.innerHTML = "⚠️ AI Fallback";
+    }
+}
+
+function updateAIStatus() {
+    if (!knn) return;
+    let ds = knn.getClassExampleCount();
+    let concepts = Object.keys(ds).filter(k => !k.startsWith('neg_')).length;
+    syncStatus.className = 'sync-status active';
+    syncStatus.innerHTML = `🤖 AI Ready ✅ (${concepts} Concepts)`;
 }
 
 function cleanLabel(raw) {
@@ -164,6 +178,7 @@ async function loadBrainFromServer() {
             if (ser[k]?.data && ser[k]?.shape) ds[k] = tf.tensor(ser[k].data, ser[k].shape);
         }
         knn.setClassifierDataset(ds);
+        updateAIStatus();
     } catch(e) {}
 }
 
@@ -179,8 +194,9 @@ function scheduleBrainSave() {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(ser)
             });
+            updateAIStatus();
         } catch(e) {}
-    }, 1500);
+    }, 1200);
 }
 
 async function resetBrain() {
@@ -209,14 +225,15 @@ function toggleAutoTrain() {
     autoTrainEnabled = !autoTrainEnabled;
     let btn = document.getElementById('btnAutoTrain');
     btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
-    btn.textContent = '🧠 Auto: ' + (autoTrainEnabled ? 'ON' : 'OFF');
+    btn.textContent = '🧠 AI Assist: ' + (autoTrainEnabled ? 'ON' : 'OFF');
+    if (autoTrainEnabled && isAIReady) reEvaluatePending();
 }
 
 function toggleAutoSave() {
     autoSaveEnabled = !autoSaveEnabled;
     let btn = document.getElementById('btnAutoSave');
     btn.className = 'btn-toggle' + (autoSaveEnabled ? ' on' : '');
-    btn.textContent = '💾 Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
+    btn.textContent = '💾 Auto-Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
 async function trainAIBrainAsync(task) {
@@ -230,7 +247,7 @@ async function trainAIBrainAsync(task) {
         try {
             let img = new Image();
             img.src = imgSrc;
-            await new Promise(res => { img.onload = res; img.onerror = res; setTimeout(res, 250); });
+            await new Promise(res => { img.onload = res; img.onerror = res; setTimeout(res, 200); });
             if (!img.complete || img.naturalWidth === 0) continue;
             
             tf.tidy(() => {
@@ -246,6 +263,7 @@ async function trainAIBrainAsync(task) {
             await tf.nextFrame();
         } catch(e) {}
     }
+    updateAIStatus();
     scheduleBrainSave();
 }
 
@@ -262,7 +280,7 @@ async function predictWithAI(task) {
         try {
             let img = new Image();
             img.src = imgSrc;
-            await new Promise(res => { img.onload = res; img.onerror = res; setTimeout(res, 250); });
+            await new Promise(res => { img.onload = res; img.onerror = res; setTimeout(res, 200); });
             if (!img.complete || img.naturalWidth === 0) continue;
             
             let res = null;
@@ -275,7 +293,8 @@ async function predictWithAI(task) {
             let conf = resolvedRes.confidences[pText] || 0;
             let negConf = resolvedRes.confidences['neg_' + pText] || 0;
             
-            if (resolvedRes.label === pText && conf >= 0.70 && negConf < 0.25) {
+            // Ultra-Strict threshold: Positive >= 75%, Negative <= 20%
+            if (resolvedRes.label === pText && conf >= 0.75 && negConf <= 0.20) {
                 predictedClicks.push(m.index);
             }
             await tf.nextFrame();
@@ -291,23 +310,37 @@ async function predictWithAI(task) {
                 let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
                 if (imgEl) imgEl.classList.add('ai-pick');
             });
+            // Auto-Save tabhi chalega jab operator ne explicitly turn on kiya ho
             if (autoSaveEnabled) {
                 let btn = card.querySelector('.btn-save');
-                if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Solved'; }
+                if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Instant Solved'; }
                 sendToServer(task.id, btn, card);
             }
         }
     }
 }
 
+async function reEvaluatePending() {
+    if (isEvaluatingAI) return;
+    isEvaluatingAI = true;
+    for (let id in activeTasksStore) {
+        let t = activeTasksStore[id];
+        if (t && t.type === 'grid' && (!t.clicks || !t.clicks.length) && !t._isTrained) {
+            await predictWithAI(t);
+        }
+    }
+    isEvaluatingAI = false;
+}
+
+// WebSocket Fast-Lane Connection
 let ws = null;
 function wsConn() {
     if (ws && ws.readyState < 2) return;
     try { ws = new WebSocket(WS_URL); } catch(e) { setTimeout(wsConn, 1500); return; }
     
     ws.onopen = () => {
-        syncStatus.className = 'sync-status active';
-        syncStatus.innerHTML = '🟢 Live';
+        wsStatus.className = 'sync-status active';
+        wsStatus.innerHTML = '🟢 Live';
         ws.send(JSON.stringify({ action: 'dashboard' }));
     };
     
@@ -334,8 +367,8 @@ function wsConn() {
     };
     
     ws.onclose = () => {
-        syncStatus.className = 'sync-status';
-        syncStatus.innerHTML = '🔴 Offline';
+        wsStatus.className = 'sync-status';
+        wsStatus.innerHTML = '🔴 Offline';
         setTimeout(wsConn, 1500);
     };
 }
@@ -472,7 +505,6 @@ function animateZeroBlinkVideos(timestamp) {
 }
 requestAnimationFrame(animateZeroBlinkVideos);
 
-// Full Retrain & Normalizing Click Delegation
 document.body.addEventListener('click', (e) => {
     let actionBtn = e.target.closest('[data-action]');
     let card = e.target.closest('.task-card');
@@ -486,24 +518,35 @@ document.body.addEventListener('click', (e) => {
     if (actionBtn) {
         let act = actionBtn.dataset.action;
         
-        if (act === 'save') sendToServer(tid, actionBtn, card);
+        if (act === 'save') {
+            if (!t.clicks || !t.clicks.length) {
+                actionBtn.textContent = '⚠️ Pehle Select Karo!';
+                setTimeout(() => { actionBtn.textContent = 'Save & Train'; }, 800);
+                return;
+            }
+            sendToServer(tid, actionBtn, card);
+            return;
+        }
         
         if (act === 'reset') {
             t.clicks = [];
             card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick'));
             card.querySelectorAll('.dot').forEach(d => d.remove());
             card.classList.remove('ai-processing');
+            return;
         }
         
         if (act === 'del') {
             ghostBlocker.add(tid); card.remove(); delete activeTasksStore[tid];
             videoControllers.delete(tid); updateStreamCounts();
             fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' });
+            return;
         }
         
         if (act === 'del-trained') {
             fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).then(() => fetchTrained());
             card.remove(); delete activeTasksStore[tid];
+            return;
         }
 
         if (act === 'retrain') {
@@ -600,8 +643,16 @@ document.body.addEventListener('click', (e) => {
     }
 });
 
+// Fast-Lane Instant Dispatch Engine
 function sendToServer(taskId, btnEl, card) {
     let t = activeTasksStore[taskId]; if (!t || !t.clicks.length) return;
+    
+    // Fast WebSocket Direct Push (Zero Delay)
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'submit', taskId, clicks: t.clicks }));
+    }
+
+    // HTTP Sync for Storage
     fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
