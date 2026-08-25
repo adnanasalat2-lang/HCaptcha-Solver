@@ -145,6 +145,15 @@ let isAIReady = false, aiModel, knn;
 let autoTrainEnabled = true, autoSaveEnabled = true;
 let isEvaluatingAI = false;
 
+// ── Anti-Throttle Background Web Worker ──
+const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 1000);`], { type: 'text/javascript' });
+const bgWorker = new Worker(URL.createObjectURL(timerBlob));
+bgWorker.onmessage = () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'ping' }));
+    }
+};
+
 // ── WEBSOCKET LIVE ENGINE ──
 let ws = null;
 function initWS() {
