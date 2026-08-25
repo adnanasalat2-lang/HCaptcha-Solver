@@ -20,7 +20,7 @@
         .tab-btn.active { background: #00ff88; color: #000; border-color: #00ff88; }
         .count-badge { background: #000; color: #fff; padding: 1px 6px; border-radius: 8px; font-size: 11px; margin-left: 4px; }
 
-        .ai-bar { display: flex; align-items: center; gap: 8px; }
+        .ai-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
         .live-status { font-size: 11px; font-weight: bold; padding: 4px 8px; border-radius: 4px; background: #1a1a1a; border: 1px solid #ff4444; color: #ff4444; }
         .live-status.active { border-color: #00ff88; color: #00ff88; }
         .sync-status { font-size: 12px; color: #ffaa00; font-weight: bold; }
@@ -58,8 +58,9 @@
         .img-grid img.ai-pick { border-color: #ff00ff; opacity: 0.9; }
         .img-grid img.retrain-pick { border-color: #ff8800 !important; opacity: 0.95; }
         
-        .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; align-items: center; background: #000; border-radius: 4px; border: 1px solid #444; overflow: hidden; }
-        .single-box img { width: 100%; height: auto; min-height: 380px; max-height: 480px; object-fit: contain; display: block; user-select: none; }
+        .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; align-items: center; background: #111; border-radius: 4px; border: 1px solid #444; overflow: hidden; min-height: 280px; }
+        .single-box img { width: 100%; height: auto; min-height: 280px; max-height: 480px; object-fit: contain; display: block; user-select: none; }
+        .single-box .no-media { color: #555; font-size: 13px; text-align: center; padding: 20px; }
         .dot { position: absolute; width: 16px; height: 16px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 10; }
         .dot.retrain-dot { background: #ff8800; }
 
@@ -76,6 +77,10 @@
         #trainedView { display: none; flex: 1; flex-direction: column; background: #141414; border: 1px solid #262626; border-radius: 6px; overflow: hidden; margin-top: 10px; }
         .trained-container { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-wrap: wrap; gap: 12px; }
         .retrain-banner { font-size: 11px; color: #ff8800; margin-bottom: 6px; padding: 5px; background: #331c00; border-radius: 3px; border: 1px dashed #ff8800; font-weight: bold; text-align: center; }
+        
+        /* AI loading spinner */
+        .ai-loading { display: inline-block; width: 10px; height: 10px; border: 2px solid #333; border-top-color: #00ff88; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 4px; vertical-align: middle; }
+        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
@@ -90,7 +95,7 @@
     </div>
     <div class="ai-bar">
         <span class="live-status" id="wsStatus">🔴 Offline</span>
-        <span class="sync-status" id="syncStatus">🧠 AI Ready</span>
+        <span class="sync-status" id="syncStatus"><span class="ai-loading"></span>AI Loading...</span>
         <button id="btnAutoTrain" class="btn-toggle on" onclick="toggleAutoTrain()">🧠 Auto Train: ON</button>
         <button id="btnAutoSave" class="btn-toggle on" onclick="toggleAutoSave()">💾 Auto Save: ON</button>
         <button class="btn-clear-ai" onclick="resetAIBrain()">🧹 Reset Brain</button>
@@ -104,7 +109,7 @@
     <div class="column">
         <div class="column-header">
             <span class="col-title-ai">🤖 AI Fast-Train Stream (Grids)</span>
-            <span class="stream-count" id="c-grid">0 Tasks</span>
+            <span class="stream-count" id="c-grid">0 Grids</span>
         </div>
         <div class="task-list" id="gridArea"></div>
     </div>
@@ -134,6 +139,9 @@ const trainedArea = document.getElementById('trainedArea');
 const syncStatus = document.getElementById('syncStatus');
 const wsStatus = document.getElementById('wsStatus');
 
+// Blank SVG placeholder for broken images
+const BLANK_IMG = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='100' height='100'%3E%3Crect fill='%23222' width='100' height='100'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' fill='%23555' font-size='20'%3E%E2%9D%8C%3C/text%3E%3C/svg%3E";
+
 let currentTab = 'pending';
 let serverData = { pending: {}, trained: {} }, activeTasksStore = {}, videoTasks = [];
 let ghostBlocker = new Set();
@@ -141,11 +149,27 @@ let retrainEditingTasks = new Set();
 let isFetching = false;
 let trainedPage = 0;
 
-let isAIReady = false, aiModel, knn;
+// ── AI STATE ──
+let isAIReady = false, aiInitFailed = false, aiModel, knn;
 let autoTrainEnabled = true, autoSaveEnabled = true;
 let isEvaluatingAI = false;
+let aiRetryCount = 0;
 
-// ── WEBSOCKET LIVE ENGINE ──
+// ── SAFE IMAGE LOADER ──
+// Har image ke liye max 5 sec wait, CORS safe
+function loadImageSafe(src) {
+    return new Promise((resolve) => {
+        if (!src || src.trim() === '') return resolve(null);
+        let img = new Image();
+        img.crossOrigin = "anonymous";
+        let timer = setTimeout(() => { img.src = ''; resolve(null); }, 5000);
+        img.onload = () => { clearTimeout(timer); resolve(img.naturalWidth > 0 ? img : null); };
+        img.onerror = () => { clearTimeout(timer); resolve(null); };
+        img.src = src;
+    });
+}
+
+// ── WEBSOCKET ──
 let ws = null;
 function initWS() {
     if (ws && ws.readyState < 2) return;
@@ -196,6 +220,7 @@ function initWS() {
             wsStatus.innerText = '🔴 Offline';
             setTimeout(initWS, 1500);
         };
+        ws.onerror = () => { ws.close(); };
     } catch(e) {
         setTimeout(initWS, 1500);
     }
@@ -206,31 +231,63 @@ function updateCountsDisplay() {
     document.getElementById('c-manual').innerText = `${manualArea.children.length} Tasks`;
 }
 
+// ── AI ENGINE ──
 async function initAI() {
-    try {
-        // WebGL try karo, fail hone pe cpu pe fallback
-        try {
-            await tf.setBackend('webgl');
-            await tf.ready();
-        } catch(e) {
-            await tf.setBackend('cpu');
-            await tf.ready();
-        }
-        // 15 second timeout lagao model loading pe
-        aiModel = await Promise.race([
-            mobilenet.load({ version: 2, alpha: 0.50 }), // alpha 1.0 se 0.50 - halka model
-            new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000))
-        ]);
-        knn = knnClassifier.create();
-        await loadKNN();
-        isAIReady = true;
-        updateAIStatus();
-        reEvaluatePending();
-    } catch(e) {
-        syncStatus.innerHTML = "⚠️ AI Unavailable";
-        isAIReady = false;
-        console.warn('AI init failed:', e);
+    if (aiInitFailed && aiRetryCount >= 3) {
+        syncStatus.innerHTML = "❌ AI Unavailable";
+        return;
     }
+    syncStatus.innerHTML = `<span class="ai-loading"></span>AI Loading... (${aiRetryCount > 0 ? 'Retry ' + aiRetryCount : 'Please wait'})`;
+
+    // Backend selection: webgl → cpu fallback
+    let backendOk = false;
+    for (let backend of ['webgl', 'cpu']) {
+        try {
+            await tf.setBackend(backend);
+            await Promise.race([tf.ready(), new Promise((_, r) => setTimeout(() => r(new Error('tf.ready timeout')), 8000))]);
+            backendOk = true;
+            console.log('TF backend:', backend);
+            break;
+        } catch(e) {
+            console.warn('Backend failed:', backend, e.message);
+        }
+    }
+    if (!backendOk) {
+        aiInitFailed = true;
+        aiRetryCount++;
+        syncStatus.innerHTML = "⚠️ AI Backend Fail — Retry ho ga";
+        setTimeout(initAI, 15000);
+        return;
+    }
+
+    // MobileNet load with timeout
+    try {
+        aiModel = await Promise.race([
+            mobilenet.load({ version: 2, alpha: 0.50 }), // halka model
+            new Promise((_, r) => setTimeout(() => r(new Error('model timeout')), 20000))
+        ]);
+    } catch(e) {
+        console.warn('MobileNet load failed:', e.message);
+        aiInitFailed = true;
+        aiRetryCount++;
+        syncStatus.innerHTML = "⚠️ Model Load Fail — Retry ho ga";
+        setTimeout(initAI, 20000);
+        return;
+    }
+
+    knn = knnClassifier.create();
+    await loadKNN();
+    isAIReady = true;
+    aiInitFailed = false;
+    aiRetryCount = 0;
+    updateAIStatus();
+
+    // Auto Train button ko ON dikhao (visual sync)
+    let btn = document.getElementById('btnAutoTrain');
+    btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
+    btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
+
+    if (autoTrainEnabled) reEvaluatePending();
 }
 
 function updateAIStatus() {
@@ -243,6 +300,7 @@ function updateAIStatus() {
     } catch(e) {}
 }
 
+// ── INDEXEDDB ──
 const IDB = { name:'hcm_knn_master', store:'knn', key:'model_v6' };
 function idbOpen() {
     return new Promise((res,rej)=>{
@@ -277,7 +335,7 @@ async function saveKNN() {
         for (let k in ds) { ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape }; }
         await idbSet(ser);
         updateAIStatus();
-    } catch(e) {}
+    } catch(e) { console.warn('saveKNN error:', e); }
 }
 async function loadKNN() {
     try {
@@ -286,22 +344,114 @@ async function loadKNN() {
         let ds = {};
         for (let k in ser) { ds[k] = tf.tensor(ser[k].data, ser[k].shape); }
         knn.setClassifierDataset(ds);
-    } catch(e) {}
+    } catch(e) { console.warn('loadKNN error:', e); }
 }
 
 async function resetAIBrain() {
     if (confirm("Kya aap AI Brain ki sari memory reset karna chahte hain?")) {
-        indexedDB.deleteDatabase(IDB.name);
+        try { indexedDB.deleteDatabase(IDB.name); } catch(e) {}
         if (knn) knn.clearAllClasses();
         location.reload();
     }
 }
 
+// ── AI TRAINING ──
+async function trainAIBrainAsync(task) {
+    if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
+    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
+    let negLabel = 'negative_' + pText;
+
+    for (let m of task.media) {
+        let imgSrc = m.thumb || m.src;
+        if (!imgSrc) continue;
+        try {
+            let img = await loadImageSafe(imgSrc);
+            if (!img) continue;
+            tf.tidy(() => {
+                let tfImg = tf.browser.fromPixels(img);
+                let features = aiModel.infer(tfImg, true);
+                if (task.clicks.includes(m.index)) {
+                    knn.addExample(features, pText);
+                    knn.addExample(features, pText);
+                    knn.addExample(features, pText);
+                } else {
+                    knn.addExample(features, negLabel);
+                }
+            });
+            await tf.nextFrame();
+        } catch(e) { console.warn('trainAI error:', e); }
+    }
+    await saveKNN();
+    reEvaluatePending();
+}
+
+async function predictWithAI(task) {
+    if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
+    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
+    let dataset = knn.getClassExampleCount();
+    if (!dataset[pText] || dataset[pText] < 1) return;
+
+    let predictedClicks = [];
+    for (let m of task.media) {
+        let imgSrc = m.thumb || m.src;
+        if (!imgSrc) continue;
+        try {
+            let img = await loadImageSafe(imgSrc);
+            if (!img) continue;
+            let res = null;
+            tf.tidy(() => {
+                let tfImg = tf.browser.fromPixels(img);
+                let features = aiModel.infer(tfImg, true);
+                res = knn.predictClass(features);
+            });
+            let resolvedRes = await res;
+            let conf = resolvedRes.confidences[pText] || 0;
+            let negConf = resolvedRes.confidences['negative_' + pText] || 0;
+            if (resolvedRes.label === pText && conf >= 0.80 && negConf < 0.30) {
+                predictedClicks.push(m.index);
+            }
+            await tf.nextFrame();
+        } catch(e) { console.warn('predictAI error:', e); }
+    }
+
+    if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
+        task.clicks = predictedClicks;
+        let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
+        if (card) {
+            card.classList.add('ai-processing');
+            predictedClicks.forEach(idx => {
+                let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
+                if (imgEl) { imgEl.classList.add('ai-pick'); }
+            });
+            if (autoSaveEnabled) {
+                let btn = card.querySelector('.btn-save');
+                if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Instant Solved'; }
+                sendToServer(task.id, btn, card);
+            }
+        }
+    }
+}
+
+async function reEvaluatePending() {
+    if (isEvaluatingAI || !isAIReady) return;
+    isEvaluatingAI = true;
+    for (let id in serverData.pending) {
+        let t = activeTasksStore[id];
+        if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
+            await Promise.race([
+                predictWithAI(t),
+                new Promise(res => setTimeout(res, 10000))
+            ]);
+        }
+    }
+    isEvaluatingAI = false;
+}
+
+// ── TABS ──
 function setTab(tab) {
     currentTab = tab;
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.getElementById('btn-' + tab).classList.add('active');
-    
     if (tab === 'pending') {
         document.getElementById('pendingView').style.display = 'flex';
         document.getElementById('trainedView').style.display = 'none';
@@ -328,115 +478,7 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
-async function loadImageSafe(src) {
-    return new Promise((resolve) => {
-        let img = new Image();
-        // CORS fix: proxy URL use karo agar hcaptcha URL ho
-        if (!src.startsWith('data:')) {
-            img.crossOrigin = "anonymous";
-        }
-        let timer = setTimeout(() => resolve(null), 4000); // 4 sec max wait
-        img.onload = () => { clearTimeout(timer); resolve(img); };
-        img.onerror = () => { clearTimeout(timer); resolve(null); };
-        img.src = src;
-    });
-}
-
-async function trainAIBrainAsync(task) {
-    if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
-    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
-    let negLabel = 'negative_' + pText;
-
-    for (let m of task.media) {
-        let imgSrc = m.thumb || m.src;
-        if (!imgSrc) continue;
-        try {
-            let img = await loadImageSafe(imgSrc);
-            if (!img || img.naturalWidth === 0) continue;
-            
-            tf.tidy(() => {
-                let tfImg = tf.browser.fromPixels(img);
-                let features = aiModel.infer(tfImg, true);
-                if (task.clicks.includes(m.index)) {
-                    knn.addExample(features, pText);
-                    knn.addExample(features, pText);
-                    knn.addExample(features, pText);
-                } else {
-                    knn.addExample(features, negLabel);
-                }
-            });
-            await tf.nextFrame();
-        } catch(e) { console.warn('Train error:', e); }
-    }
-    await saveKNN();
-    reEvaluatePending();
-}
-
-async function predictWithAI(task) {
-    if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
-    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
-    let dataset = knn.getClassExampleCount();
-    if (!dataset[pText] || dataset[pText] < 1) return;
-
-    let predictedClicks = [];
-    for (let m of task.media) {
-        let imgSrc = m.thumb || m.src;
-        if (!imgSrc) continue;
-        try {
-            let img = await loadImageSafe(imgSrc);
-            if (!img || img.naturalWidth === 0) continue;
-            
-            let res = null;
-            tf.tidy(() => {
-                let tfImg = tf.browser.fromPixels(img);
-                let features = aiModel.infer(tfImg, true);
-                res = knn.predictClass(features);
-            });
-            let resolvedRes = await res;
-            let conf = resolvedRes.confidences[pText] || 0;
-            let negConf = resolvedRes.confidences['negative_' + pText] || 0;
-            
-            if (resolvedRes.label === pText && conf >= 0.80 && negConf < 0.30) {
-                predictedClicks.push(m.index);
-            }
-            await tf.nextFrame();
-        } catch(e) { console.warn('Predict error:', e); }
-    }
-
-    if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
-        task.clicks = predictedClicks;
-        let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
-        if (card) {
-            card.classList.add('ai-processing');
-            predictedClicks.forEach(idx => {
-                let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
-                if (imgEl) { imgEl.classList.add('ai-pick'); }
-            });
-            if (autoSaveEnabled) {
-                let btn = card.querySelector('.btn-save');
-                if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Instant Solved'; }
-                sendToServer(task.id, btn, card);
-            }
-        }
-    }
-}
-
-async function reEvaluatePending() {
-    if (isEvaluatingAI) return;
-    isEvaluatingAI = true;
-    for (let id in serverData.pending) {
-        let t = activeTasksStore[id];
-        if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
-            // har task ke liye max 10 sec timeout - ek task poora AI block na kare
-            await Promise.race([
-                predictWithAI(t),
-                new Promise(res => setTimeout(res, 10000))
-            ]);
-        }
-    }
-    isEvaluatingAI = false;
-}
-
+// ── FETCH ──
 async function fetchTasks() {
     if (isFetching) return;
     isFetching = true;
@@ -459,7 +501,6 @@ async function fetchTasks() {
 
 function renderPendingStreams() {
     let pending = serverData.pending;
-
     document.querySelectorAll('#pendingView .task-card').forEach(card => {
         let id = card.dataset.id;
         if (!pending[id] || ghostBlocker.has(id)) {
@@ -467,14 +508,11 @@ function renderPendingStreams() {
             delete activeTasksStore[id];
         }
     });
-
     for (let id of Object.keys(pending)) {
         if (ghostBlocker.has(id) || activeTasksStore[id]) continue;
         let td = pending[id], media = td.media || [], isGrid = media.length > 1;
-
         activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
         let card = buildCard(activeTasksStore[id]);
-
         if (isGrid) {
             gridArea.prepend(card);
             if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[id]);
@@ -488,13 +526,11 @@ function renderPendingStreams() {
 function renderTrainedStream() {
     let frag = document.createDocumentFragment();
     let existingIds = new Set();
-    
     document.querySelectorAll('#trainedView .task-card').forEach(card => {
         let id = card.dataset.id;
         if (!serverData.trained[id]) card.remove();
         else existingIds.add(id);
     });
-
     for (let id of Object.keys(serverData.trained)) {
         if (existingIds.has(id) || retrainEditingTasks.has(id)) continue;
         let td = serverData.trained[id];
@@ -505,6 +541,7 @@ function renderTrainedStream() {
     trainedArea.appendChild(frag);
 }
 
+// ── CARD BUILDER ──
 function buildCard(t, isTrained = false) {
     let card = document.createElement('div');
     card.className = 'task-card';
@@ -512,27 +549,60 @@ function buildCard(t, isTrained = false) {
     card.style.minWidth = isTrained ? '320px' : 'auto';
 
     let parts = t.prompt.split('|||');
-    let exHtml = parts[1] ? `<img src="${parts[1]}" class="example-img">` : `<div class="example-img-placeholder">🖼️</div>`;
+    let exHtml = parts[1]
+        ? `<img src="${parts[1]}" class="example-img" onerror="this.style.display='none'">`
+        : `<div class="example-img-placeholder">🖼️</div>`;
     let mediaHTML = '';
 
     if (t.type === 'grid') {
         mediaHTML = '<div class="img-grid">';
         t.media.forEach(m => {
             let isSelected = t.clicks.includes(m.index);
-            let src = m.thumb || m.src || '';
-            // onerror pe grey placeholder dikhao, CORS fail pe bhi
-            mediaHTML += `<img src="${src}" class="g-img ${isSelected?'selected':''}" data-index="${m.index}" draggable="false" loading="lazy" onerror="this.onerror=null;this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22100%22 height=%22100%22%3E%3Crect fill=%22%23333%22 width=%22100%22 height=%22100%22/%3E%3Ctext x=%2250%25%22 y=%2250%25%22 dominant-baseline=%22middle%22 text-anchor=%22middle%22 fill=%22%23888%22 font-size=%2212%22%3E❌%3C/text%3E%3C/svg%3E'"/>`;
+            let src = m.thumb || m.src || BLANK_IMG;
+            mediaHTML += `<img src="${src}" class="g-img ${isSelected?'selected':''}" data-index="${m.index}" draggable="false" loading="lazy" onerror="this.onerror=null;this.src='${BLANK_IMG}'"/>`;
         });
         mediaHTML += '</div>';
     } else {
-        let m = t.media[0], isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
-        let src = isVid ? m.frames[0] : (m.src || '');
-        mediaHTML = `<div class="single-box"><img src="${src}" class="s-img ${isVid?'vid-player':''}" data-id="${t.id}" draggable="false" onerror="this.onerror=null;this.style.minHeight='200px';this.style.background='#1a1a1a'"/>`;
-        t.clicks.forEach(pt => {
-            mediaHTML += `<div class="dot" style="left:${pt.px}%;top:${pt.py}%;"></div>`;
+        // ── COORD / VIDEO task — robust src detection ──
+        let m = t.media[0] || {};
+
+        // Video frames support — check multiple possible field names
+        let frames = m.frames || m.video_frames || null;
+        let isVid = Array.isArray(frames) && frames.length > 0;
+
+        // Image src — check multiple possible field names
+        let src = '';
+        if (isVid) {
+            src = frames[0];
+        } else {
+            src = m.src || m.url || m.image || m.thumb || '';
+        }
+
+        if (src) {
+            mediaHTML = `<div class="single-box">
+                <img src="${src}"
+                     class="s-img ${isVid ? 'vid-player' : ''}"
+                     data-id="${t.id}"
+                     draggable="false"
+                     onerror="this.onerror=null;this.src='${BLANK_IMG}';this.style.minHeight='200px'"/>`;
+        } else {
+            // Koi bhi src nahi mili — placeholder dikhao
+            mediaHTML = `<div class="single-box"><div class="no-media">⚠️ Media URL nahi mili<br><small style="color:#444">${JSON.stringify(Object.keys(m))}</small></div>`;
+        }
+
+        // Dots for saved clicks
+        (t.clicks || []).forEach(pt => {
+            if (pt && typeof pt.px !== 'undefined') {
+                mediaHTML += `<div class="dot" style="left:${pt.px}%;top:${pt.py}%;"></div>`;
+            }
         });
         mediaHTML += '</div>';
-        if (isVid && !isTrained) videoTasks.push({ id: t.id, frames: m.frames, current: 0 });
+
+        // Register video animator
+        if (isVid && !isTrained) {
+            videoTasks = videoTasks.filter(v => v.id !== t.id); // dedupe
+            videoTasks.push({ id: t.id, frames: frames, current: 0 });
+        }
     }
 
     let actions = !isTrained ? `
@@ -557,6 +627,7 @@ function buildCard(t, isTrained = false) {
     return card;
 }
 
+// ── EVENT DELEGATION ──
 document.body.addEventListener('click', (e) => {
     let actionBtn = e.target.closest('[data-action]');
     let card = e.target.closest('.task-card');
@@ -569,7 +640,7 @@ document.body.addEventListener('click', (e) => {
 
     if (actionBtn) {
         let act = actionBtn.dataset.action;
-        
+
         if (act === 'retrain') {
             retrainEditingTasks.add(tid);
             card.classList.add('in-retrain');
@@ -577,7 +648,6 @@ document.body.addEventListener('click', (e) => {
             banner.className = 'retrain-banner'; banner.id = `banner-${tid}`;
             banner.textContent = '🟠 RETRAIN MODE: Click images to modify, then Update';
             card.querySelector('.prompt-container').after(banner);
-
             let actBox = card.querySelector(`#act-${tid}`);
             actBox.innerHTML = `
                 <button class="btn btn-confirm" data-action="confirm-retrain">✅ Update & Train</button>
@@ -679,20 +749,16 @@ document.body.addEventListener('click', (e) => {
         let nw = img.naturalWidth || 400, nh = img.naturalHeight || 300;
         let containerRatio = rect.width / rect.height, imageRatio = nw / nh;
         let actualW = rect.width, actualH = rect.height, offsetX = 0, offsetY = 0;
-
         if (containerRatio > imageRatio) {
             actualW = rect.height * imageRatio; offsetX = (rect.width - actualW) / 2;
         } else {
             actualH = rect.width / imageRatio; offsetY = (rect.height - actualH) / 2;
         }
-
         let clickX = e.clientX - rect.left - offsetX, clickY = e.clientY - rect.top - offsetY;
         if (clickX < 0 || clickX > actualW || clickY < 0 || clickY > actualH) return;
-
         let px = Math.max(0, Math.min(100, (clickX / actualW) * 100));
         let py = Math.max(0, Math.min(100, (clickY / actualH) * 100));
         t.clicks.push({ px, py });
-
         let dot = document.createElement('div');
         dot.className = 'dot' + (isInRetrain ? ' retrain-dot' : '');
         dot.style.left = `${((e.clientX - rect.left) / rect.width) * 100}%`;
@@ -711,18 +777,15 @@ function sendToServer(taskId, btnEl, card) {
         if (card) card.classList.remove('ai-processing');
         return;
     }
-
     fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taskId, clicks: t.clicks })
     }).catch(()=>{});
-
     ghostBlocker.add(taskId);
     if (card) card.remove();
     delete activeTasksStore[taskId];
     updateCountsDisplay();
-
     if (isAIReady && t.type === 'grid' && t.clicks.length > 0) {
         trainAIBrainAsync(t);
     }
@@ -735,6 +798,7 @@ function filterTasks() {
     });
 }
 
+// ── VIDEO ANIMATOR ──
 setInterval(() => {
     videoTasks.forEach(vt => {
         let el = document.querySelector(`.vid-player[data-id="${vt.id}"]`);
@@ -745,18 +809,11 @@ setInterval(() => {
     });
 }, 150);
 
+// ── INIT ──
 initWS();
 fetchTasks();
-setTimeout(initAI, 500); // thodi der baad shuru karo taake page pehle load ho
-
-// AI watchdog: agar 2 minute mein AI ready nahi hua to dobara try karo
-let aiWatchdog = setTimeout(() => {
-    if (!isAIReady) {
-        console.warn('AI watchdog: retrying init...');
-        syncStatus.innerHTML = "⏳ AI Retry...";
-        initAI();
-    }
-}, 120000);
+// AI thodi der baad shuru karo - page pehle load ho jaye
+setTimeout(initAI, 800);
 </script>
 </body>
 </html>
