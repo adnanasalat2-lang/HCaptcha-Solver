@@ -278,8 +278,8 @@ async function initAI() {
         await tf.setBackend('cpu');
         await tf.ready();
 
-        // alpha 0.25 — sabse halka, CPU pe fast, KNN ke liye kafi
-        aiModel = await mobilenet.load({ version: 2, alpha: 0.25 });
+        // version 1 alpha 0.25 — CPU pe sabse fast, valid combination
+        aiModel = await mobilenet.load({ version: 1, alpha: 0.25 });
         knn = knnClassifier.create();
         await loadServerBrain();
         isAIReady = true;
@@ -542,6 +542,15 @@ function buildCard(t, isTrained = false) {
     card.className = 'task-card';
     card.dataset.id = t.id;
     card.style.minWidth = isTrained ? '320px' : 'auto';
+    // Broken image retry — 1 baar reload
+    card.addEventListener('error', e => {
+        if (e.target.tagName === 'IMG' && !e.target.dataset.retried) {
+            e.target.dataset.retried = '1';
+            let s = e.target.src;
+            e.target.src = '';
+            setTimeout(() => { e.target.src = s; }, 500);
+        }
+    }, true);
 
     let parts = t.prompt.split('|||');
     let exHtml = parts[1] ? `<img src="${parts[1]}" class="example-img">` : `<div class="example-img-placeholder">🖼️</div>`;
