@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — Ultra-Fast AI Engine</title>
+    <title>hCaptcha Master Pro — Restored Active AI</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { background-color: #0c0c0c; color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; padding: 8px; gap: 8px; }
@@ -79,7 +79,7 @@
 
 <div class="header">
     <div class="header-left">
-        <h1>⚡ hCaptcha Master Pro (Live AI Brain)</h1>
+        <h1>⚡ hCaptcha Master Pro (Active AI)</h1>
         <div class="tabs">
             <button class="tab-btn active" id="btn-pending" onclick="setTab('pending')">Pending <span class="count-badge" id="c-pending">0</span></button>
             <button class="tab-btn" id="btn-trained" onclick="setTab('trained')">Trained <span class="count-badge" id="c-trained">0</span></button>
@@ -87,7 +87,7 @@
     </div>
     <div class="ai-bar">
         <span class="live-status" id="wsStatus">🔴 Offline</span>
-        <span class="sync-status" id="syncStatus">🧠 AI Ready (0 Concepts)</span>
+        <span class="sync-status active" id="syncStatus">🧠 AI Ready</span>
         <button id="btnAutoTrain" class="btn-toggle on" onclick="toggleAutoTrain()">🧠 Auto Train: ON</button>
         <button id="btnAutoSave" class="btn-toggle on" onclick="toggleAutoSave()">💾 Auto Save: ON</button>
         <button class="btn-clear-ai" onclick="resetAIBrain()">🧹 Reset Memory</button>
@@ -140,9 +140,8 @@ let isFetching = false;
 
 let autoTrainEnabled = true, autoSaveEnabled = true;
 
-// ── ROBUST MULTI-CONCEPT FEATURE BANK ──
-// Structure: { [pKey]: { pos: Set<dhash>, neg: Set<dhash> } }
-let aiConceptBank = {};
+// ── ROBUST CENTRAL CONCEPT BANK ──
+let aiConceptBank = {}; // { [pKey]: { pos: Set<dhash>, neg: Set<dhash> } }
 
 function getConceptKey(prompt) {
     return (prompt || '').split('|||')[0].toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -153,7 +152,7 @@ function hexToBin(h) {
     let s = "";
     for (let c of h) {
         let v = parseInt(c, 16);
-        if (isNaN(v)) return h; // already binary
+        if (isNaN(v)) return h;
         s += v.toString(2).padStart(4, '0');
     }
     return s;
@@ -169,11 +168,11 @@ function getHammingDistance(h1, h2) {
 
 function updateAIStatus() {
     let count = Object.keys(aiConceptBank).filter(k => aiConceptBank[k].pos && aiConceptBank[k].pos.size > 0).length;
-    syncStatus.className = 'sync-status' + (count > 0 ? ' active' : '');
+    syncStatus.className = 'sync-status active';
     syncStatus.innerText = `🧠 AI Ready (${count} Concepts)`;
 }
 
-// ── FAST AI PREDICTOR (Immune to CORS, zero lag) ──
+// ── DIRECT ZERO-LAG PREDICTOR ──
 function predictTaskAI(task) {
     if (!autoTrainEnabled || task.type !== 'grid' || !task.media) return null;
     let pKey = getConceptKey(task.prompt);
@@ -183,7 +182,7 @@ function predictTaskAI(task) {
     let matchedClicks = [];
 
     task.media.forEach((m, idx) => {
-        let h = m.dhash || "";
+        let h = m.dhash || m.stableHash || "";
         if (!h || h === "0000000000000000") return;
 
         let minPosDist = 999;
@@ -200,8 +199,8 @@ function predictTaskAI(task) {
             }
         }
 
-        // Positive Match: Distance <= 4 and closer to positive than negative
-        if (minPosDist <= 4 && minPosDist < minNegDist) {
+        // Positive Match Threshold
+        if (minPosDist <= 4 && minPosDist <= minNegDist) {
             matchedClicks.push(idx);
         }
     });
@@ -212,7 +211,7 @@ function predictTaskAI(task) {
     return null;
 }
 
-// ── INSTANT BATCH EVALUATOR ACROSS ALL CARDS ──
+// ── BATCH PREDICTOR ACROSS ALL CARDS ──
 function evaluateAllPendingTasksNow() {
     let pendingGrids = Object.values(activeTasksStore).filter(t => 
         t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0) && !ghostBlocker.has(t.id)
@@ -236,38 +235,31 @@ function evaluateAllPendingTasksNow() {
     });
 }
 
-// ── RAILWAY VOLUME PERSISTENCE ──
+// ── AUTO-RESTORE AI FROM 4000+ TRAINED ARCHIVE ──
 async function loadServerBrain() {
     try {
-        let r = await fetch(`${SERVER_URL}/api/ai-brain?t=${Date.now()}`);
-        if (!r.ok) return;
-        let data = await r.json();
-        if (data && typeof data === 'object') {
-            for (let k in data) {
-                aiConceptBank[k] = {
-                    pos: new Set(data[k].pos || []),
-                    neg: new Set(data[k].neg || [])
-                };
+        let r = await fetch(`${SERVER_URL}/api/tasks?tab=trained&page=0&size=500&t=${Date.now()}`);
+        if (r.ok) {
+            let resData = await r.json();
+            let trainedTasks = resData.tasks || {};
+            for (let id in trainedTasks) {
+                let t = trainedTasks[id];
+                if (t.media && t.clicks && t.clicks.length > 0) {
+                    let pKey = getConceptKey(t.prompt);
+                    if (!aiConceptBank[pKey]) aiConceptBank[pKey] = { pos: new Set(), neg: new Set() };
+                    t.media.forEach((m, idx) => {
+                        let h = m.dhash || m.stableHash;
+                        if (h && h !== "0000000000000000") {
+                            if (t.clicks.includes(idx)) aiConceptBank[pKey].pos.add(h);
+                            else aiConceptBank[pKey].neg.add(h);
+                        }
+                    });
+                }
             }
             updateAIStatus();
             evaluateAllPendingTasksNow();
         }
     } catch(e) {}
-}
-
-function saveServerBrain() {
-    let ser = {};
-    for (let k in aiConceptBank) {
-        ser[k] = {
-            pos: Array.from(aiConceptBank[k].pos || []),
-            neg: Array.from(aiConceptBank[k].neg || [])
-        };
-    }
-    fetch(`${SERVER_URL}/api/ai-brain`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(ser)
-    }).catch(()=>{});
 }
 
 let ws = null;
@@ -300,7 +292,6 @@ function initWS() {
                     let card = buildCard(taskObj);
                     if (isGrid) {
                         gridArea.prepend(card);
-                        // Instant Check: Sahi images pink highlight hongi
                         let clicks = predictTaskAI(taskObj);
                         if (clicks && clicks.length > 0) {
                             taskObj.clicks = clicks;
@@ -391,7 +382,7 @@ function trainConcept(task, wrongIndices = []) {
     if (!aiConceptBank[pKey]) aiConceptBank[pKey] = { pos: new Set(), neg: new Set() };
 
     task.media.forEach(m => {
-        let h = m.dhash;
+        let h = m.dhash || m.stableHash;
         if (!h || h === "0000000000000000") return;
 
         let isSelected = (task.clicks || []).includes(m.index);
@@ -409,9 +400,6 @@ function trainConcept(task, wrongIndices = []) {
     });
 
     updateAIStatus();
-    saveServerBrain();
-
-    // Instant Multi-Task Parallel Flush: Usi concept ke tamam baki pending tasks aik sath solve honge
     evaluateAllPendingTasksNow();
 }
 
@@ -502,7 +490,8 @@ function buildCard(t, isTrained = false) {
         mediaHTML = '<div class="img-grid">';
         t.media.forEach(m => {
             let isSelected = t.clicks.includes(m.index);
-            mediaHTML += `<img src="${m.thumb || m.src || ''}" class="g-img ${isSelected?'selected':''}" data-index="${m.index}" draggable="false"/>`;
+            let src = m.thumb || m.src || '';
+            mediaHTML += `<img src="${src}" class="g-img ${isSelected?'selected':''}" data-index="${m.index}" draggable="false" onerror="this.style.opacity=0.3"/>`;
         });
         mediaHTML += '</div>';
     } else {
@@ -718,7 +707,6 @@ function sendToServer(taskId, btnEl, card) {
     videoTasksMap.delete(taskId);
     updateCountsDisplay();
 
-    // 1 Click Instant Learning
     if (t.type === 'grid' && t.clicks.length > 0) {
         trainConcept(t);
     }
