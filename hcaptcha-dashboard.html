@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — Visual Batch Stream</title>
+    <title>hCaptcha Master Pro — Smooth Stable Stream</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -82,7 +82,7 @@
 
 <div class="header">
     <div class="header-left">
-        <h1>⚡ hCaptcha Master Pro (Visual Stream)</h1>
+        <h1>⚡ hCaptcha Master Pro (Smooth & Stable)</h1>
         <div class="tabs">
             <button class="tab-btn active" id="btn-pending" onclick="setTab('pending')">Pending <span class="count-badge" id="c-pending">0</span></button>
             <button class="tab-btn" id="btn-trained" onclick="setTab('trained')">Trained <span class="count-badge" id="c-trained">0</span></button>
@@ -143,18 +143,7 @@ let isFetching = false;
 
 let isAIReady = false, aiModel = null, knn = null;
 let autoTrainEnabled = true, autoSaveEnabled = true;
-let isEvaluatingBatch = false;
 let brainSyncTimer = null;
-
-// Background Timer Worker
-const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 250);`], { type: 'text/javascript' });
-const bgWorker = new Worker(URL.createObjectURL(timerBlob));
-bgWorker.onmessage = () => {
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'ping' }));
-    if (isAIReady && autoTrainEnabled && !isEvaluatingBatch) {
-        evaluateAllVisiblePendingCards();
-    }
-};
 
 let ws = null;
 function initWS() {
@@ -180,14 +169,16 @@ function initWS() {
 
                     serverData.pending[td.id] = td;
                     let isGrid = (td.media || []).length > 1;
-                    let taskObj = { id: td.id, clicks: [], type: isGrid ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '' };
+                    let taskObj = { id: td.id, clicks: [], type: isGrid ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '', _evaluated: false };
                     activeTasksStore[td.id] = taskObj;
 
-                    // Hamesha Card render hoga taake operator ke samne visual rahe
                     let card = buildCard(taskObj);
                     if (isGrid) {
                         gridArea.prepend(card);
-                        if (isAIReady && autoTrainEnabled) predictSingleCard(taskObj, card);
+                        // Instant Direct Predict (Zero Lag)
+                        if (isAIReady && autoTrainEnabled) {
+                            setTimeout(() => predictSingleCardDirect(taskObj, card), 40);
+                        }
                     } else {
                         manualArea.prepend(card);
                     }
@@ -267,7 +258,7 @@ async function initAI() {
         await loadServerBrain();
         isAIReady = true;
         updateAIStatus();
-        evaluateAllVisiblePendingCards();
+        reEvaluateAllUnpredicted();
     } catch(e) {
         syncStatus.innerHTML = "⚠️ AI Fallback";
     }
@@ -312,7 +303,7 @@ function toggleAutoTrain() {
     let btn = document.getElementById('btnAutoTrain');
     btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
     btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
-    if (autoTrainEnabled && isAIReady) evaluateAllVisiblePendingCards();
+    if (autoTrainEnabled && isAIReady) reEvaluateAllUnpredicted();
 }
 
 function toggleAutoSave() {
@@ -320,28 +311,27 @@ function toggleAutoSave() {
     let btn = document.getElementById('btnAutoSave');
     btn.className = 'btn-toggle' + (autoSaveEnabled ? ' on' : '');
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
-    if (autoSaveEnabled && isAIReady) evaluateAllVisiblePendingCards();
+    if (autoSaveEnabled && isAIReady) reEvaluateAllUnpredicted();
 }
 
 function getConceptKey(prompt) {
     return (prompt || '').split('|||')[0].toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-function safeInferElement(imgEl) {
-    try {
-        if (!imgEl || imgEl.naturalWidth < 10) return null;
-        return tf.tidy(() => {
-            let tensor = tf.browser.fromPixels(imgEl);
-            return aiModel.infer(tensor, true);
-        });
-    } catch(e) {
-        return null;
-    }
+// ── LEAK-FREE TENSOR INFERENCE (Strict Dispose) ──
+function inferImageElement(imgEl) {
+    if (!imgEl || imgEl.naturalWidth < 10) return null;
+    return tf.tidy(() => {
+        let tensor = tf.browser.fromPixels(imgEl);
+        return aiModel.infer(tensor, true);
+    });
 }
 
-// ── Single Card Predictor (Visual pink highlights & Auto-Save) ──
-async function predictSingleCard(task, card) {
-    if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
+// ── FAST SINGLE CARD PREDICTOR (Runs exactly ONCE per card) ──
+async function predictSingleCardDirect(task, card) {
+    if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media || task._evaluated) return;
+    task._evaluated = true;
+
     let pKey = getConceptKey(task.prompt);
     let dataset = knn.getClassExampleCount();
     if (!dataset[pKey] || dataset[pKey] < 1) return;
@@ -356,7 +346,7 @@ async function predictSingleCard(task, card) {
 
     for (let idx = 0; idx < imgElements.length; idx++) {
         let imgEl = imgElements[idx];
-        let features = safeInferElement(imgEl);
+        let features = inferImageElement(imgEl);
         if (features) {
             let res = knn.predictClass(features);
             features.dispose();
@@ -383,35 +373,25 @@ async function predictSingleCard(task, card) {
             if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Instant Solved'; }
             setTimeout(() => {
                 sendToServer(task.id, btn, card);
-            }, 300);
+            }, 250);
         }
     }
 }
 
-// ── Batch Parallel Predictor across All Visible Cards ──
-async function evaluateAllVisiblePendingCards() {
-    if (isEvaluatingBatch || !isAIReady || !autoTrainEnabled) return;
-    isEvaluatingBatch = true;
+// ── RE-EVALUATE WHEN NEW CONCEPT LEARNED ──
+async function reEvaluateAllUnpredicted() {
+    let pendingGrids = Object.values(activeTasksStore).filter(t => 
+        t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0) && !ghostBlocker.has(t.id)
+    );
 
-    try {
-        let dataset = knn.getClassExampleCount();
-        let pendingGrids = Object.values(activeTasksStore).filter(t => 
-            t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0) && !ghostBlocker.has(t.id)
-        );
-
-        for (let task of pendingGrids) {
-            let pKey = getConceptKey(task.prompt);
-            if (dataset[pKey] && dataset[pKey] > 0) {
-                let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
-                if (card) predictSingleCard(task, card);
-            }
-        }
-    } catch(e) {}
-
-    isEvaluatingBatch = false;
+    for (let task of pendingGrids) {
+        task._evaluated = false; // Reset to allow prediction with newly learned brain
+        let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
+        if (card) predictSingleCardDirect(task, card);
+    }
 }
 
-// ── Fast Learning on Manual Save / Retrain ──
+// ── FAST TRAINING ON SAVE / RETRAIN ──
 async function trainAIBrainAsync(task, wrongIndices = []) {
     if (!isAIReady || task.type !== 'grid' || !task.media) return;
     let pKey = getConceptKey(task.prompt);
@@ -420,7 +400,7 @@ async function trainAIBrainAsync(task, wrongIndices = []) {
 
     task.media.forEach(m => {
         let imgEl = card ? card.querySelector(`.g-img[data-index="${m.index}"]`) : null;
-        let features = safeInferElement(imgEl);
+        let features = inferImageElement(imgEl);
         if (features) {
             let isSelected = (task.clicks || []).includes(m.index);
             let wasWrong = wrongIndices.includes(m.index);
@@ -437,8 +417,8 @@ async function trainAIBrainAsync(task, wrongIndices = []) {
     });
 
     scheduleServerBrainSave();
-    // Re-evaluate and solve remaining pending cards of this concept immediately
-    setTimeout(evaluateAllVisiblePendingCards, 50);
+    // Instantly solve all other pending cards of this concept
+    setTimeout(reEvaluateAllUnpredicted, 60);
 }
 
 async function fetchTasks() {
@@ -476,12 +456,12 @@ function renderPendingStreams() {
         if (ghostBlocker.has(id) || activeTasksStore[id]) continue;
         let td = pending[id], media = td.media || [], isGrid = media.length > 1;
 
-        activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
+        activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '', _evaluated: false };
         let card = buildCard(activeTasksStore[id]);
 
         if (isGrid) {
             gridArea.prepend(card);
-            if (isAIReady && autoTrainEnabled) predictSingleCard(activeTasksStore[id], card);
+            if (isAIReady && autoTrainEnabled) setTimeout(() => predictSingleCardDirect(activeTasksStore[id], card), 40);
         } else {
             manualArea.prepend(card);
         }
