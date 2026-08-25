@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — Restored Active AI</title>
+    <title>hCaptcha Master Pro — Active AI Brain</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { background-color: #0c0c0c; color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; padding: 8px; gap: 8px; }
@@ -87,7 +87,7 @@
     </div>
     <div class="ai-bar">
         <span class="live-status" id="wsStatus">🔴 Offline</span>
-        <span class="sync-status active" id="syncStatus">🧠 AI Ready</span>
+        <span class="sync-status" id="syncStatus">🧠 Loading Brain...</span>
         <button id="btnAutoTrain" class="btn-toggle on" onclick="toggleAutoTrain()">🧠 Auto Train: ON</button>
         <button id="btnAutoSave" class="btn-toggle on" onclick="toggleAutoSave()">💾 Auto Save: ON</button>
         <button class="btn-clear-ai" onclick="resetAIBrain()">🧹 Reset Memory</button>
@@ -144,11 +144,14 @@ let autoTrainEnabled = true, autoSaveEnabled = true;
 let aiConceptBank = {}; // { [pKey]: { pos: Set<dhash>, neg: Set<dhash> } }
 
 function getConceptKey(prompt) {
-    return (prompt || '').split('|||')[0].toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+    let p = (prompt || '').split('|||')[0].toLowerCase();
+    // Keep clean alphanumeric text
+    return p.replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function hexToBin(h) {
     if (!h || h === "0000000000000000") return "";
+    if (/^[01]+$/.test(h)) return h; // already binary
     let s = "";
     for (let c of h) {
         let v = parseInt(c, 16);
@@ -169,10 +172,10 @@ function getHammingDistance(h1, h2) {
 function updateAIStatus() {
     let count = Object.keys(aiConceptBank).filter(k => aiConceptBank[k].pos && aiConceptBank[k].pos.size > 0).length;
     syncStatus.className = 'sync-status active';
-    syncStatus.innerText = `🧠 AI Ready (${count} Concepts)`;
+    syncStatus.innerText = `🧠 AI Active (${count} Concepts)`;
 }
 
-// ── DIRECT ZERO-LAG PREDICTOR ──
+// ── DIRECT PREDICTOR ──
 function predictTaskAI(task) {
     if (!autoTrainEnabled || task.type !== 'grid' || !task.media) return null;
     let pKey = getConceptKey(task.prompt);
@@ -199,7 +202,7 @@ function predictTaskAI(task) {
             }
         }
 
-        // Positive Match Threshold
+        // Positive Match: Distance <= 4 and closer to positive than negative
         if (minPosDist <= 4 && minPosDist <= minNegDist) {
             matchedClicks.push(idx);
         }
@@ -235,10 +238,11 @@ function evaluateAllPendingTasksNow() {
     });
 }
 
-// ── AUTO-RESTORE AI FROM 4000+ TRAINED ARCHIVE ──
+// ── AUTO-RESTORE FROM SERVER TRAINED ARCHIVE (Hydrates all 4000+ Tasks) ──
 async function loadServerBrain() {
     try {
-        let r = await fetch(`${SERVER_URL}/api/tasks?tab=trained&page=0&size=500&t=${Date.now()}`);
+        // Fetch full trained archive to build concept bank directly
+        let r = await fetch(`${SERVER_URL}/api/tasks?tab=trained&page=0&size=5000&t=${Date.now()}`);
         if (r.ok) {
             let resData = await r.json();
             let trainedTasks = resData.tasks || {};
@@ -292,6 +296,7 @@ function initWS() {
                     let card = buildCard(taskObj);
                     if (isGrid) {
                         gridArea.prepend(card);
+                        // Instant Prediction
                         let clicks = predictTaskAI(taskObj);
                         if (clicks && clicks.length > 0) {
                             taskObj.clicks = clicks;
@@ -367,7 +372,7 @@ function toggleAutoSave() {
 }
 
 async function resetAIBrain() {
-    if (confirm("Kya aap AI Brain memory reset karna chahte hain?")) {
+    if (confirm("Kya aap AI Memory reset karna chahte hain?")) {
         aiConceptBank = {};
         await fetch(`${SERVER_URL}/api/ai-brain`, { method: 'DELETE' });
         updateAIStatus();
