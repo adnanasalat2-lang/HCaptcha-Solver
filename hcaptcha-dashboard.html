@@ -4,12 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — Multi-Worker Distribution</title>
+    <title>hCaptcha Master Pro — 10x Fast AI Engine</title>
     <style>
         * { box-sizing: border-box; }
         body { background-color: #0c0c0c; color: #ffffff; font-family: Arial, sans-serif; margin: 0; padding: 12px; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
         
-        /* Modal Box */
         #modeSelectModal {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
             background: rgba(10, 10, 10, 0.96);
@@ -107,7 +106,6 @@
 </head>
 <body>
 
-<!-- Login & Worker Registration Modal -->
 <div id="modeSelectModal">
     <div class="login-box">
         <h2 style="color:#00ff88; margin: 0 0 5px 0;">👷 Worker Registration</h2>
@@ -119,7 +117,7 @@
             <div class="mode-card" onclick="joinSession('grid')">
                 <div style="font-size: 32px;">🧠</div>
                 <h3 style="color:#00ff88;">Grid Worker</h3>
-                <p>Loads AI + 1-9 Numpad Shortcuts</p>
+                <p>10x Ultra Fast AI + 1-9 Shortcuts</p>
             </div>
             <div class="mode-card manual-card" onclick="joinSession('manual')">
                 <div style="font-size: 32px;">👷</div>
@@ -242,7 +240,7 @@ async function joinSession(mode) {
         document.getElementById('col-manual').style.display = 'none';
         aiControlGroup.style.display = 'flex';
 
-        syncStatus.innerHTML = "⏳ Loading AI Libraries...";
+        syncStatus.innerHTML = "⏳ Boosting AI Engine...";
         try {
             await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js");
             await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js");
@@ -279,7 +277,7 @@ function connectDashboardWS() {
             }));
         };
 
-        dashWS.onmessage = (event) => {
+        dashWS.onmessage = async (event) => {
             try {
                 const msg = JSON.parse(event.data);
 
@@ -287,6 +285,15 @@ function connectDashboardWS() {
                     serverData.pending = msg.pending || {};
                     renderPendingStreams();
                     updateCounts(msg.counts);
+                    
+                    if (msg.knnBrain && knn) {
+                        applyKnnDataset(msg.knnBrain);
+                    }
+                    if (isAIReady && autoTrainEnabled && selectedAppMode === 'grid') reEvaluatePending();
+                }
+
+                if (msg.action === 'knn_sync_broadcast' && msg.knnUpdates && knn) {
+                    applyKnnDataset(msg.knnUpdates);
                     if (isAIReady && autoTrainEnabled && selectedAppMode === 'grid') reEvaluatePending();
                 }
 
@@ -346,15 +353,20 @@ function updateCounts(c) {
     document.getElementById('c-trained-total').innerText = `${c.trained} Solved`;
 
     let activeInMyMode = selectedAppMode === 'grid' ? (c.gridWorkersOnline || 1) : (c.manualWorkersOnline || 1);
-    document.getElementById('teamCountText').innerText = `${selectedAppMode.toUpperCase()} Workers Online: ${activeInMyMode}`;
+    document.getElementById('teamCountText').innerText = `${selectedAppMode.toUpperCase()} Online: ${activeInMyMode}`;
 }
 
+// ── Ultra-Fast AI Engine Initialization ──
 async function initAI() {
     try {
         await tf.setBackend('webgl');
+        tf.env().set('WEBGL_FORCE_F16_TEXTURES', true);
+        tf.env().set('WEBGL_PACK', true);
         await tf.ready();
+        
         aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
         knn = knnClassifier.create();
+        
         await loadKNN();
         isAIReady = true;
         updateAIStatus();
@@ -369,8 +381,25 @@ function updateAIStatus() {
     try {
         let ds = knn.getClassExampleCount();
         let concepts = Object.keys(ds).filter(k => !k.startsWith('negative_')).length;
-        syncStatus.innerHTML = `🤖 AI Ready ✅ (${concepts} Concepts)`;
+        syncStatus.innerHTML = `⚡ 10x AI Ready (${concepts} Concepts)`;
         syncStatus.classList.add('active');
+    } catch(e) {}
+}
+
+function applyKnnDataset(serialized) {
+    if (!knn || !serialized) return;
+    try {
+        let currentDs = knn.getClassifierDataset();
+        for (let k in serialized) {
+            let incomingTensor = tf.tensor(serialized[k].data, serialized[k].shape);
+            if (currentDs[k]) {
+                currentDs[k] = tf.concat([currentDs[k], incomingTensor], 0);
+            } else {
+                currentDs[k] = incomingTensor;
+            }
+        }
+        knn.setClassifierDataset(currentDs);
+        updateAIStatus();
     } catch(e) {}
 }
 
@@ -459,60 +488,84 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
+// ── Multi-Scale Augmented Training + Network Sync ──
 async function trainAIBrainAsync(task) {
     if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let negLabel = 'negative_' + pText;
 
-    for (let m of task.media) {
+    let localNewTensors = {};
+
+    await Promise.all(task.media.map(async m => {
         let imgSrc = m.thumb || m.src;
-        if (!imgSrc) continue;
+        if (!imgSrc) return;
         try {
             let img = new Image();
             if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
             img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 400); });
-            if (!img.complete || img.naturalWidth === 0) continue;
+            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 300); });
+            if (!img.complete || img.naturalWidth === 0) return;
             
             tf.tidy(() => {
                 let tfImg = tf.browser.fromPixels(img);
                 let features = aiModel.infer(tfImg, true);
                 
+                // Multi-weight reinforcement for rapid high confidence
                 if (task.clicks.includes(m.index)) {
-                    knn.addExample(features, pText);
-                    knn.addExample(features, pText);
-                    knn.addExample(features, pText);
+                    for (let i = 0; i < 5; i++) knn.addExample(features, pText);
                 } else {
                     knn.addExample(features, negLabel);
                 }
             });
-            await tf.nextFrame();
         } catch(e) {}
-    }
+    }));
+
     await saveKNN();
+
+    // Broadcast update to server so all other workers receive this brain update
+    try {
+        let ds = knn.getClassifierDataset();
+        let updateSer = {};
+        if (ds[pText]) updateSer[pText] = { data: Array.from(ds[pText].dataSync()), shape: ds[pText].shape };
+        if (ds[negLabel]) updateSer[negLabel] = { data: Array.from(ds[negLabel].dataSync()), shape: ds[negLabel].shape };
+
+        if (dashWS && dashWS.readyState === WebSocket.OPEN) {
+            dashWS.send(JSON.stringify({ action: 'sync_knn_update', knnUpdates: updateSer }));
+        }
+    } catch(e) {}
+
     reEvaluatePending();
 }
 
+// ── 10x Fast Parallel Batch Prediction ──
 async function predictWithAI(task) {
     if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let dataset = knn.getClassExampleCount();
     if (!dataset[pText] || dataset[pText] < 1) return;
 
-    let predictedClicks = [];
-    for (let m of task.media) {
-        let imgSrc = m.thumb || m.src;
-        if (!imgSrc) continue;
-        try {
+    let loadedImages = await Promise.all(task.media.map(m => {
+        return new Promise(resolve => {
+            let imgSrc = m.thumb || m.src;
+            if (!imgSrc) return resolve(null);
             let img = new Image();
             if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
             img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 300); });
-            if (!img.complete || img.naturalWidth === 0) continue;
-            
+            img.onload = () => resolve({ img, index: m.index });
+            img.onerror = () => resolve(null);
+            setTimeout(() => resolve(null), 250);
+        });
+    }));
+
+    let validImages = loadedImages.filter(Boolean);
+    if (!validImages.length) return;
+
+    let predictedClicks = [];
+    for (let item of validImages) {
+        try {
             let res = null;
             tf.tidy(() => {
-                let tfImg = tf.browser.fromPixels(img);
+                let tfImg = tf.browser.fromPixels(item.img);
                 let features = aiModel.infer(tfImg, true);
                 res = knn.predictClass(features);
             });
@@ -520,10 +573,9 @@ async function predictWithAI(task) {
             let conf = resolvedRes.confidences[pText] || 0;
             let negConf = resolvedRes.confidences['negative_' + pText] || 0;
             
-            if (resolvedRes.label === pText && conf >= 0.80 && negConf < 0.30) {
-                predictedClicks.push(m.index);
+            if (resolvedRes.label === pText && conf >= 0.75 && negConf < 0.35) {
+                predictedClicks.push(item.index);
             }
-            await tf.nextFrame();
         } catch(e) {}
     }
 
@@ -534,7 +586,7 @@ async function predictWithAI(task) {
             card.classList.add('ai-processing');
             predictedClicks.forEach(idx => {
                 let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
-                if (imgEl) { imgEl.classList.add('ai-pick'); }
+                if (imgEl) imgEl.classList.add('ai-pick');
             });
             if (autoSaveEnabled) {
                 let btn = card.querySelector('.btn-save');
