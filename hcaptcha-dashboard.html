@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — Smooth Stable Stream</title>
+    <title>hCaptcha Master Pro — Smooth Multi-Worker</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { background-color: #0c0c0c; color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; padding: 8px; gap: 8px; }
+        * { box-sizing: border-box; }
+        body { background-color: #0c0c0c; color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; padding: 8px; gap: 8px; margin: 0; }
         
         .header { background: #181818; padding: 8px 14px; border-bottom: 2px solid #00ff88; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-shrink: 0; border-radius: 4px; }
         .header-left { display: flex; align-items: center; gap: 12px; }
@@ -31,6 +31,7 @@
         .search-box input { padding: 4px 8px; background: #222; border: 1px solid #444; color: #00ff88; border-radius: 4px; font-size: 11px; outline: none; width: 110px; }
 
         .workspace-split { display: flex; gap: 8px; flex: 1; min-height: 0; }
+        
         .column { flex: 1; display: flex; flex-direction: column; background: #141414; border: 1px solid #262626; border-radius: 4px; overflow: hidden; }
         .column-header { padding: 6px 10px; background: #1c1c1c; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; font-weight: bold; font-size: 12px; }
         .col-title-ai { color: #00ff88; }
@@ -38,6 +39,7 @@
         .stream-count { background: #000; padding: 1px 6px; border-radius: 6px; font-size: 11px; color: #fff; }
         
         .task-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+        
         .task-card { background: #1c1c1c; border: 1px solid #333; border-radius: 4px; padding: 8px; contain: layout; }
         .task-card.ai-processing { border: 2px solid #ff00ff !important; box-shadow: 0 0 8px rgba(255,0,255,0.3); }
         .task-card.in-retrain { border: 2px solid #ff8800 !important; background: #221405 !important; }
@@ -51,7 +53,7 @@
         .task-prompt { color: #fff; font-size: 11px; font-weight: bold; line-height: 1.2; }
 
         .img-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; width: 100%; max-width: 480px; margin: 0 auto; }
-        .img-grid img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; cursor: pointer; border: 3px solid transparent; background: #222; border-radius: 3px; display: block; }
+        .img-grid img { width: 100%; height: 95px; object-fit: cover; cursor: pointer; border: 3px solid transparent; background: #222; border-radius: 3px; display: block; }
         .img-grid img.selected { border-color: #00ff88; opacity: 0.85; }
         .img-grid img.ai-pick { border-color: #ff00ff !important; opacity: 0.9; }
         .img-grid img.retrain-pick { border-color: #ff8800 !important; opacity: 0.95; }
@@ -82,7 +84,7 @@
 
 <div class="header">
     <div class="header-left">
-        <h1>⚡ hCaptcha Master Pro (Smooth & Stable)</h1>
+        <h1>⚡ hCaptcha Master Pro</h1>
         <div class="tabs">
             <button class="tab-btn active" id="btn-pending" onclick="setTab('pending')">Pending <span class="count-badge" id="c-pending">0</span></button>
             <button class="tab-btn" id="btn-trained" onclick="setTab('trained')">Trained <span class="count-badge" id="c-trained">0</span></button>
@@ -143,7 +145,20 @@ let isFetching = false;
 
 let isAIReady = false, aiModel = null, knn = null;
 let autoTrainEnabled = true, autoSaveEnabled = true;
+let isEvaluatingAI = false;
 let brainSyncTimer = null;
+
+// Background Timer Worker
+const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 600);`], { type: 'text/javascript' });
+const bgWorker = new Worker(URL.createObjectURL(timerBlob));
+bgWorker.onmessage = () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'ping' }));
+    }
+    if (isAIReady && autoTrainEnabled && !isEvaluatingAI) {
+        reEvaluatePendingParallel();
+    }
+};
 
 let ws = null;
 function initWS() {
@@ -165,24 +180,21 @@ function initWS() {
                 }
                 if (msg.type === 'new_task' && currentTab === 'pending') {
                     let td = msg.data;
-                    if (ghostBlocker.has(td.id) || activeTasksStore[td.id]) return;
+                    if (!ghostBlocker.has(td.id) && !activeTasksStore[td.id]) {
+                        serverData.pending[td.id] = td;
+                        let isGrid = (td.media || []).length > 1;
+                        let taskObj = { id: td.id, clicks: [], type: isGrid ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '' };
+                        activeTasksStore[td.id] = taskObj;
 
-                    serverData.pending[td.id] = td;
-                    let isGrid = (td.media || []).length > 1;
-                    let taskObj = { id: td.id, clicks: [], type: isGrid ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '', _evaluated: false };
-                    activeTasksStore[td.id] = taskObj;
-
-                    let card = buildCard(taskObj);
-                    if (isGrid) {
-                        gridArea.prepend(card);
-                        // Instant Direct Predict (Zero Lag)
-                        if (isAIReady && autoTrainEnabled) {
-                            setTimeout(() => predictSingleCardDirect(taskObj, card), 40);
+                        let card = buildCard(taskObj);
+                        if (isGrid) {
+                            gridArea.prepend(card);
+                            if (isAIReady && autoTrainEnabled) predictWithAI(taskObj);
+                        } else {
+                            manualArea.prepend(card);
                         }
-                    } else {
-                        manualArea.prepend(card);
+                        updateCountsDisplay();
                     }
-                    updateCountsDisplay();
                 }
                 if (msg.type === 'task_solved' || msg.type === 'task_deleted') {
                     let tid = msg.data.taskId;
@@ -258,7 +270,7 @@ async function initAI() {
         await loadServerBrain();
         isAIReady = true;
         updateAIStatus();
-        reEvaluateAllUnpredicted();
+        reEvaluatePendingParallel();
     } catch(e) {
         syncStatus.innerHTML = "⚠️ AI Fallback";
     }
@@ -275,7 +287,7 @@ function updateAIStatus() {
 }
 
 async function resetAIBrain() {
-    if (confirm("Kya aap AI memory reset karna chahte hain?")) {
+    if (confirm("Kya aap Railway volume par saved AI memory reset karna chahte hain?")) {
         await fetch(`${SERVER_URL}/api/ai-brain`, { method: 'DELETE' });
         if (knn) knn.clearAllClasses();
         location.reload();
@@ -303,7 +315,7 @@ function toggleAutoTrain() {
     let btn = document.getElementById('btnAutoTrain');
     btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
     btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
-    if (autoTrainEnabled && isAIReady) reEvaluateAllUnpredicted();
+    if (autoTrainEnabled && isAIReady) reEvaluatePendingParallel();
 }
 
 function toggleAutoSave() {
@@ -311,114 +323,113 @@ function toggleAutoSave() {
     let btn = document.getElementById('btnAutoSave');
     btn.className = 'btn-toggle' + (autoSaveEnabled ? ' on' : '');
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
-    if (autoSaveEnabled && isAIReady) reEvaluateAllUnpredicted();
 }
 
 function getConceptKey(prompt) {
-    return (prompt || '').split('|||')[0].toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+    return (prompt || '').split('|||')[0].trim().toLowerCase().replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ');
 }
 
-// ── LEAK-FREE TENSOR INFERENCE (Strict Dispose) ──
-function inferImageElement(imgEl) {
-    if (!imgEl || imgEl.naturalWidth < 10) return null;
-    return tf.tidy(() => {
-        let tensor = tf.browser.fromPixels(imgEl);
-        return aiModel.infer(tensor, true);
-    });
-}
-
-// ── FAST SINGLE CARD PREDICTOR (Runs exactly ONCE per card) ──
-async function predictSingleCardDirect(task, card) {
-    if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media || task._evaluated) return;
-    task._evaluated = true;
-
-    let pKey = getConceptKey(task.prompt);
-    let dataset = knn.getClassExampleCount();
-    if (!dataset[pKey] || dataset[pKey] < 1) return;
-
-    if (!card) card = document.querySelector(`.task-card[data-id="${task.id}"]`);
-    if (!card) return;
-
-    let imgElements = card.querySelectorAll('.g-img');
-    if (imgElements.length < 9) return;
-
-    let predictedClicks = [];
-
-    for (let idx = 0; idx < imgElements.length; idx++) {
-        let imgEl = imgElements[idx];
-        let features = inferImageElement(imgEl);
-        if (features) {
-            let res = knn.predictClass(features);
-            features.dispose();
-
-            let conf = res.confidences[pKey] || 0;
-            let negConf = res.confidences['neg_' + pKey] || 0;
-
-            if (res.label === pKey && conf >= 0.55 && negConf <= 0.45) {
-                predictedClicks.push(idx);
-            }
-        }
-    }
-
-    if (predictedClicks.length >= 1 && predictedClicks.length <= 6) {
-        task.clicks = predictedClicks;
-        card.classList.add('ai-processing');
-        predictedClicks.forEach(idx => {
-            let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
-            if (imgEl) imgEl.classList.add('ai-pick');
-        });
-
-        if (autoSaveEnabled) {
-            let btn = card.querySelector('.btn-save');
-            if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Instant Solved'; }
-            setTimeout(() => {
-                sendToServer(task.id, btn, card);
-            }, 250);
-        }
-    }
-}
-
-// ── RE-EVALUATE WHEN NEW CONCEPT LEARNED ──
-async function reEvaluateAllUnpredicted() {
-    let pendingGrids = Object.values(activeTasksStore).filter(t => 
-        t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0) && !ghostBlocker.has(t.id)
-    );
-
-    for (let task of pendingGrids) {
-        task._evaluated = false; // Reset to allow prediction with newly learned brain
-        let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
-        if (card) predictSingleCardDirect(task, card);
-    }
-}
-
-// ── FAST TRAINING ON SAVE / RETRAIN ──
 async function trainAIBrainAsync(task, wrongIndices = []) {
     if (!isAIReady || task.type !== 'grid' || !task.media) return;
     let pKey = getConceptKey(task.prompt);
     let negLabel = 'neg_' + pKey;
-    let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
 
-    task.media.forEach(m => {
-        let imgEl = card ? card.querySelector(`.g-img[data-index="${m.index}"]`) : null;
-        let features = inferImageElement(imgEl);
-        if (features) {
-            let isSelected = (task.clicks || []).includes(m.index);
-            let wasWrong = wrongIndices.includes(m.index);
+    for (let m of task.media) {
+        let imgSrc = m.thumb || m.src;
+        if (!imgSrc) continue;
+        try {
+            let img = new Image();
+            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
+            img.src = imgSrc;
+            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 250); });
+            if (!img.complete || img.naturalWidth === 0) continue;
+            
+            tf.tidy(() => {
+                let tfImg = tf.browser.fromPixels(img);
+                let features = aiModel.infer(tfImg, true);
+                
+                let isSelected = (task.clicks || []).includes(m.index);
+                let wasWrong = wrongIndices.includes(m.index);
 
-            if (isSelected) {
-                for (let i = 0; i < 5; i++) knn.addExample(features, pKey);
-            } else if (wasWrong) {
-                for (let i = 0; i < 8; i++) knn.addExample(features, negLabel);
-            } else {
-                knn.addExample(features, negLabel);
-            }
-            features.dispose();
-        }
-    });
-
+                if (isSelected) {
+                    for (let i = 0; i < 5; i++) knn.addExample(features, pKey);
+                } else if (wasWrong) {
+                    for (let i = 0; i < 8; i++) knn.addExample(features, negLabel);
+                } else {
+                    knn.addExample(features, negLabel);
+                }
+            });
+            await tf.nextFrame();
+        } catch(e) {}
+    }
     scheduleServerBrainSave();
-    // Instantly solve all other pending cards of this concept
-    setTimeout(reEvaluateAllUnpredicted, 60);
+    reEvaluatePendingParallel();
+}
+
+async function predictWithAI(task) {
+    if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media || (task.clicks && task.clicks.length > 0)) return;
+    let pKey = getConceptKey(task.prompt);
+    let dataset = knn.getClassExampleCount();
+    if (!dataset[pKey] || dataset[pKey] < 1) return;
+
+    let predictedClicks = [];
+    for (let m of task.media) {
+        let imgSrc = m.thumb || m.src;
+        if (!imgSrc) continue;
+        try {
+            let img = new Image();
+            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
+            img.src = imgSrc;
+            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 180); });
+            if (!img.complete || img.naturalWidth === 0) continue;
+            
+            let res = null;
+            tf.tidy(() => {
+                let tfImg = tf.browser.fromPixels(img);
+                let features = aiModel.infer(tfImg, true);
+                res = knn.predictClass(features);
+            });
+            let resolvedRes = await res;
+            let conf = resolvedRes.confidences[pKey] || 0;
+            let negConf = resolvedRes.confidences['neg_' + pKey] || 0;
+            
+            if (resolvedRes.label === pKey && conf >= 0.65 && negConf <= 0.35) {
+                predictedClicks.push(m.index);
+            }
+            await tf.nextFrame();
+        } catch(e) {}
+    }
+
+    if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
+        task.clicks = predictedClicks;
+        let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
+        if (card) {
+            card.classList.add('ai-processing');
+            predictedClicks.forEach(idx => {
+                let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
+                if (imgEl) { imgEl.classList.add('ai-pick'); }
+            });
+            if (autoSaveEnabled) {
+                let btn = card.querySelector('.btn-save');
+                if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Instant Solved'; }
+                sendToServer(task.id, btn, card);
+            }
+        }
+    }
+}
+
+async function reEvaluatePendingParallel() {
+    if (isEvaluatingAI || !isAIReady || !autoTrainEnabled) return;
+    isEvaluatingAI = true;
+
+    let pendingList = Object.values(activeTasksStore).filter(t => t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0));
+    const CHUNK_SIZE = 8;
+    for (let i = 0; i < pendingList.length; i += CHUNK_SIZE) {
+        let chunk = pendingList.slice(i, i + CHUNK_SIZE);
+        await Promise.all(chunk.map(task => predictWithAI(task)));
+        await tf.nextFrame();
+    }
+    isEvaluatingAI = false;
 }
 
 async function fetchTasks() {
@@ -431,6 +442,7 @@ async function fetchTasks() {
             if (currentTab === 'pending') {
                 serverData.pending = data.tasks || {};
                 renderPendingStreams();
+                if (isAIReady && autoTrainEnabled) reEvaluatePendingParallel();
             } else {
                 serverData.trained = data.tasks || {};
                 renderTrainedStream();
@@ -456,17 +468,17 @@ function renderPendingStreams() {
         if (ghostBlocker.has(id) || activeTasksStore[id]) continue;
         let td = pending[id], media = td.media || [], isGrid = media.length > 1;
 
-        activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '', _evaluated: false };
+        activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
         let card = buildCard(activeTasksStore[id]);
 
         if (isGrid) {
             gridArea.prepend(card);
-            if (isAIReady && autoTrainEnabled) setTimeout(() => predictSingleCardDirect(activeTasksStore[id], card), 40);
         } else {
             manualArea.prepend(card);
         }
     }
     updateCountsDisplay();
+    if (isAIReady && autoTrainEnabled) reEvaluatePendingParallel();
 }
 
 function renderTrainedStream() {
@@ -496,21 +508,21 @@ function buildCard(t, isTrained = false) {
     card.style.minWidth = isTrained ? '320px' : 'auto';
 
     let parts = t.prompt.split('|||');
-    let exHtml = parts[1] ? `<img src="${parts[1]}" class="example-img" crossorigin="anonymous">` : `<div class="example-img-placeholder">🖼️</div>`;
+    let exHtml = parts[1] ? `<img src="${parts[1]}" class="example-img">` : `<div class="example-img-placeholder">🖼️</div>`;
     let mediaHTML = '';
 
     if (t.type === 'grid') {
         mediaHTML = '<div class="img-grid">';
         t.media.forEach(m => {
             let isSelected = t.clicks.includes(m.index);
-            mediaHTML += `<img src="${m.thumb || m.src || ''}" class="g-img ${isSelected?'selected':''}" data-index="${m.index}" draggable="false" crossorigin="anonymous"/>`;
+            mediaHTML += `<img src="${m.thumb || m.src || ''}" class="g-img ${isSelected?'selected':''}" data-index="${m.index}" draggable="false" loading="lazy"/>`;
         });
         mediaHTML += '</div>';
     } else {
         let m = t.media[0] || {};
         let isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
         let src = isVid ? m.frames[0] : (m.src || '');
-        mediaHTML = `<div class="single-box"><img src="${src}" class="s-img ${isVid?'vid-player':''}" data-id="${t.id}" draggable="false" crossorigin="anonymous"/>`;
+        mediaHTML = `<div class="single-box"><img src="${src}" class="s-img ${isVid?'vid-player':''}" data-id="${t.id}" draggable="false"/>`;
         t.clicks.forEach(pt => {
             mediaHTML += `<div class="dot" style="left:${pt.px}%;top:${pt.py}%;"></div>`;
         });
@@ -543,6 +555,7 @@ function buildCard(t, isTrained = false) {
     return card;
 }
 
+// Universal Responsive Click Delegate
 document.addEventListener('click', (e) => {
     let actionBtn = e.target.closest('[data-action]');
     let card = e.target.closest('.task-card');
@@ -658,6 +671,7 @@ document.addEventListener('click', (e) => {
 
     if (isTrainedCard && !isInRetrain) return;
 
+    // Grid Image Click Selection
     if (e.target.classList.contains('g-img')) {
         let idx = parseInt(e.target.dataset.index);
         if (e.target.classList.contains('selected') || e.target.classList.contains('retrain-pick') || e.target.classList.contains('ai-pick')) {
@@ -731,6 +745,7 @@ function filterTasks() {
     });
 }
 
+// Smooth Continuous Video Loop for Animated Challenges
 setInterval(() => {
     videoTasksMap.forEach((entry, tid) => {
         let el = document.querySelector(`.vid-player[data-id="${tid}"]`);
