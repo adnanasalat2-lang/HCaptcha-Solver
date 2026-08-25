@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
     <title>hCaptcha Master Pro</title>
+    <!-- Direct Model Scripts to fix AI Load Error -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
     <style>
         * { box-sizing: border-box; }
         body { background-color: #0c0c0c; color: #ffffff; font-family: Arial, sans-serif; margin: 0; padding: 12px; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
@@ -196,14 +200,6 @@ let dashWS = null;
 let isAIReady = false, aiModel, knn;
 let autoTrainEnabled = true, autoSaveEnabled = true;
 
-function loadScript(src) {
-    return new Promise((resolve, reject) => {
-        let s = document.createElement('script');
-        s.src = src; s.onload = resolve; s.onerror = reject;
-        document.head.appendChild(s);
-    });
-}
-
 async function joinSession(mode) {
     let name = workerNameInput.value.trim() || 'Worker_' + Math.floor(Math.random()*100);
     workerName = name;
@@ -221,16 +217,7 @@ async function joinSession(mode) {
         document.getElementById('col-grid').style.display = 'flex';
         document.getElementById('col-manual').style.display = 'none';
         aiControlGroup.style.display = 'flex';
-
-        syncStatus.innerHTML = "⏳ Boosting AI...";
-        try {
-            await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js");
-            await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js");
-            await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js");
-            initAI();
-        } catch(e) {
-            syncStatus.innerHTML = "⚠️ AI Load Error";
-        }
+        initAI();
     } else {
         document.getElementById('col-grid').style.display = 'none';
         document.getElementById('col-manual').style.display = 'flex';
@@ -272,6 +259,10 @@ function connectDashboardWS() {
 
                 if (msg.action === 'new_task' && msg.task) {
                     appendCard(msg.task);
+                    if (isAIReady && autoTrainEnabled && selectedAppMode === 'grid') {
+                        let t = activeTasksStore[msg.task.id];
+                        if (t && t.type === 'grid') predictWithAI(t);
+                    }
                 }
 
                 if (msg.action === 'task_solved' || msg.action === 'task_deleted') {
@@ -307,6 +298,111 @@ function updateStreamCounts() {
     let count = Object.keys(activeTasksStore).length;
     let el = selectedAppMode === 'grid' ? document.getElementById('c-grid') : document.getElementById('c-manual');
     if (el) el.innerText = `${count} Assigned`;
+}
+
+async function initAI() {
+    try {
+        await tf.setBackend('webgl');
+        await tf.ready();
+        aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
+        knn = knnClassifier.create();
+        isAIReady = true;
+        syncStatus.innerHTML = "🤖 AI Ready ✅";
+        syncStatus.classList.add('active');
+    } catch(e) {
+        syncStatus.innerHTML = "⚠️ AI Fallback";
+    }
+}
+
+function toggleAutoTrain() {
+    autoTrainEnabled = !autoTrainEnabled;
+    let btn = document.getElementById('btnAutoTrain');
+    btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
+    btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
+}
+
+function toggleAutoSave() {
+    autoSaveEnabled = !autoSaveEnabled;
+    let btn = document.getElementById('btnAutoSave');
+    btn.className = 'btn-toggle' + (autoSaveEnabled ? ' on' : '');
+    btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
+}
+
+async function trainAIBrainAsync(task) {
+    if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
+    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
+    let negLabel = 'negative_' + pText;
+
+    for (let m of task.media) {
+        let imgSrc = m.thumb || m.src;
+        if (!imgSrc) continue;
+        try {
+            let img = new Image();
+            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
+            img.src = imgSrc;
+            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 400); });
+            if (!img.complete || img.naturalWidth === 0) continue;
+            
+            tf.tidy(() => {
+                let tfImg = tf.browser.fromPixels(img);
+                let features = aiModel.infer(tfImg, true);
+                if (task.clicks.includes(m.index)) {
+                    for (let i = 0; i < 3; i++) knn.addExample(features, pText);
+                } else {
+                    knn.addExample(features, negLabel);
+                }
+            });
+        } catch(e) {}
+    }
+}
+
+async function predictWithAI(task) {
+    if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
+    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
+    let dataset = knn.getClassExampleCount();
+    if (!dataset[pText] || dataset[pText] < 1) return;
+
+    let predictedClicks = [];
+    for (let m of task.media) {
+        let imgSrc = m.thumb || m.src;
+        if (!imgSrc) continue;
+        try {
+            let img = new Image();
+            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
+            img.src = imgSrc;
+            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 300); });
+            if (!img.complete || img.naturalWidth === 0) continue;
+            
+            let res = null;
+            tf.tidy(() => {
+                let tfImg = tf.browser.fromPixels(img);
+                let features = aiModel.infer(tfImg, true);
+                res = knn.predictClass(features);
+            });
+            let resolvedRes = await res;
+            let conf = resolvedRes.confidences[pText] || 0;
+            if (resolvedRes.label === pText && conf >= 0.75) {
+                predictedClicks.push(m.index);
+            }
+        } catch(e) {}
+    }
+
+    if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
+        task.clicks = predictedClicks;
+        let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
+        if (card) {
+            card.classList.add('ai-processing');
+            predictedClicks.forEach(idx => {
+                let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
+                if (imgEl) imgEl.classList.add('ai-pick');
+            });
+            if (autoSaveEnabled) {
+                let btn = card.querySelector('.btn-save');
+                if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Instant Solved'; }
+                sendToServer(task.id, card);
+            }
+        }
+    }
 }
 
 function appendCard(td) {
@@ -453,6 +549,10 @@ function sendToServer(taskId, card) {
     delete activeTasksStore[taskId];
     videoTasks = videoTasks.filter(v => v.id !== taskId);
     updateStreamCounts();
+
+    if (isAIReady && t.type === 'grid' && t.clicks.length > 0) {
+        trainAIBrainAsync(t);
+    }
 }
 
 document.addEventListener('keydown', (e) => {
