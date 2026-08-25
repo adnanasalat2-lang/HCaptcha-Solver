@@ -424,12 +424,17 @@ function applyKnnDataset(serialized) {
     try {
         let currentDs = knn.getClassifierDataset();
         for (let k in serialized) {
-            let incomingTensor = tf.tensor(serialized[k].data, serialized[k].shape);
-            if (currentDs[k]) {
-                currentDs[k] = tf.concat([currentDs[k], incomingTensor], 0);
-            } else {
-                currentDs[k] = incomingTensor;
-            }
+            try {
+                let incomingTensor = tf.tensor(new Float32Array(serialized[k].data), serialized[k].shape);
+                if (currentDs[k]) {
+                    let merged = tf.concat([currentDs[k], incomingTensor], 0);
+                    currentDs[k].dispose(); // purana tensor dispose — memory leak fix
+                    incomingTensor.dispose();
+                    currentDs[k] = merged;
+                } else {
+                    currentDs[k] = incomingTensor;
+                }
+            } catch(e) {}
         }
         knn.setClassifierDataset(currentDs);
         updateAIStatus();
@@ -533,19 +538,19 @@ async function trainAIBrainAsync(task) {
             let img = new Image();
             if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
             img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 300); });
+            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 1200); });
             if (!img.complete || img.naturalWidth === 0) return;
             
-            tf.tidy(() => {
-                let tfImg = tf.browser.fromPixels(img);
-                let features = aiModel.infer(tfImg, true);
-                
-                if (task.clicks.includes(m.index)) {
-                    for (let i = 0; i < 5; i++) knn.addExample(features, pText);
-                } else {
-                    knn.addExample(features, negLabel);
-                }
-            });
+            // FIX: tf.tidy ke bahar addExample karo — tidy tensor dispose kar deta tha training se pehle
+            let tfImg = tf.browser.fromPixels(img);
+            let features = aiModel.infer(tfImg, true);
+            tfImg.dispose();
+            if (task.clicks.includes(m.index)) {
+                for (let i = 0; i < 3; i++) knn.addExample(features, pText);
+            } else {
+                knn.addExample(features, negLabel);
+            }
+            features.dispose();
         } catch(e) {}
     }));
 
@@ -580,7 +585,7 @@ async function predictWithAI(task) {
             img.src = imgSrc;
             img.onload = () => resolve({ img, index: m.index });
             img.onerror = () => resolve(null);
-            setTimeout(() => resolve(null), 250);
+            setTimeout(() => resolve(null), 1200);
         });
     }));
 
@@ -590,23 +595,22 @@ async function predictWithAI(task) {
     let predictedClicks = [];
     for (let item of validImages) {
         try {
-            let res = null;
-            tf.tidy(() => {
-                let tfImg = tf.browser.fromPixels(item.img);
-                let features = aiModel.infer(tfImg, true);
-                res = knn.predictClass(features);
-            });
-            let resolvedRes = await res;
+            // FIX: tf.tidy ke bahar predict karo — predictClass async hai, tidy tensor dispose kar deta tha
+            let tfImg = tf.browser.fromPixels(item.img);
+            let features = aiModel.infer(tfImg, true);
+            tfImg.dispose();
+            let resolvedRes = await knn.predictClass(features);
+            features.dispose();
             let conf = resolvedRes.confidences[pText] || 0;
             let negConf = resolvedRes.confidences['negative_' + pText] || 0;
             
-            if (resolvedRes.label === pText && conf >= 0.75 && negConf < 0.35) {
+            if (resolvedRes.label === pText && conf >= 0.60 && negConf < 0.40) {
                 predictedClicks.push(item.index);
             }
         } catch(e) {}
     }
 
-    if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
+    if (predictedClicks.length >= 1 && predictedClicks.length <= 6) {
         task.clicks = predictedClicks;
         let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
         if (card) {
