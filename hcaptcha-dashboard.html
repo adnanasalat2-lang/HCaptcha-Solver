@@ -146,15 +146,12 @@ let autoTrainEnabled = true, autoSaveEnabled = true;
 let isEvaluatingAI = false;
 let brainSyncTimer = null;
 
-// High-Speed Web Worker Loop
-const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 250);`], { type: 'text/javascript' });
-const bgWorker = new Worker(URL.createObjectURL(timerBlob));
-bgWorker.onmessage = () => {
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'ping' }));
+// Controlled AI loop — Worker hataya, simple interval use karo
+setInterval(() => {
     if (isAIReady && autoTrainEnabled && !isEvaluatingAI) {
         megaBatchGPUExecutor();
     }
-};
+}, 800);
 
 let ws = null;
 function initWS() {
@@ -324,7 +321,7 @@ function getConceptKey(prompt) {
     return (prompt || '').split('|||')[0].trim().toLowerCase().replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ');
 }
 
-// ── FAST GPU BATCH INFERENCE (All 200+ Tasks Simultaneously) ──
+// ── BATCH INFERENCE ──
 async function megaBatchGPUExecutor() {
     if (isEvaluatingAI || !isAIReady || !autoTrainEnabled) return;
     isEvaluatingAI = true;
@@ -337,7 +334,6 @@ async function megaBatchGPUExecutor() {
 
         if (!pendingGrids.length) { isEvaluatingAI = false; return; }
 
-        // Filter tasks that have at least 1 training example in KNN
         let trainableTasks = pendingGrids.filter(t => {
             let k = getConceptKey(t.prompt);
             return dataset[k] && dataset[k] > 0;
@@ -345,7 +341,6 @@ async function megaBatchGPUExecutor() {
 
         if (!trainableTasks.length) { isEvaluatingAI = false; return; }
 
-        // Parallel Image Loader using DOM elements directly (Zero Image Loading Delay)
         for (let task of trainableTasks) {
             let pKey = getConceptKey(task.prompt);
             let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
@@ -356,22 +351,25 @@ async function megaBatchGPUExecutor() {
 
             let predictedClicks = [];
 
-            tf.tidy(() => {
-                imgElements.forEach((imgEl, idx) => {
-                    if (imgEl.naturalWidth > 0) {
-                        let tensor = tf.browser.fromPixels(imgEl);
-                        let features = aiModel.infer(tensor, true);
-                        let res = knn.predictClass(features);
-                        
-                        let conf = res.confidences[pKey] || 0;
-                        let negConf = res.confidences['neg_' + pKey] || 0;
+            // tf.tidy NAHI — predictClass async Promise hai, tidy se tensor dispose ho jaata tha
+            for (let imgEl of imgElements) {
+                let idx = parseInt(imgEl.dataset.index);
+                if (!imgEl.complete || imgEl.naturalWidth === 0) continue;
+                try {
+                    let tensor = tf.browser.fromPixels(imgEl);
+                    let features = aiModel.infer(tensor, true);
+                    tensor.dispose();
+                    let res = await knn.predictClass(features);
+                    features.dispose();
 
-                        if (res.label === pKey && conf >= 0.60 && negConf <= 0.40) {
-                            predictedClicks.push(idx);
-                        }
+                    let conf = res.confidences[pKey] || 0;
+                    let negConf = res.confidences['neg_' + pKey] || 0;
+                    if (res.label === pKey && conf >= 0.65 && negConf <= 0.35) {
+                        predictedClicks.push(idx);
                     }
-                });
-            });
+                    await tf.nextFrame();
+                } catch(e) {}
+            }
 
             if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
                 task.clicks = predictedClicks;
@@ -398,29 +396,35 @@ async function trainAIBrainAsync(task, wrongIndices = []) {
     let negLabel = 'neg_' + pKey;
     let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
 
-    tf.tidy(() => {
-        task.media.forEach(m => {
-            let imgEl = card ? card.querySelector(`.g-img[data-index="${m.index}"]`) : null;
-            if (imgEl && imgEl.naturalWidth > 0) {
-                let tensor = tf.browser.fromPixels(imgEl);
-                let features = aiModel.infer(tensor, true);
+    // tf.tidy NAHI — knn.addExample ke tensors tidy mein dispose ho jaate the
+    for (let m of task.media) {
+        let imgEl = card ? card.querySelector(`.g-img[data-index="${m.index}"]`) : null;
+        if (!imgEl || !imgEl.complete || imgEl.naturalWidth === 0) continue;
+        try {
+            let tensor = tf.browser.fromPixels(imgEl);
+            let features = aiModel.infer(tensor, true);
+            tensor.dispose();
 
-                let isSelected = (task.clicks || []).includes(m.index);
-                let wasWrong = wrongIndices.includes(m.index);
+            let isSelected = (task.clicks || []).includes(m.index);
+            let wasWrong = wrongIndices.includes(m.index);
 
-                if (isSelected) {
-                    for (let i = 0; i < 5; i++) knn.addExample(features, pKey);
-                } else if (wasWrong) {
-                    for (let i = 0; i < 8; i++) knn.addExample(features, negLabel);
-                } else {
-                    knn.addExample(features, negLabel);
-                }
+            if (isSelected) {
+                // 3x enough hai — 5x/8x se memory aur speed dono kharab hoti thi
+                knn.addExample(features, pKey);
+                knn.addExample(features, pKey);
+                knn.addExample(features, pKey);
+            } else if (wasWrong) {
+                knn.addExample(features, negLabel);
+                knn.addExample(features, negLabel);
+            } else {
+                knn.addExample(features, negLabel);
             }
-        });
-    });
+            features.dispose();
+            await tf.nextFrame();
+        } catch(e) {}
+    }
 
     scheduleServerBrainSave();
-    megaBatchGPUExecutor();
 }
 
 async function fetchTasks() {
@@ -741,7 +745,7 @@ setInterval(() => {
             el.src = entry.frames[entry.current];
         }
     });
-}, 140);
+}, 350);
 
 initWS();
 fetchTasks();
