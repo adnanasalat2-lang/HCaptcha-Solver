@@ -1,609 +1,480 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro</title>
-    <!-- Direct Model Scripts to fix AI Load Error -->
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
-    <style>
-        * { box-sizing: border-box; }
-        body { background-color: #0c0c0c; color: #ffffff; font-family: Arial, sans-serif; margin: 0; padding: 12px; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-        
-        #modeSelectModal {
-            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-            background: rgba(10, 10, 10, 0.96);
-            display: flex; flex-direction: column; justify-content: center; align-items: center;
-            z-index: 9999;
-        }
-        .login-box {
-            background: #181818; border: 2px solid #333; border-radius: 12px;
-            padding: 25px; width: 440px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,0.8);
-        }
-        .login-box input {
-            width: 100%; padding: 12px; margin: 15px 0 20px 0; background: #242424;
-            border: 1px solid #444; border-radius: 6px; color: #00ff88; font-size: 15px; text-align: center; outline: none;
-        }
-        .mode-card-container { display: flex; gap: 16px; }
-        .mode-card {
-            flex: 1; background: #222; border: 2px solid #3a3a3a; border-radius: 8px;
-            padding: 20px 10px; text-align: center; cursor: pointer; transition: all 0.2s ease;
-        }
-        .mode-card:hover { border-color: #00ff88; transform: translateY(-3px); }
-        .mode-card.manual-card:hover { border-color: #ff9900; }
-        .mode-card h3 { margin: 10px 0 5px 0; font-size: 16px; }
-        .mode-card p { font-size: 11px; color: #888; margin: 0; }
+const express = require('express');
+const http = require('http');
+const WebSocket = require('ws');
+const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
+const Redis = require('ioredis');
 
-        .header { background: #181818; padding: 8px 16px; border-bottom: 2px solid #00ff88; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-shrink: 0; border-radius: 4px; }
-        .header-left { display: flex; align-items: center; gap: 15px; }
-        .header h1 { margin: 0; font-size: 16px; color: #00ff88; display: flex; align-items: center; gap: 8px; }
-        .worker-badge { font-size: 11px; padding: 3px 8px; border-radius: 4px; background: #00ff88; color: #000; font-weight: bold; }
-        
-        .tabs { display: flex; gap: 6px; }
-        .tab-btn { background: #282828; color: #aaa; border: 1px solid #444; padding: 6px 14px; font-size: 12px; font-weight: bold; cursor: pointer; border-radius: 4px; }
-        .tab-btn.active { background: #00ff88; color: #000; border-color: #00ff88; }
-        .count-badge { background: #000; color: #fff; padding: 1px 6px; border-radius: 8px; font-size: 11px; margin-left: 4px; }
+const app = express();
+app.use(cors());
+app.use(express.json({ limit: '60mb' }));
 
-        .online-status-bar { font-size: 12px; color: #888; display: flex; align-items: center; gap: 6px; background: #222; padding: 4px 10px; border-radius: 4px; border: 1px solid #333; }
-        .online-dot { width: 8px; height: 8px; background: #00ff88; border-radius: 50%; box-shadow: 0 0 6px #00ff88; }
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
 
-        .ai-bar { display: flex; align-items: center; gap: 8px; }
-        .sync-status { font-size: 12px; color: #ffaa00; font-weight: bold; }
-        .sync-status.active { color: #00ff88; }
-        .btn-toggle { padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; border: 1px solid #555; background: #222; color: #888; }
-        .btn-toggle.on { background: #00ff88; color: #000; border-color: #00ff88; }
-        .btn-clear-ai { background: #331111; color: #ff5555; border: 1px solid #772222; padding: 6px 10px; border-radius: 4px; font-size: 11px; font-weight: bold; cursor: pointer; }
-        .btn-switch-mode { background: #222; color: #aaa; border: 1px solid #555; padding: 6px 10px; border-radius: 4px; font-size: 12px; font-weight: bold; cursor: pointer; }
+const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
+const DB_FILE = path.join(DATA_DIR, 'database.json');
+const KNN_BRAIN_FILE = path.join(DATA_DIR, 'knn_brain.json');
 
-        .workspace-split { display: flex; gap: 12px; flex: 1; min-height: 0; margin-top: 10px; position: relative; }
-        .column { flex: 1; display: flex; flex-direction: column; background: #141414; border: 1px solid #262626; border-radius: 6px; overflow: hidden; }
-        .column-header { padding: 8px 12px; background: #1c1c1c; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; font-weight: bold; }
-        .col-title-ai { color: #00ff88; font-size: 14px; }
-        .col-title-manual { color: #ff9900; font-size: 14px; }
-        .stream-count { background: #000; padding: 2px 6px; border-radius: 8px; font-size: 11px; color: #fff; }
-        
-        .task-list { flex: 1; overflow-y: auto; padding: 10px; display: grid; gap: 10px; align-content: start; }
-        .grid-view-mode .task-list { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
-        .manual-view-mode .task-list { grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); }
+const MAX_PENDING = 100;
+const MAX_TRAINED = 50000;
+const DASHBOARD_PAGE_SIZE = 20;
 
-        .task-card { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; padding: 10px; }
-        .task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 8px rgba(255,0,255,0.3); }
+let hcaptchaPending = {};
+let hcaptchaTrained = {};
+let conceptBank = {};
+let centralizedKnnDataset = {};
 
-        .task-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-        .task-id { color: #ff4444; font-family: monospace; font-size: 13px; font-weight: bold; }
+const taskAssignments = new Map();
+const browserSockets = new Map();
+const activeWorkers = new Map();
 
-        .prompt-container { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; background: #222; padding: 5px; border-radius: 4px; border: 1px solid #333; }
-        .example-wrap { flex-shrink: 0; width: 42px; height: 42px; }
-        .example-img { width: 42px; height: 42px; object-fit: cover; border-radius: 3px; border: 1px solid #555; }
-        .example-img-placeholder { width: 42px; height: 42px; border-radius: 3px; background: #2a2a2a; border: 1px dashed #555; display: flex; align-items: center; justify-content: center; font-size: 16px; }
-        .task-prompt { color: #fff; font-size: 12px; font-weight: bold; line-height: 1.3; }
+let gridWorkerIndex = 0;
+let manualWorkerIndex = 0;
 
-        .img-grid { display: grid; gap: 4px; width: 100%; }
-        .img-grid img { width: 100%; height: 105px; object-fit: cover; cursor: pointer; border: 3px solid transparent; background: #222; border-radius: 3px; }
-        .img-grid img.selected { border-color: #00ff88; opacity: 0.85; }
-        .img-grid img.ai-pick { border-color: #ff00ff; opacity: 0.9; }
-        
-        .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; align-items: center; background: #000; border-radius: 4px; border: 1px solid #444; overflow: hidden; }
-        .single-box img { width: 100%; height: auto; min-height: 340px; max-height: 480px; object-fit: contain; display: block; user-select: none; }
-        .dot { position: absolute; width: 16px; height: 16px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 10; }
-
-        .actions { display: flex; gap: 6px; margin-top: 8px; }
-        .btn { flex: 1; padding: 9px; border: none; font-weight: bold; cursor: pointer; color: #fff; font-size: 12px; border-radius: 4px; }
-        .btn-save { background: #00ff88; color: #000; }
-        .btn-reset { background: #444; }
-        .btn-del { background: #ff4444; flex: 0.3; }
-        .btn-warn { background: #ff2222 !important; color: #fff !important; }
-
-        #trainedView { display: none; flex: 1; flex-direction: column; background: #141414; border: 1px solid #262626; border-radius: 6px; overflow: hidden; margin-top: 10px; }
-        .trained-container { flex: 1; overflow-y: auto; padding: 15px; display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; align-content: start; }
-    </style>
-</head>
-<body>
-
-<div id="modeSelectModal">
-    <div class="login-box">
-        <h2 style="color:#00ff88; margin: 0 0 5px 0;">👷 Worker Registration</h2>
-        <p style="color:#888; font-size: 13px; margin: 0;">Apna naam likhein aur mode select karein:</p>
-        
-        <input type="text" id="workerNameInput" placeholder="Worker Name (e.g. Worker_1)" autofocus />
-        
-        <div class="mode-card-container">
-            <div class="mode-card" onclick="joinSession('grid')">
-                <div style="font-size: 32px;">🧠</div>
-                <h3 style="color:#00ff88;">Grid Worker</h3>
-                <p>AI Fast Learning (1-9 Numpad)</p>
-            </div>
-            <div class="mode-card manual-card" onclick="joinSession('manual')">
-                <div style="font-size: 32px;">👷</div>
-                <h3 style="color:#ff9900;">Manual Worker</h3>
-                <p>Ultra Fast (Canvas & Coordinates)</p>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="header">
-    <div class="header-left">
-        <h1>hCaptcha Master Pro <span class="worker-badge" id="workerBadge">...</span></h1>
-        <div class="online-status-bar">
-            <span class="online-dot"></span>
-            <span id="teamCountText">Online: 1</span>
-        </div>
-        <div class="tabs">
-            <button class="tab-btn active" id="btn-pending" onclick="setTab('pending')">Pending <span class="count-badge" id="c-pending">0</span></button>
-            <button class="tab-btn" id="btn-trained" onclick="setTab('trained')">Trained <span class="count-badge" id="c-trained">0</span></button>
-        </div>
-    </div>
-    
-    <div class="ai-bar">
-        <span class="sync-status" id="syncStatus">⚡ Connecting...</span>
-        <div id="aiControlGroup" style="display: none; gap: 8px; align-items: center;">
-            <button id="btnAutoTrain" class="btn-toggle on" onclick="toggleAutoTrain()">🧠 Auto Train: ON</button>
-            <button id="btnAutoSave" class="btn-toggle on" onclick="toggleAutoSave()">💾 Auto Save: ON</button>
-            <button class="btn-clear-ai" onclick="resetAIBrain()">🧹 Reset Brain</button>
-        </div>
-        <button class="btn-switch-mode" onclick="location.reload()">🔄 Switch Mode</button>
-    </div>
-</div>
-
-<div class="workspace-split" id="pendingView">
-    <div class="column" id="col-grid" style="display:none;">
-        <div class="column-header">
-            <span class="col-title-ai">🤖 AI Fast-Train Stream (Assigned to You)</span>
-            <span class="stream-count" id="c-grid">0 Tasks</span>
-        </div>
-        <div class="task-list" id="gridArea"></div>
-    </div>
-
-    <div class="column" id="col-manual" style="display:none;">
-        <div class="column-header">
-            <span class="col-title-manual">👷 Manual Worker Stream (Assigned to You)</span>
-            <span class="stream-count" id="c-manual">0 Tasks</span>
-        </div>
-        <div class="task-list" id="manualArea"></div>
-    </div>
-</div>
-
-<div id="trainedView">
-    <div class="column-header">
-        <span style="color:#00ff88;font-size:14px;">🗂️ Trained Database Archive</span>
-        <span class="stream-count" id="c-trained-total">0 Solved</span>
-    </div>
-    <div class="trained-container" id="trainedArea"></div>
-</div>
-
-<script>
-const SERVER_URL = location.origin;
-const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
-
-let workerName = localStorage.getItem('hcm_worker_name') || '';
-let selectedAppMode = null; 
-
-const modeModal = document.getElementById('modeSelectModal');
-const workerBadge = document.getElementById('workerBadge');
-const aiControlGroup = document.getElementById('aiControlGroup');
-const workerNameInput = document.getElementById('workerNameInput');
-if (workerName) workerNameInput.value = workerName;
-
-const gridArea = document.getElementById('gridArea');
-const manualArea = document.getElementById('manualArea');
-const trainedArea = document.getElementById('trainedArea');
-const syncStatus = document.getElementById('syncStatus');
-
-let currentTab = 'pending';
-let activeTasksStore = {}, videoTasks = [];
-let dashWS = null;
-
-let isAIReady = false, aiModel, knn;
-let autoTrainEnabled = true, autoSaveEnabled = true;
-
-async function joinSession(mode) {
-    let name = workerNameInput.value.trim() || 'Worker_' + Math.floor(Math.random()*100);
-    workerName = name;
-    localStorage.setItem('hcm_worker_name', name);
-    selectedAppMode = mode;
-
-    modeModal.style.display = 'none';
-    workerBadge.innerText = `${workerName} (${mode.toUpperCase()})`;
-    workerBadge.style.background = mode === 'grid' ? '#00ff88' : '#ff9900';
-
-    const pView = document.getElementById('pendingView');
-    pView.className = 'workspace-split ' + (mode === 'grid' ? 'grid-view-mode' : 'manual-view-mode');
-
-    if (mode === 'grid') {
-        document.getElementById('col-grid').style.display = 'flex';
-        document.getElementById('col-manual').style.display = 'none';
-        aiControlGroup.style.display = 'flex';
-        initAI();
-    } else {
-        document.getElementById('col-grid').style.display = 'none';
-        document.getElementById('col-manual').style.display = 'flex';
-        aiControlGroup.style.display = 'none';
-        syncStatus.innerHTML = "⚡ Worker Mode Active";
-        syncStatus.classList.add('active');
-    }
-
-    connectDashboardWS();
-}
-
-function connectDashboardWS() {
-    if (dashWS && dashWS.readyState === WebSocket.OPEN) return;
+let redis = null;
+if (process.env.REDIS_URL) {
     try {
-        dashWS = new WebSocket(WS_URL);
+        redis = new Redis(process.env.REDIS_URL, { retryStrategy: () => 2000, lazyConnect: true });
+        redis.connect().then(() => console.log('✅ Redis Connected')).catch(() => {});
+    } catch(e) {}
+}
 
-        dashWS.onopen = () => {
-            dashWS.send(JSON.stringify({ 
-                action: 'register_dashboard',
-                workerName: workerName,
-                mode: selectedAppMode
-            }));
-        };
+function getCleanKey(task) {
+    let p = (task.prompt || "").split("|||")[0].trim().toLowerCase();
+    return "TXT_" + p;
+}
 
-        dashWS.onmessage = async (event) => {
-            try {
-                const msg = JSON.parse(event.data);
+function isGridTask(task) {
+    if (!task || !task.media || task.media.length < 4) return false;
+    let p = (task.prompt || "").toLowerCase();
+    if (p.includes('drag') || p.includes('move') || p.includes('pattern') || p.includes('fit') || p.includes('spot')) return false;
+    return task.media.every(m => m.type === 'image');
+}
 
-                if (msg.action === 'init_state') {
-                    gridArea.innerHTML = '';
-                    manualArea.innerHTML = '';
-                    activeTasksStore = {};
-                    videoTasks = [];
-                    for (let id in (msg.pending || {})) {
-                        appendCard(msg.pending[id]);
-                    }
-                    updateCounts(msg.counts);
-                }
+function dhashToBigInt(hexOrBin) {
+    if (!hexOrBin || hexOrBin === "0000000000000000") return null;
+    if (/^[01]+$/.test(hexOrBin)) return BigInt('0b' + hexOrBin);
+    try { return BigInt('0x' + hexOrBin); } catch(e) { return null; }
+}
 
-                if (msg.action === 'new_task' && msg.task) {
-                    appendCard(msg.task);
-                    if (isAIReady && autoTrainEnabled && selectedAppMode === 'grid') {
-                        let t = activeTasksStore[msg.task.id];
-                        if (t && t.type === 'grid') predictWithAI(t);
-                    }
-                }
+function getHammingDistance(h1, h2) {
+    if (!h1 || !h2 || h1.length !== h2.length) return 999;
+    const b1 = dhashToBigInt(h1);
+    const b2 = dhashToBigInt(h2);
+    if (b1 !== null && b2 !== null) {
+        let xor = b1 ^ b2;
+        let diff = 0;
+        while (xor > 0n) { diff += Number(xor & 1n); xor >>= 1n; }
+        return diff;
+    }
+    let diff = 0;
+    for (let i = 0; i < h1.length; i++) { if (h1[i] !== h2[i]) diff++; }
+    return diff;
+}
 
-                if (msg.action === 'task_solved' || msg.action === 'task_deleted') {
-                    let card = document.querySelector(`.task-card[data-id="${msg.taskId}"]`);
-                    if (card) card.remove();
-                    delete activeTasksStore[msg.taskId];
-                    videoTasks = videoTasks.filter(v => v.id !== msg.taskId);
-                    updateStreamCounts();
-                }
-
-                if (msg.action === 'counts_update') {
-                    updateCounts(msg.counts);
-                }
-            } catch(e) {}
-        };
-
-        dashWS.onclose = () => { setTimeout(connectDashboardWS, 2000); };
-    } catch(e) {
-        setTimeout(connectDashboardWS, 2000);
+function rebuildConceptBank() {
+    conceptBank = {};
+    for (let id in hcaptchaTrained) {
+        _addToConceptBank(hcaptchaTrained[id]);
     }
 }
 
-function updateCounts(c) {
-    if (!c) return;
-    document.getElementById('c-pending').innerText = c.pending;
-    document.getElementById('c-trained').innerText = c.trained;
-    document.getElementById('c-trained-total').innerText = `${c.trained} Solved`;
-    let active = selectedAppMode === 'grid' ? (c.gridWorkersOnline || 1) : (c.manualWorkersOnline || 1);
-    document.getElementById('teamCountText').innerText = `${selectedAppMode.toUpperCase()} Online: ${active}`;
-}
-
-function updateStreamCounts() {
-    let count = Object.keys(activeTasksStore).length;
-    let el = selectedAppMode === 'grid' ? document.getElementById('c-grid') : document.getElementById('c-manual');
-    if (el) el.innerText = `${count} Assigned`;
-}
-
-async function initAI() {
-    try {
-        await tf.setBackend('webgl');
-        await tf.ready();
-        aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
-        knn = knnClassifier.create();
-        isAIReady = true;
-        syncStatus.innerHTML = "🤖 AI Ready ✅";
-        syncStatus.classList.add('active');
-    } catch(e) {
-        syncStatus.innerHTML = "⚠️ AI Fallback";
-    }
-}
-
-function toggleAutoTrain() {
-    autoTrainEnabled = !autoTrainEnabled;
-    let btn = document.getElementById('btnAutoTrain');
-    btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
-    btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
-}
-
-function toggleAutoSave() {
-    autoSaveEnabled = !autoSaveEnabled;
-    let btn = document.getElementById('btnAutoSave');
-    btn.className = 'btn-toggle' + (autoSaveEnabled ? ' on' : '');
-    btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
-}
-
-async function trainAIBrainAsync(task) {
-    if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
-    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
-    let negLabel = 'negative_' + pText;
-
-    for (let m of task.media) {
-        let imgSrc = m.thumb || m.src;
-        if (!imgSrc) continue;
-        try {
-            let img = new Image();
-            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
-            img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 400); });
-            if (!img.complete || img.naturalWidth === 0) continue;
-            
-            tf.tidy(() => {
-                let tfImg = tf.browser.fromPixels(img);
-                let features = aiModel.infer(tfImg, true);
-                if (task.clicks.includes(m.index)) {
-                    for (let i = 0; i < 3; i++) knn.addExample(features, pText);
-                } else {
-                    knn.addExample(features, negLabel);
-                }
-            });
-        } catch(e) {}
-    }
-}
-
-async function predictWithAI(task) {
-    if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
-    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
-    let dataset = knn.getClassExampleCount();
-    if (!dataset[pText] || dataset[pText] < 1) return;
-
-    let predictedClicks = [];
-    for (let m of task.media) {
-        let imgSrc = m.thumb || m.src;
-        if (!imgSrc) continue;
-        try {
-            let img = new Image();
-            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
-            img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 300); });
-            if (!img.complete || img.naturalWidth === 0) continue;
-            
-            let res = null;
-            tf.tidy(() => {
-                let tfImg = tf.browser.fromPixels(img);
-                let features = aiModel.infer(tfImg, true);
-                res = knn.predictClass(features);
-            });
-            let resolvedRes = await res;
-            let conf = resolvedRes.confidences[pText] || 0;
-            if (resolvedRes.label === pText && conf >= 0.75) {
-                predictedClicks.push(m.index);
-            }
-        } catch(e) {}
-    }
-
-    if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
-        task.clicks = predictedClicks;
-        let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
-        if (card) {
-            card.classList.add('ai-processing');
-            predictedClicks.forEach(idx => {
-                let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
-                if (imgEl) imgEl.classList.add('ai-pick');
-            });
-            if (autoSaveEnabled) {
-                let btn = card.querySelector('.btn-save');
-                if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Instant Solved'; }
-                sendToServer(task.id, card);
-            }
-        }
-    }
-}
-
-function appendCard(td) {
-    let id = td.id || td.taskId;
-    if (!id || activeTasksStore[id]) return;
-
-    let media = td.media || [];
-    let isGrid = media.length >= 4 && media.every(m => m.type === 'image');
-
-    activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
-    let card = buildCard(activeTasksStore[id]);
-
-    let targetArea = selectedAppMode === 'grid' ? gridArea : manualArea;
-    targetArea.prepend(card);
-    updateStreamCounts();
-}
-
-function buildCard(t) {
-    let card = document.createElement('div');
-    card.className = 'task-card';
-    card.dataset.id = t.id;
-
-    let parts = t.prompt.split('|||');
-    let exHtml = parts[1] ? `<img src="${parts[1]}" class="example-img">` : `<div class="example-img-placeholder">🖼️</div>`;
-    let mediaHTML = '';
-
-    if (t.type === 'grid') {
-        let colCount = t.media.length > 9 ? 4 : (t.media.length === 4 ? 2 : 3);
-        mediaHTML = `<div class="img-grid" style="grid-template-columns: repeat(${colCount}, 1fr);">`;
-        t.media.forEach(m => {
-            mediaHTML += `<img src="${m.thumb || m.src || ''}" class="g-img" data-index="${m.index}" draggable="false" loading="lazy"/>`;
-        });
-        mediaHTML += '</div>';
-    } else {
-        let m = t.media[0] || {}, isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
-        let src = isVid ? m.frames[0] : (m.src || m.thumb || '');
-        mediaHTML = `<div class="single-box"><img src="${src}" class="s-img ${isVid?'vid-player':''}" data-id="${t.id}" draggable="false"/></div>`;
-        if (isVid) videoTasks.push({ id: t.id, frames: m.frames, current: 0 });
-    }
-
-    card.innerHTML = `
-        <div class="task-head">
-            <span class="task-id">#${t.id.substring(0,6)}</span>
-        </div>
-        <div class="prompt-container"><div class="example-wrap">${exHtml}</div><div class="task-prompt">${parts[0]}</div></div>
-        ${mediaHTML}
-        <div class="actions">
-            <button class="btn btn-save" data-action="save">Save & Train ↵</button>
-            <button class="btn btn-reset" data-action="reset">Clear</button>
-            <button class="btn btn-del" data-action="del">❌</button>
-        </div>`;
-    return card;
-}
-
-document.body.addEventListener('click', (e) => {
-    let actionBtn = e.target.closest('[data-action]');
-    let card = e.target.closest('.task-card');
-    if (!card) return;
-    let tid = card.dataset.id, t = activeTasksStore[tid];
-    if (!t) return;
-
-    if (actionBtn) {
-        let act = actionBtn.dataset.action;
-
-        if (act === 'save') {
-            if (!t.clicks || t.clicks.length === 0) {
-                actionBtn.classList.add('btn-warn');
-                actionBtn.textContent = '⚠️ Pehle Select Karo!';
-                setTimeout(() => { actionBtn.classList.remove('btn-warn'); actionBtn.textContent = 'Save & Train ↵'; }, 1000);
-                return;
-            }
-            sendToServer(tid, card);
-            return;
-        }
-
-        if (act === 'reset') {
-            t.clicks = [];
-            card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick'));
-            card.querySelectorAll('.dot').forEach(d => d.remove());
-            return;
-        }
-
-        if (act === 'del') {
-            card.remove(); delete activeTasksStore[tid];
-            videoTasks = videoTasks.filter(v => v.id !== tid);
-            updateStreamCounts();
-            fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).catch(()=>{});
-            return;
-        }
-    }
-
-    if (e.target.classList.contains('g-img')) {
-        let idx = parseInt(e.target.dataset.index);
-        if (e.target.classList.contains('selected')) {
-            e.target.classList.remove('selected');
-            t.clicks = t.clicks.filter(i => i !== idx);
-        } else {
-            e.target.classList.add('selected');
-            t.clicks.push(idx);
-        }
-    } else if (e.target.classList.contains('s-img')) {
-        let img = e.target;
-        let rect = img.getBoundingClientRect();
-        let nw = img.naturalWidth || 400, nh = img.naturalHeight || 300;
-        let containerRatio = rect.width / rect.height, imageRatio = nw / nh;
-        let actualW = rect.width, actualH = rect.height, offsetX = 0, offsetY = 0;
-
-        if (containerRatio > imageRatio) {
-            actualW = rect.height * imageRatio; offsetX = (rect.width - actualW) / 2;
-        } else {
-            actualH = rect.width / imageRatio; offsetY = (rect.height - actualH) / 2;
-        }
-
-        let clickX = e.clientX - rect.left - offsetX, clickY = e.clientY - rect.top - offsetY;
-        if (clickX < 0 || clickX > actualW || clickY < 0 || clickY > actualH) return;
-
-        let px = Math.max(0, Math.min(100, (clickX / actualW) * 100));
-        let py = Math.max(0, Math.min(100, (clickY / actualH) * 100));
-        t.clicks.push({ px, py });
-
-        let dot = document.createElement('div');
-        dot.className = 'dot';
-        dot.style.left = `${((e.clientX - rect.left) / rect.width) * 100}%`;
-        dot.style.top = `${((e.clientY - rect.top) / rect.height) * 100}%`;
-        img.parentElement.appendChild(dot);
-    }
-});
-
-function sendToServer(taskId, card) {
-    let t = activeTasksStore[taskId];
-    if (!t || !t.clicks || t.clicks.length === 0) return;
-
-    if (dashWS && dashWS.readyState === WebSocket.OPEN) {
-        dashWS.send(JSON.stringify({ action: 'submit_task', taskId, clicks: t.clicks }));
-    } else {
-        fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ taskId, clicks: t.clicks })
-        }).catch(()=>{});
-    }
-
-    if (card) card.remove();
-    delete activeTasksStore[taskId];
-    videoTasks = videoTasks.filter(v => v.id !== taskId);
-    updateStreamCounts();
-
-    if (isAIReady && t.type === 'grid' && t.clicks.length > 0) {
-        trainAIBrainAsync(t);
-    }
-}
-
-document.addEventListener('keydown', (e) => {
-    if (selectedAppMode !== 'grid') return;
-    let firstCard = document.querySelector('#gridArea .task-card');
-    if (!firstCard) return;
-
-    const num = parseInt(e.key);
-    if (num >= 1 && num <= 9) {
-        let img = firstCard.querySelector(`.g-img[data-index="${num - 1}"]`);
-        if (img) img.click();
-    }
-    if (e.key === 'Enter') {
-        let saveBtn = firstCard.querySelector('.btn-save');
-        if (saveBtn) saveBtn.click();
-    }
-});
-
-function setTab(tab) {
-    currentTab = tab;
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById('btn-' + tab).classList.add('active');
-    
-    if (tab === 'pending') {
-        document.getElementById('pendingView').style.display = 'flex';
-        document.getElementById('trainedView').style.display = 'none';
-    } else {
-        document.getElementById('pendingView').style.display = 'none';
-        document.getElementById('trainedView').style.display = 'flex';
-        fetch(`${SERVER_URL}/api/tasks?tab=trained`).then(r=>r.json()).then(d=>{
-            trainedArea.innerHTML = '';
-            for (let id in (d.tasks||{})) {
-                let td = d.tasks[id];
-                let isGrid = (td.media||[]).length >= 4;
-                let c = buildCard({ id, clicks: td.clicks||[], type: isGrid?'grid':'coord', media: td.media||[], prompt: td.prompt||'' });
-                c.querySelector('.actions').remove();
-                trainedArea.appendChild(c);
-            }
-        });
-    }
-}
-
-setInterval(() => {
-    videoTasks.forEach(vt => {
-        let el = document.querySelector(`.vid-player[data-id="${vt.id}"]`);
-        if (el && vt.frames?.length > 0) {
-            vt.current = (vt.current + 1) % vt.frames.length;
-            el.src = vt.frames[vt.current];
+function _addToConceptBank(tr) {
+    let cKey = getCleanKey(tr);
+    if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
+    (tr.clicks || []).forEach(idx => {
+        if (typeof idx === 'number' && tr.media && tr.media[idx] && tr.media[idx].dhash && tr.media[idx].dhash !== "0000000000000000") {
+            conceptBank[cKey].add(tr.media[idx].dhash);
         }
     });
-}, 120);
-</script>
-</body>
-</html>
+}
+
+function initDB() {
+    if (fs.existsSync(DB_FILE)) {
+        try {
+            const raw = fs.readFileSync(DB_FILE, 'utf8');
+            const data = JSON.parse(raw);
+            hcaptchaPending = {};
+            hcaptchaTrained = data.trained || {};
+            rebuildConceptBank();
+            console.log(`[DB] Engine Loaded. Trained: ${Object.keys(hcaptchaTrained).length}`);
+        } catch (e) {
+            console.error("[DB] Error loading database:", e.message);
+        }
+    }
+    if (fs.existsSync(KNN_BRAIN_FILE)) {
+        try { centralizedKnnDataset = JSON.parse(fs.readFileSync(KNN_BRAIN_FILE, 'utf8')); } catch(e) {}
+    }
+}
+initDB();
+
+let saveTimeout = null;
+function persistDatabase() {
+    if (saveTimeout) clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => {
+        fs.writeFile(DB_FILE, JSON.stringify({ trained: hcaptchaTrained }), 'utf8', () => {});
+        fs.writeFile(KNN_BRAIN_FILE, JSON.stringify(centralizedKnnDataset), 'utf8', () => {});
+    }, 2000);
+}
+
+function evaluateAutoSolve(task) {
+    if (hcaptchaTrained[task.taskId]) {
+        return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
+    }
+
+    if (task.media && task.media.length === 1) {
+        const item = task.media[0];
+        for (let tid in hcaptchaTrained) {
+            const trained = hcaptchaTrained[tid];
+            if (trained.media && trained.media.length === 1) {
+                const trItem = trained.media[0];
+                if (trItem.stableHash && item.stableHash && trItem.stableHash === item.stableHash) {
+                    return { solved: true, clicks: trained.clicks || [] };
+                }
+                if (item.dhash && trItem.dhash && item.dhash !== "0000000000000000" && getHammingDistance(item.dhash, trItem.dhash) <= 1) {
+                    return { solved: true, clicks: trained.clicks || [] };
+                }
+            }
+        }
+        return { solved: false };
+    }
+
+    let cKey = getCleanKey(task);
+    let targetDhashes = conceptBank[cKey];
+
+    if (targetDhashes && targetDhashes.size > 0 && isGridTask(task)) {
+        let matchedClicks = [];
+        task.media.forEach((item, idx) => {
+            if (!item.dhash || item.dhash === "0000000000000000") return;
+            for (let savedHash of targetDhashes) {
+                if (getHammingDistance(item.dhash, savedHash) <= 2) {
+                    matchedClicks.push(idx);
+                    break;
+                }
+            }
+        });
+
+        if (matchedClicks.length >= 2 && matchedClicks.length <= 5) {
+            return { solved: true, clicks: matchedClicks };
+        }
+    }
+    return { solved: false };
+}
+
+function getOnlineWorkers(mode) {
+    let list = [];
+    activeWorkers.forEach((meta, ws) => {
+        if (ws.readyState === WebSocket.OPEN && meta.mode === mode) {
+            list.push({ ws, meta });
+        }
+    });
+    if (list.length === 0) {
+        activeWorkers.forEach((meta, ws) => {
+            if (ws.readyState === WebSocket.OPEN) list.push({ ws, meta });
+        });
+    }
+    return list;
+}
+
+function broadcastCounts() {
+    let gridWorkers = 0, manualWorkers = 0;
+    activeWorkers.forEach(meta => {
+        if (meta.mode === 'grid') gridWorkers++; else manualWorkers++;
+    });
+
+    const payload = JSON.stringify({
+        action: 'counts_update',
+        counts: {
+            pending: Object.keys(hcaptchaPending).length,
+            trained: Object.keys(hcaptchaTrained).length,
+            concepts: Object.keys(conceptBank).length,
+            gridWorkersOnline: gridWorkers,
+            manualWorkersOnline: manualWorkers
+        }
+    });
+
+    activeWorkers.forEach((_, ws) => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(payload);
+    });
+}
+
+function notifyBrowsers(taskId, clicks) {
+    if (browserSockets.has(taskId)) {
+        const sockets = browserSockets.get(taskId);
+        const payload = JSON.stringify({ action: 'solve', taskId, clicks });
+        sockets.forEach(ws => {
+            if (ws.readyState === WebSocket.OPEN) ws.send(payload);
+        });
+        browserSockets.delete(taskId);
+    }
+}
+
+function dispatchTaskToWorker(taskData) {
+    // If task is already assigned, don't re-dispatch
+    if (taskAssignments.has(taskData.id)) return;
+
+    let targetMode = isGridTask(taskData) ? 'grid' : 'manual';
+    let workers = getOnlineWorkers(targetMode);
+
+    if (workers.length === 0) return;
+
+    let targetWorker = null;
+    if (targetMode === 'grid') {
+        gridWorkerIndex = (gridWorkerIndex + 1) % workers.length;
+        targetWorker = workers[gridWorkerIndex];
+    } else {
+        manualWorkerIndex = (manualWorkerIndex + 1) % workers.length;
+        targetWorker = workers[manualWorkerIndex];
+    }
+
+    if (targetWorker && targetWorker.ws.readyState === WebSocket.OPEN) {
+        taskAssignments.set(taskData.id, targetWorker.ws);
+        targetWorker.meta.assignedTasks.add(taskData.id);
+        targetWorker.ws.send(JSON.stringify({ action: 'new_task', task: taskData }));
+    }
+}
+
+function handleNewTask(task, wsSource) {
+    if (!task || !task.taskId) return { success: false };
+
+    let autoRes = evaluateAutoSolve(task);
+    if (autoRes.solved) {
+        if (wsSource && wsSource.readyState === WebSocket.OPEN) {
+            wsSource.send(JSON.stringify({ action: 'solve', taskId: task.taskId, clicks: autoRes.clicks }));
+        }
+        notifyBrowsers(task.taskId, autoRes.clicks);
+        return { success: true, autoSolved: true, clicks: autoRes.clicks };
+    }
+
+    const keys = Object.keys(hcaptchaPending);
+    if (keys.length >= MAX_PENDING) {
+        let deletedKeys = keys.slice(0, 15);
+        deletedKeys.forEach(k => {
+            delete hcaptchaPending[k];
+            taskAssignments.delete(k);
+        });
+        activeWorkers.forEach((_, ws) => {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: 'bulk_remove_pending', taskIds: deletedKeys }));
+            }
+        });
+    }
+
+    const taskData = {
+        id: task.taskId,
+        prompt: task.prompt,
+        media: task.media,
+        timestamp: task.timestamp
+    };
+    hcaptchaPending[task.taskId] = taskData;
+
+    dispatchTaskToWorker(taskData);
+    broadcastCounts();
+    return { success: true, autoSolved: false };
+}
+
+function handleSubmitTask(taskId, clicks) {
+    if (!taskId || !clicks || !Array.isArray(clicks) || clicks.length === 0) return { success: false };
+
+    let source = hcaptchaPending[taskId] || hcaptchaTrained[taskId];
+    if (source) {
+        let lightMedia = (source.media || []).map(m => ({
+            dhash: m.dhash || "",
+            stableHash: m.stableHash || "",
+            type: m.type || "image",
+            index: m.index !== undefined ? m.index : 0,
+            thumb: m.thumb || (m.frames ? m.frames[0] : "")
+        }));
+
+        let cKey = getCleanKey(source);
+        if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
+
+        clicks.forEach(idx => {
+            if (typeof idx === 'number' && lightMedia[idx] && lightMedia[idx].dhash && lightMedia[idx].dhash !== "0000000000000000") {
+                conceptBank[cKey].add(lightMedia[idx].dhash);
+            }
+        });
+
+        hcaptchaTrained[taskId] = {
+            id: taskId,
+            prompt: source.prompt,
+            conceptKey: cKey,
+            media: lightMedia,
+            clicks: clicks,
+            trainedAt: new Date().toISOString()
+        };
+
+        const trainedKeys = Object.keys(hcaptchaTrained);
+        if (trainedKeys.length > MAX_TRAINED) {
+            const oldest = trainedKeys.slice(0, trainedKeys.length - MAX_TRAINED);
+            oldest.forEach(k => delete hcaptchaTrained[k]);
+        }
+
+        delete hcaptchaPending[taskId];
+        taskAssignments.delete(taskId);
+        persistDatabase();
+        notifyBrowsers(taskId, clicks);
+
+        const solveMsg = JSON.stringify({ action: 'task_solved', taskId, trainedTask: hcaptchaTrained[taskId] });
+        activeWorkers.forEach((meta, ws) => {
+            meta.assignedTasks.delete(taskId);
+            if (ws.readyState === WebSocket.OPEN) ws.send(solveMsg);
+        });
+
+        broadcastCounts();
+    }
+    return { success: true };
+}
+
+wss.on('connection', (ws) => {
+    let boundTaskId = null;
+
+    ws.on('message', (message) => {
+        try {
+            const data = JSON.parse(message);
+
+            if (data.action === 'register_dashboard') {
+                const workerMeta = {
+                    name: data.workerName || 'Worker_' + Math.floor(Math.random()*1000),
+                    mode: data.mode || 'manual',
+                    assignedTasks: new Set()
+                };
+                activeWorkers.set(ws, workerMeta);
+
+                let isGrid = workerMeta.mode === 'grid';
+                let availablePending = {};
+                
+                Object.values(hcaptchaPending).forEach(task => {
+                    let taskIsGrid = isGridTask(task);
+                    if (((isGrid && taskIsGrid) || (!isGrid && !taskIsGrid)) && !taskAssignments.has(task.id)) {
+                        taskAssignments.set(task.id, ws);
+                        workerMeta.assignedTasks.add(task.id);
+                        availablePending[task.id] = task;
+                    }
+                });
+
+                ws.send(JSON.stringify({
+                    action: 'init_state',
+                    pending: availablePending,
+                    knnBrain: centralizedKnnDataset,
+                    counts: {
+                        pending: Object.keys(hcaptchaPending).length,
+                        trained: Object.keys(hcaptchaTrained).length,
+                        concepts: Object.keys(conceptBank).length
+                    }
+                }));
+
+                broadcastCounts();
+                return;
+            }
+
+            if (data.action === 'sync_knn_update' && data.knnUpdates) {
+                Object.assign(centralizedKnnDataset, data.knnUpdates);
+                persistDatabase();
+                
+                const syncPayload = JSON.stringify({ action: 'knn_sync_broadcast', knnUpdates: data.knnUpdates });
+                activeWorkers.forEach((meta, clientWs) => {
+                    if (clientWs !== ws && clientWs.readyState === WebSocket.OPEN && meta.mode === 'grid') {
+                        clientWs.send(syncPayload);
+                    }
+                });
+                return;
+            }
+
+            if (data.action === 'new_task') {
+                boundTaskId = data.task?.taskId;
+                if (boundTaskId) {
+                    if (!browserSockets.has(boundTaskId)) browserSockets.set(boundTaskId, new Set());
+                    browserSockets.get(boundTaskId).add(ws);
+                }
+                const res = handleNewTask(data.task, ws);
+                ws.send(JSON.stringify({ action: 'new_task_ack', taskId: boundTaskId, ...res }));
+                return;
+            }
+
+            if (data.action === 'register' && data.taskId) {
+                boundTaskId = data.taskId;
+                if (!browserSockets.has(boundTaskId)) browserSockets.set(boundTaskId, new Set());
+                browserSockets.get(boundTaskId).add(ws);
+
+                if (hcaptchaTrained[boundTaskId]) {
+                    ws.send(JSON.stringify({ action: 'solve', taskId: boundTaskId, clicks: hcaptchaTrained[boundTaskId].clicks }));
+                }
+                return;
+            }
+
+            if (data.action === 'submit_task') {
+                handleSubmitTask(data.taskId, data.clicks);
+                return;
+            }
+        } catch (e) {}
+    });
+
+    ws.on('close', () => {
+        if (activeWorkers.has(ws)) {
+            const leavingWorker = activeWorkers.get(ws);
+            activeWorkers.delete(ws);
+
+            leavingWorker.assignedTasks.forEach(tid => {
+                taskAssignments.delete(tid);
+                if (hcaptchaPending[tid]) dispatchTaskToWorker(hcaptchaPending[tid]);
+            });
+
+            broadcastCounts();
+        }
+
+        if (boundTaskId && browserSockets.has(boundTaskId)) {
+            const set = browserSockets.get(boundTaskId);
+            set.delete(ws);
+            if (set.size === 0) browserSockets.delete(boundTaskId);
+        }
+    });
+});
+
+app.post('/api/new-hcaptcha', (req, res) => res.json(handleNewTask(req.body)));
+app.post('/api/submit-hcaptcha', (req, res) => res.json(handleSubmitTask(req.body.taskId, req.body.clicks)));
+
+app.get('/api/tasks', (req, res) => {
+    let source = req.query.tab === 'trained' ? hcaptchaTrained : hcaptchaPending;
+    res.json({ tasks: source, total: Object.keys(source).length });
+});
+
+app.get('/api/counts', (req, res) => {
+    let gridWorkers = getOnlineWorkers('grid').map(w => w.meta.name);
+    let manualWorkers = getOnlineWorkers('manual').map(w => w.meta.name);
+    res.json({
+        pending: Object.keys(hcaptchaPending).length,
+        trained: Object.keys(hcaptchaTrained).length,
+        concepts: Object.keys(conceptBank).length,
+        gridWorkersOnline: gridWorkers.length,
+        manualWorkersOnline: manualWorkers.length
+    });
+});
+
+app.delete('/api/delete-hcaptcha/:id', (req, res) => {
+    delete hcaptchaPending[req.params.id];
+    delete hcaptchaTrained[req.params.id];
+    taskAssignments.delete(req.params.id);
+    rebuildConceptBank(); 
+    persistDatabase();
+    
+    const delMsg = JSON.stringify({ action: 'task_deleted', taskId: req.params.id });
+    activeWorkers.forEach((meta, ws) => {
+        meta.assignedTasks.delete(req.params.id);
+        if (ws.readyState === WebSocket.OPEN) ws.send(delMsg);
+    });
+
+    broadcastCounts();
+    res.json({ success: true });
+});
+
+app.get('/', (req, res) => {
+    let f = path.join(__dirname, 'hcaptcha-dashboard.html');
+    if (fs.existsSync(f)) res.sendFile(f);
+    else res.status(404).send('hcaptcha-dashboard.html not found.');
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`🚀 Master Server Live on Port ${PORT}`));
