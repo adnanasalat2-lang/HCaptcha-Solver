@@ -255,16 +255,36 @@ function scheduleServerBrainSave() {
 
 async function initAI() {
     try {
-        try { await tf.setBackend('webgl'); } catch(e) { await tf.setBackend('cpu'); }
-        await tf.ready();
-        aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
+        // WebGL errors suppress karo — pehle webgl try, fail ho to cpu
+        tf.env().set('WEBGL_VERSION', 1);
+        tf.env().set('WEBGL_FORCE_F16_TEXTURES', false);
+        
+        let backend = 'cpu';
+        try {
+            await tf.setBackend('webgl');
+            await tf.ready();
+            if (tf.getBackend() === 'webgl') backend = 'webgl';
+        } catch(e) {}
+        
+        if (backend !== 'webgl') {
+            await tf.setBackend('cpu');
+            await tf.ready();
+        }
+        
+        syncStatus.innerHTML = `🧠 Loading AI (${backend.toUpperCase()})...`;
+        
+        // CPU pe alpha 0.50 — halka model, same accuracy for KNN
+        let alpha = backend === 'webgl' ? 1.0 : 0.50;
+        aiModel = await mobilenet.load({ version: 2, alpha });
         knn = knnClassifier.create();
         await loadServerBrain();
         isAIReady = true;
         updateAIStatus();
         megaBatchGPUExecutor();
     } catch(e) {
-        syncStatus.innerHTML = "⚠️ AI Fallback";
+        syncStatus.innerHTML = "⚠️ AI Failed: " + e.message;
+        // 10 second baad retry
+        setTimeout(initAI, 10000);
     }
 }
 
@@ -321,6 +341,20 @@ function getConceptKey(prompt) {
     return (prompt || '').split('|||')[0].trim().toLowerCase().replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ');
 }
 
+// MobileNet ke liye image 224x224 pe resize karo — CPU pe bhi fast
+function getFeatures(imgEl) {
+    try {
+        let tc = document.createElement('canvas');
+        tc.width = 224; tc.height = 224;
+        let ctx = tc.getContext('2d');
+        ctx.drawImage(imgEl, 0, 0, 224, 224);
+        let tensor = tf.browser.fromPixels(tc);
+        let features = aiModel.infer(tensor, true);
+        tensor.dispose();
+        return features;
+    } catch(e) { return null; }
+}
+
 // ── BATCH INFERENCE ──
 async function megaBatchGPUExecutor() {
     if (isEvaluatingAI || !isAIReady || !autoTrainEnabled) return;
@@ -356,9 +390,8 @@ async function megaBatchGPUExecutor() {
                 let idx = parseInt(imgEl.dataset.index);
                 if (!imgEl.complete || imgEl.naturalWidth === 0) continue;
                 try {
-                    let tensor = tf.browser.fromPixels(imgEl);
-                    let features = aiModel.infer(tensor, true);
-                    tensor.dispose();
+                    let features = getFeatures(imgEl);
+                    if (!features) continue;
                     let res = await knn.predictClass(features);
                     features.dispose();
 
@@ -409,9 +442,8 @@ async function trainAIBrainAsync(task, wrongIndices = []) {
             });
             if (!imgEl.complete || imgEl.naturalWidth === 0) continue;
 
-            let tensor = tf.browser.fromPixels(imgEl);
-            let features = aiModel.infer(tensor, true);
-            tensor.dispose();
+            let features = getFeatures(imgEl);
+            if (!features) continue;
 
             let isSelected = (task.clicks || []).includes(m.index);
             let wasWrong = wrongIndices.includes(m.index);
