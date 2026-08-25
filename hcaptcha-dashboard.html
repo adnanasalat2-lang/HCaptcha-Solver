@@ -156,18 +156,51 @@ let isEvaluatingAI = false;
 let aiRetryCount = 0;
 
 // ── SAFE IMAGE LOADER ──
-// Har image ke liye max 5 sec wait, CORS safe
-function loadImageSafe(src) {
+function loadImageSafe(src, timeoutMs = 5000) {
     return new Promise((resolve) => {
         if (!src || src.trim() === '') return resolve(null);
         let img = new Image();
         img.crossOrigin = "anonymous";
-        let timer = setTimeout(() => { img.src = ''; resolve(null); }, 5000);
+        let timer = setTimeout(() => { img.src = ''; resolve(null); }, timeoutMs);
         img.onload = () => { clearTimeout(timer); resolve(img.naturalWidth > 0 ? img : null); };
         img.onerror = () => { clearTimeout(timer); resolve(null); };
         img.src = src;
     });
 }
+
+// ── IMAGE RETRY ENGINE ──
+// Failed ❌ images ko track karo aur retry karo
+let failedImages = new Map(); // imgEl -> { src, attempts, taskId }
+
+function registerImageForRetry(imgEl, src, taskId) {
+    if (!src || src === BLANK_IMG) return;
+    failedImages.set(imgEl, { src, attempts: 0, taskId });
+}
+
+async function retryFailedImages() {
+    if (failedImages.size === 0) return;
+    for (let [imgEl, info] of failedImages) {
+        // Element DOM mein nahi raha? Remove karo
+        if (!document.body.contains(imgEl)) { failedImages.delete(imgEl); continue; }
+        // Max 5 attempts
+        if (info.attempts >= 5) { failedImages.delete(imgEl); continue; }
+        // Abhi BLANK_IMG show ho raha hai? Retry karo
+        if (imgEl.src.includes('data:image/svg')) {
+            info.attempts++;
+            let result = await loadImageSafe(info.src, 6000);
+            if (result) {
+                imgEl.src = info.src; // loaded! DOM update
+                failedImages.delete(imgEl);
+            }
+            // nahi load hua? agli dafa try hoga
+        } else {
+            failedImages.delete(imgEl); // already loaded
+        }
+    }
+}
+
+// Har 8 sec mein retry karo failed images
+setInterval(retryFailedImages, 8000);
 
 // ── WEBSOCKET ──
 let ws = null;
@@ -356,10 +389,39 @@ async function resetAIBrain() {
 }
 
 // ── AI TRAINING ──
+// Canvas pe image augment karo — brightness/flip vary karke ziada examples banao
+function augmentToCanvas(img, brightness = 1.0, flipH = false, cropFrac = 1.0) {
+    let size = 224;
+    let c = document.createElement('canvas');
+    c.width = size; c.height = size;
+    let ctx = c.getContext('2d');
+    ctx.filter = `brightness(${brightness})`;
+    if (flipH) { ctx.translate(size, 0); ctx.scale(-1, 1); }
+    let cropW = img.naturalWidth * cropFrac, cropH = img.naturalHeight * cropFrac;
+    let cropX = (img.naturalWidth - cropW) / 2, cropY = (img.naturalHeight - cropH) / 2;
+    ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, size, size);
+    return c;
+}
+
 async function trainAIBrainAsync(task) {
     if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let negLabel = 'negative_' + pText;
+
+    // Positive examples ke liye 6 augmentations, negative ke liye 3
+    const posAugs = [
+        [1.0, false, 1.0],
+        [1.0, true,  1.0],  // horizontal flip
+        [1.2, false, 1.0],  // brighter
+        [0.8, false, 1.0],  // darker
+        [1.0, false, 0.85], // center crop
+        [1.1, true,  0.9],  // flip + crop
+    ];
+    const negAugs = [
+        [1.0, false, 1.0],
+        [1.1, false, 1.0],
+        [0.9, true,  1.0],
+    ];
 
     for (let m of task.media) {
         let imgSrc = m.thumb || m.src;
@@ -367,31 +429,44 @@ async function trainAIBrainAsync(task) {
         try {
             let img = await loadImageSafe(imgSrc);
             if (!img) continue;
-            tf.tidy(() => {
-                let tfImg = tf.browser.fromPixels(img);
-                let features = aiModel.infer(tfImg, true);
-                if (task.clicks.includes(m.index)) {
-                    knn.addExample(features, pText);
-                    knn.addExample(features, pText);
-                    knn.addExample(features, pText);
-                } else {
-                    knn.addExample(features, negLabel);
-                }
-            });
-            await tf.nextFrame();
+
+            let isPositive = task.clicks.includes(m.index);
+            let augs = isPositive ? posAugs : negAugs;
+            let label = isPositive ? pText : negLabel;
+
+            for (let [br, flip, crop] of augs) {
+                try {
+                    let canvas = augmentToCanvas(img, br, flip, crop);
+                    tf.tidy(() => {
+                        let tfImg = tf.browser.fromPixels(canvas);
+                        let features = aiModel.infer(tfImg, true);
+                        knn.addExample(features, label);
+                    });
+                    await tf.nextFrame();
+                } catch(e) {}
+            }
         } catch(e) { console.warn('trainAI error:', e); }
     }
     await saveKNN();
-    reEvaluatePending();
+    updateAIStatus();
+    syncStatus.classList.add('active');
+    // Training ke baad turant pending re-check karo
+    setTimeout(() => { if (!isEvaluatingAI) reEvaluatePending(); }, 500);
+}
+
+function showTrainingProgress(done, total) {
+    syncStatus.innerHTML = `⚡ Training ${done}/${total} images...`;
+    syncStatus.classList.remove('active');
 }
 
 async function predictWithAI(task) {
     if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let dataset = knn.getClassExampleCount();
-    if (!dataset[pText] || dataset[pText] < 1) return;
+    // Minimum 9 examples chahiye accurate prediction ke liye (3 augs × 3 images)
+    if (!dataset[pText] || dataset[pText] < 9) return;
 
-    let predictedClicks = [];
+    let scores = []; // { index, conf, negConf }
     for (let m of task.media) {
         let imgSrc = m.thumb || m.src;
         if (!imgSrc) continue;
@@ -407,12 +482,15 @@ async function predictWithAI(task) {
             let resolvedRes = await res;
             let conf = resolvedRes.confidences[pText] || 0;
             let negConf = resolvedRes.confidences['negative_' + pText] || 0;
-            if (resolvedRes.label === pText && conf >= 0.80 && negConf < 0.30) {
-                predictedClicks.push(m.index);
-            }
+            scores.push({ index: m.index, conf, negConf });
             await tf.nextFrame();
         } catch(e) { console.warn('predictAI error:', e); }
     }
+
+    // Strict threshold: conf > 0.85, negConf < 0.20, margin > 0.50
+    let predictedClicks = scores
+        .filter(s => s.conf >= 0.85 && s.negConf < 0.20 && (s.conf - s.negConf) >= 0.50)
+        .map(s => s.index);
 
     if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
         task.clicks = predictedClicks;
@@ -435,17 +513,34 @@ async function predictWithAI(task) {
 async function reEvaluatePending() {
     if (isEvaluatingAI || !isAIReady) return;
     isEvaluatingAI = true;
-    for (let id in serverData.pending) {
-        let t = activeTasksStore[id];
-        if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
-            await Promise.race([
-                predictWithAI(t),
-                new Promise(res => setTimeout(res, 10000))
-            ]);
+    // Safety: 60 sec baad flag khud reset ho jaye chahe kuch bhi ho
+    let safetyTimer = setTimeout(() => { isEvaluatingAI = false; }, 60000);
+    try {
+        for (let id in serverData.pending) {
+            if (!isAIReady || !autoTrainEnabled) break; // baich mein band kar diya to ruk jao
+            let t = activeTasksStore[id];
+            if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
+                await Promise.race([
+                    predictWithAI(t),
+                    new Promise(res => setTimeout(res, 8000))
+                ]);
+            }
         }
-    }
+    } catch(e) { console.warn('reEvaluate error:', e); }
+    clearTimeout(safetyTimer);
     isEvaluatingAI = false;
 }
+
+// Har 30 sec mein khud se pending tasks check karo
+setInterval(() => {
+    if (isAIReady && autoTrainEnabled && !isEvaluatingAI) {
+        let unsolved = Object.keys(serverData.pending).filter(id => {
+            let t = activeTasksStore[id];
+            return t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0);
+        });
+        if (unsolved.length > 0) reEvaluatePending();
+    }
+}, 30000);
 
 // ── TABS ──
 function setTab(tab) {
@@ -468,7 +563,10 @@ function toggleAutoTrain() {
     let btn = document.getElementById('btnAutoTrain');
     btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
     btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
-    if (autoTrainEnabled && isAIReady) reEvaluatePending();
+    if (autoTrainEnabled && isAIReady) {
+        isEvaluatingAI = false; // force reset agar stuck tha
+        reEvaluatePending();
+    }
 }
 
 function toggleAutoSave() {
@@ -559,7 +657,7 @@ function buildCard(t, isTrained = false) {
         t.media.forEach(m => {
             let isSelected = t.clicks.includes(m.index);
             let src = m.thumb || m.src || BLANK_IMG;
-            mediaHTML += `<img src="${src}" class="g-img ${isSelected?'selected':''}" data-index="${m.index}" draggable="false" loading="lazy" onerror="this.onerror=null;this.src='${BLANK_IMG}'"/>`;
+            mediaHTML += `<img src="${src}" class="g-img ${isSelected?'selected':''}" data-index="${m.index}" draggable="false" loading="lazy"/>`;
         });
         mediaHTML += '</div>';
     } else {
@@ -583,8 +681,7 @@ function buildCard(t, isTrained = false) {
                 <img src="${src}"
                      class="s-img ${isVid ? 'vid-player' : ''}"
                      data-id="${t.id}"
-                     draggable="false"
-                     onerror="this.onerror=null;this.src='${BLANK_IMG}';this.style.minHeight='200px'"/>`;
+                     draggable="false"/>`;
         } else {
             // Koi bhi src nahi mili — placeholder dikhao
             mediaHTML = `<div class="single-box"><div class="no-media">⚠️ Media URL nahi mili<br><small style="color:#444">${JSON.stringify(Object.keys(m))}</small></div>`;
@@ -624,6 +721,35 @@ function buildCard(t, isTrained = false) {
         <div class="prompt-container"><div class="example-wrap">${exHtml}</div><div class="task-prompt">${parts[0]}</div></div>
         ${mediaHTML}
         ${actions}`;
+
+    // Failed images ko retry system mein register karo
+    // (setTimeout se karo taake DOM update ho jaye pehle)
+    setTimeout(() => {
+        if (t.type === 'grid') {
+            card.querySelectorAll('.g-img').forEach((imgEl, i) => {
+                let m = t.media[i];
+                if (m) {
+                    let src = m.thumb || m.src || '';
+                    // Retry register karo — onerror pe BLANK_IMG set hogi, retry engine load karega
+                    imgEl.addEventListener('error', () => {
+                        imgEl.src = BLANK_IMG;
+                        registerImageForRetry(imgEl, src, t.id);
+                    }, { once: true });
+                }
+            });
+        } else {
+            let sImg = card.querySelector('.s-img');
+            if (sImg) {
+                let m = t.media[0] || {};
+                let src = m.src || m.url || m.image || m.thumb || '';
+                sImg.addEventListener('error', () => {
+                    sImg.src = BLANK_IMG;
+                    registerImageForRetry(sImg, src, t.id);
+                }, { once: true });
+            }
+        }
+    }, 0);
+
     return card;
 }
 
