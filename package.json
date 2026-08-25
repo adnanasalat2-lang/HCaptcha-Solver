@@ -1,10 +1,10 @@
 {
   "name": "hcaptcha-master-server",
-  "version": "2.0.0",
-  "description": "hCaptcha Solver Backend - Railway Optimized",
+  "version": "3.0.0",
+  "description": "High-Precision hCaptcha Solver Backend",
   "main": "server.js",
   "scripts": {
-    "start": "node --max-old-space-size=400 server.js"
+    "start": "node --max-old-space-size=450 server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
