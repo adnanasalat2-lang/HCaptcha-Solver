@@ -206,7 +206,6 @@ function handleTileUpdate(payload) {
         if (stableHash) target.media[index].stableHash = stableHash;
     }
 
-    // Direct Live Micro-Patch Broadcast
     broadcastDashboard({
         action: 'tile_patch',
         taskId,
@@ -280,4 +279,104 @@ wss.on('connection', (ws) => {
                     counts: {
                         pending: Object.keys(hcaptchaPending).length,
                         trained: Object.keys(hcaptchaTrained).length,
-                        concepts: Object.Aap kis file ya code script ko update karwana chahte hain? Code ya details yahan paste kar dein, aur sath bata dein ke is mein kya changes ya fixes karne hain, main mukammal updated file ready kar deta hoon.
+                        concepts: Object.keys(conceptBank).length
+                    }
+                }));
+                return;
+            }
+
+            if (data.action === 'new_task') {
+                boundTaskId = data.task?.taskId;
+                if (boundTaskId) {
+                    if (!browserSockets.has(boundTaskId)) browserSockets.set(boundTaskId, new Set());
+                    browserSockets.get(boundTaskId).add(ws);
+                }
+                const res = handleNewTask(data.task, ws);
+                ws.send(JSON.stringify({ action: 'new_task_ack', taskId: boundTaskId, ...res }));
+                return;
+            }
+
+            if (data.action === 'tile_update') {
+                handleTileUpdate(data);
+                return;
+            }
+
+            if (data.action === 'register' && data.taskId) {
+                boundTaskId = data.taskId;
+                if (!browserSockets.has(boundTaskId)) browserSockets.set(boundTaskId, new Set());
+                browserSockets.get(boundTaskId).add(ws);
+
+                if (hcaptchaTrained[boundTaskId]) {
+                    ws.send(JSON.stringify({ action: 'solve', taskId: boundTaskId, clicks: hcaptchaTrained[boundTaskId].clicks }));
+                }
+                return;
+            }
+
+            if (data.action === 'submit_task') {
+                handleSubmitTask(data.taskId, data.clicks);
+                return;
+            }
+        } catch (e) {}
+    });
+
+    ws.on('close', () => {
+        if (isDashboard) dashboardSockets.delete(ws);
+        if (boundTaskId && browserSockets.has(boundTaskId)) {
+            const set = browserSockets.get(boundTaskId);
+            set.delete(ws);
+            if (set.size === 0) browserSockets.delete(boundTaskId);
+        }
+    });
+});
+
+app.post('/api/new-hcaptcha', (req, res) => {
+    res.json(handleNewTask(req.body));
+});
+
+app.post('/api/submit-hcaptcha', (req, res) => {
+    res.json(handleSubmitTask(req.body.taskId, req.body.clicks));
+});
+
+app.get('/api/tasks', (req, res) => {
+    const tab = req.query.tab === 'trained' ? 'trained' : 'pending';
+    const page = Math.max(0, parseInt(req.query.page) || 0);
+    const size = Math.min(30, Math.max(1, parseInt(req.query.size) || DASHBOARD_PAGE_SIZE));
+
+    let source = tab === 'trained' ? hcaptchaTrained : hcaptchaPending;
+    let ids = Object.keys(source);
+
+    if (tab === 'trained') ids = ids.reverse();
+    let total = ids.length;
+    let pageIds = ids.slice(page * size, (page + 1) * size);
+    let tasks = {};
+    pageIds.forEach(id => { tasks[id] = source[id]; });
+
+    res.json({ tasks, total, page, pages: Math.ceil(total / size), tab });
+});
+
+app.get('/api/counts', (req, res) => {
+    res.json({
+        pending: Object.keys(hcaptchaPending).length,
+        trained: Object.keys(hcaptchaTrained).length,
+        concepts: Object.keys(conceptBank).length
+    });
+});
+
+app.delete('/api/delete-hcaptcha/:id', (req, res) => {
+    delete hcaptchaPending[req.params.id];
+    delete hcaptchaTrained[req.params.id];
+    rebuildConceptBank(); 
+    persistDatabase();
+    broadcastDashboard({ action: 'task_deleted', taskId: req.params.id });
+    broadcastCounts();
+    res.json({ success: true });
+});
+
+app.get('/', (req, res) => {
+    let f = path.join(__dirname, 'hcaptcha-dashboard.html');
+    if (fs.existsSync(f)) res.sendFile(f);
+    else res.status(404).send('hcaptcha-dashboard.html not found.');
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`🚀 Master Server Live on Port ${PORT}`));
