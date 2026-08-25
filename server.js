@@ -105,13 +105,30 @@ function persistDatabase() {
 }
 
 function evaluateAutoSolve(task) {
+    // 1. Direct match by Task ID
     if (hcaptchaTrained[task.taskId]) {
         return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
     }
 
-    const isVideoOrCoord = task.media && (task.media.length === 1 || task.media[0].type === 'video_frames' || task.media[0].frames);
-    if (isVideoOrCoord) return { solved: false };
+    // 2. Direct match by Fingerprint Hash for Single Canvas/Image
+    if (task.media && task.media.length === 1) {
+        const item = task.media[0];
+        for (let tid in hcaptchaTrained) {
+            const trained = hcaptchaTrained[tid];
+            if (trained.media && trained.media.length === 1) {
+                const trItem = trained.media[0];
+                if (trItem.stableHash && item.stableHash && trItem.stableHash === item.stableHash) {
+                    return { solved: true, clicks: trained.clicks || [] };
+                }
+                if (item.dhash && trItem.dhash && item.dhash !== "0000000000000000" && getHammingDistance(item.dhash, trItem.dhash) <= 1) {
+                    return { solved: true, clicks: trained.clicks || [] };
+                }
+            }
+        }
+        return { solved: false };
+    }
 
+    // 3. Grid Tasks Concept Matching
     let cKey = getCleanKey(task);
     let targetDhashes = conceptBank[cKey];
 
@@ -157,7 +174,9 @@ function notifyBrowsers(taskId, clicks) {
         const sockets = browserSockets.get(taskId);
         const payload = JSON.stringify({ action: 'solve', taskId, clicks });
         sockets.forEach(ws => {
-            if (ws.readyState === WebSocket.OPEN) ws.send(payload);
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(payload);
+            }
         });
         browserSockets.delete(taskId);
     }
@@ -254,6 +273,8 @@ function handleSubmitTask(taskId, clicks) {
 
         delete hcaptchaPending[taskId];
         persistDatabase();
+        
+        // Instant Browser Notification
         notifyBrowsers(taskId, clicks);
 
         broadcastDashboard({ action: 'task_solved', taskId, trainedTask: hcaptchaTrained[taskId] });
