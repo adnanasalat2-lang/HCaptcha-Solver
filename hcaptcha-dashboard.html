@@ -4,13 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — Smooth Multi-Worker</title>
+    <title>hCaptcha Master Pro — 100x GPU Batch Solver</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
     <style>
-        * { box-sizing: border-box; }
-        body { background-color: #0c0c0c; color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; padding: 8px; gap: 8px; margin: 0; }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background-color: #0c0c0c; color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; padding: 8px; gap: 8px; }
         
         .header { background: #181818; padding: 8px 14px; border-bottom: 2px solid #00ff88; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-shrink: 0; border-radius: 4px; }
         .header-left { display: flex; align-items: center; gap: 12px; }
@@ -31,7 +31,6 @@
         .search-box input { padding: 4px 8px; background: #222; border: 1px solid #444; color: #00ff88; border-radius: 4px; font-size: 11px; outline: none; width: 110px; }
 
         .workspace-split { display: flex; gap: 8px; flex: 1; min-height: 0; }
-        
         .column { flex: 1; display: flex; flex-direction: column; background: #141414; border: 1px solid #262626; border-radius: 4px; overflow: hidden; }
         .column-header { padding: 6px 10px; background: #1c1c1c; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; font-weight: bold; font-size: 12px; }
         .col-title-ai { color: #00ff88; }
@@ -39,7 +38,6 @@
         .stream-count { background: #000; padding: 1px 6px; border-radius: 6px; font-size: 11px; color: #fff; }
         
         .task-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
-        
         .task-card { background: #1c1c1c; border: 1px solid #333; border-radius: 4px; padding: 8px; contain: layout; }
         .task-card.ai-processing { border: 2px solid #ff00ff !important; box-shadow: 0 0 8px rgba(255,0,255,0.3); }
         .task-card.in-retrain { border: 2px solid #ff8800 !important; background: #221405 !important; }
@@ -84,7 +82,7 @@
 
 <div class="header">
     <div class="header-left">
-        <h1>⚡ hCaptcha Master Pro</h1>
+        <h1>⚡ hCaptcha Master Pro (Instant Batch Engine)</h1>
         <div class="tabs">
             <button class="tab-btn active" id="btn-pending" onclick="setTab('pending')">Pending <span class="count-badge" id="c-pending">0</span></button>
             <button class="tab-btn" id="btn-trained" onclick="setTab('trained')">Trained <span class="count-badge" id="c-trained">0</span></button>
@@ -148,15 +146,13 @@ let autoTrainEnabled = true, autoSaveEnabled = true;
 let isEvaluatingAI = false;
 let brainSyncTimer = null;
 
-// Background Timer Worker
-const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 600);`], { type: 'text/javascript' });
+// High-Speed Web Worker Loop
+const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 250);`], { type: 'text/javascript' });
 const bgWorker = new Worker(URL.createObjectURL(timerBlob));
 bgWorker.onmessage = () => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ action: 'ping' }));
-    }
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'ping' }));
     if (isAIReady && autoTrainEnabled && !isEvaluatingAI) {
-        reEvaluatePendingParallel();
+        megaBatchGPUExecutor();
     }
 };
 
@@ -189,7 +185,6 @@ function initWS() {
                         let card = buildCard(taskObj);
                         if (isGrid) {
                             gridArea.prepend(card);
-                            if (isAIReady && autoTrainEnabled) predictWithAI(taskObj);
                         } else {
                             manualArea.prepend(card);
                         }
@@ -222,7 +217,7 @@ function updateCountsDisplay() {
     document.getElementById('c-manual').innerText = `${manualArea.children.length} Tasks`;
 }
 
-// AI Storage
+// AI Engine Storage
 async function loadServerBrain() {
     try {
         let r = await fetch(`${SERVER_URL}/api/ai-brain?t=${Date.now()}`);
@@ -270,7 +265,7 @@ async function initAI() {
         await loadServerBrain();
         isAIReady = true;
         updateAIStatus();
-        reEvaluatePendingParallel();
+        megaBatchGPUExecutor();
     } catch(e) {
         syncStatus.innerHTML = "⚠️ AI Fallback";
     }
@@ -287,7 +282,7 @@ function updateAIStatus() {
 }
 
 async function resetAIBrain() {
-    if (confirm("Kya aap Railway volume par saved AI memory reset karna chahte hain?")) {
+    if (confirm("Kya aap AI memory reset karna chahte hain?")) {
         await fetch(`${SERVER_URL}/api/ai-brain`, { method: 'DELETE' });
         if (knn) knn.clearAllClasses();
         location.reload();
@@ -315,7 +310,7 @@ function toggleAutoTrain() {
     let btn = document.getElementById('btnAutoTrain');
     btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
     btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
-    if (autoTrainEnabled && isAIReady) reEvaluatePendingParallel();
+    if (autoTrainEnabled && isAIReady) megaBatchGPUExecutor();
 }
 
 function toggleAutoSave() {
@@ -329,25 +324,87 @@ function getConceptKey(prompt) {
     return (prompt || '').split('|||')[0].trim().toLowerCase().replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ');
 }
 
+// ── FAST GPU BATCH INFERENCE (All 200+ Tasks Simultaneously) ──
+async function megaBatchGPUExecutor() {
+    if (isEvaluatingAI || !isAIReady || !autoTrainEnabled) return;
+    isEvaluatingAI = true;
+
+    try {
+        let dataset = knn.getClassExampleCount();
+        let pendingGrids = Object.values(activeTasksStore).filter(t => 
+            t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0) && !ghostBlocker.has(t.id)
+        );
+
+        if (!pendingGrids.length) { isEvaluatingAI = false; return; }
+
+        // Filter tasks that have at least 1 training example in KNN
+        let trainableTasks = pendingGrids.filter(t => {
+            let k = getConceptKey(t.prompt);
+            return dataset[k] && dataset[k] > 0;
+        });
+
+        if (!trainableTasks.length) { isEvaluatingAI = false; return; }
+
+        // Parallel Image Loader using DOM elements directly (Zero Image Loading Delay)
+        for (let task of trainableTasks) {
+            let pKey = getConceptKey(task.prompt);
+            let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
+            if (!card) continue;
+
+            let imgElements = card.querySelectorAll('.g-img');
+            if (imgElements.length < 9) continue;
+
+            let predictedClicks = [];
+
+            tf.tidy(() => {
+                imgElements.forEach((imgEl, idx) => {
+                    if (imgEl.naturalWidth > 0) {
+                        let tensor = tf.browser.fromPixels(imgEl);
+                        let features = aiModel.infer(tensor, true);
+                        let res = knn.predictClass(features);
+                        
+                        let conf = res.confidences[pKey] || 0;
+                        let negConf = res.confidences['neg_' + pKey] || 0;
+
+                        if (res.label === pKey && conf >= 0.60 && negConf <= 0.40) {
+                            predictedClicks.push(idx);
+                        }
+                    }
+                });
+            });
+
+            if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
+                task.clicks = predictedClicks;
+                card.classList.add('ai-processing');
+                predictedClicks.forEach(idx => {
+                    let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
+                    if (imgEl) imgEl.classList.add('ai-pick');
+                });
+
+                if (autoSaveEnabled) {
+                    sendToServer(task.id, null, card);
+                }
+            }
+        }
+    } catch(e) {}
+
+    isEvaluatingAI = false;
+}
+
+// Train logic
 async function trainAIBrainAsync(task, wrongIndices = []) {
     if (!isAIReady || task.type !== 'grid' || !task.media) return;
     let pKey = getConceptKey(task.prompt);
     let negLabel = 'neg_' + pKey;
+    let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
 
-    for (let m of task.media) {
-        let imgSrc = m.thumb || m.src;
-        if (!imgSrc) continue;
-        try {
-            let img = new Image();
-            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
-            img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 250); });
-            if (!img.complete || img.naturalWidth === 0) continue;
-            
-            tf.tidy(() => {
-                let tfImg = tf.browser.fromPixels(img);
-                let features = aiModel.infer(tfImg, true);
-                
+    tf.tidy(() => {
+        task.media.forEach(m => {
+            let imgEl = card ? card.querySelector(`.g-img[data-index="${m.index}"]`) : null;
+            if (imgEl && imgEl.naturalWidth > 0) {
+                let tensor = tf.browser.fromPixels(imgEl);
+                let features = aiModel.infer(tensor, true);
+
                 let isSelected = (task.clicks || []).includes(m.index);
                 let wasWrong = wrongIndices.includes(m.index);
 
@@ -358,78 +415,12 @@ async function trainAIBrainAsync(task, wrongIndices = []) {
                 } else {
                     knn.addExample(features, negLabel);
                 }
-            });
-            await tf.nextFrame();
-        } catch(e) {}
-    }
+            }
+        });
+    });
+
     scheduleServerBrainSave();
-    reEvaluatePendingParallel();
-}
-
-async function predictWithAI(task) {
-    if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media || (task.clicks && task.clicks.length > 0)) return;
-    let pKey = getConceptKey(task.prompt);
-    let dataset = knn.getClassExampleCount();
-    if (!dataset[pKey] || dataset[pKey] < 1) return;
-
-    let predictedClicks = [];
-    for (let m of task.media) {
-        let imgSrc = m.thumb || m.src;
-        if (!imgSrc) continue;
-        try {
-            let img = new Image();
-            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
-            img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 180); });
-            if (!img.complete || img.naturalWidth === 0) continue;
-            
-            let res = null;
-            tf.tidy(() => {
-                let tfImg = tf.browser.fromPixels(img);
-                let features = aiModel.infer(tfImg, true);
-                res = knn.predictClass(features);
-            });
-            let resolvedRes = await res;
-            let conf = resolvedRes.confidences[pKey] || 0;
-            let negConf = resolvedRes.confidences['neg_' + pKey] || 0;
-            
-            if (resolvedRes.label === pKey && conf >= 0.65 && negConf <= 0.35) {
-                predictedClicks.push(m.index);
-            }
-            await tf.nextFrame();
-        } catch(e) {}
-    }
-
-    if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
-        task.clicks = predictedClicks;
-        let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
-        if (card) {
-            card.classList.add('ai-processing');
-            predictedClicks.forEach(idx => {
-                let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
-                if (imgEl) { imgEl.classList.add('ai-pick'); }
-            });
-            if (autoSaveEnabled) {
-                let btn = card.querySelector('.btn-save');
-                if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Instant Solved'; }
-                sendToServer(task.id, btn, card);
-            }
-        }
-    }
-}
-
-async function reEvaluatePendingParallel() {
-    if (isEvaluatingAI || !isAIReady || !autoTrainEnabled) return;
-    isEvaluatingAI = true;
-
-    let pendingList = Object.values(activeTasksStore).filter(t => t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0));
-    const CHUNK_SIZE = 8;
-    for (let i = 0; i < pendingList.length; i += CHUNK_SIZE) {
-        let chunk = pendingList.slice(i, i + CHUNK_SIZE);
-        await Promise.all(chunk.map(task => predictWithAI(task)));
-        await tf.nextFrame();
-    }
-    isEvaluatingAI = false;
+    megaBatchGPUExecutor();
 }
 
 async function fetchTasks() {
@@ -442,7 +433,6 @@ async function fetchTasks() {
             if (currentTab === 'pending') {
                 serverData.pending = data.tasks || {};
                 renderPendingStreams();
-                if (isAIReady && autoTrainEnabled) reEvaluatePendingParallel();
             } else {
                 serverData.trained = data.tasks || {};
                 renderTrainedStream();
@@ -478,7 +468,7 @@ function renderPendingStreams() {
         }
     }
     updateCountsDisplay();
-    if (isAIReady && autoTrainEnabled) reEvaluatePendingParallel();
+    if (isAIReady && autoTrainEnabled) megaBatchGPUExecutor();
 }
 
 function renderTrainedStream() {
@@ -555,7 +545,6 @@ function buildCard(t, isTrained = false) {
     return card;
 }
 
-// Universal Responsive Click Delegate
 document.addEventListener('click', (e) => {
     let actionBtn = e.target.closest('[data-action]');
     let card = e.target.closest('.task-card');
@@ -671,7 +660,6 @@ document.addEventListener('click', (e) => {
 
     if (isTrainedCard && !isInRetrain) return;
 
-    // Grid Image Click Selection
     if (e.target.classList.contains('g-img')) {
         let idx = parseInt(e.target.dataset.index);
         if (e.target.classList.contains('selected') || e.target.classList.contains('retrain-pick') || e.target.classList.contains('ai-pick')) {
@@ -745,7 +733,6 @@ function filterTasks() {
     });
 }
 
-// Smooth Continuous Video Loop for Animated Challenges
 setInterval(() => {
     videoTasksMap.forEach((entry, tid) => {
         let el = document.querySelector(`.vid-player[data-id="${tid}"]`);
