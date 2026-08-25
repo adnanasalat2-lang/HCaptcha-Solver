@@ -11,20 +11,21 @@ app.use(cors());
 app.use(express.json({ limit: '60mb' }));
 
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ server, perMessageDeflate: false });
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE = path.join(DATA_DIR, 'database.json');
 
 const MAX_PENDING = 60;
 const MAX_TRAINED = 50000;
-const DASHBOARD_PAGE_SIZE = 20;
+const DASHBOARD_PAGE_SIZE = 40;
 
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
 let conceptBank = {};
 
 const browserSockets = new Map();
+const dashboardSockets = new Set();
 
 let redis = null;
 if (process.env.REDIS_URL) {
@@ -103,20 +104,16 @@ function persistDatabase() {
     }, 2000);
 }
 
-// STRICT EVALUATOR: Video tasks must NEVER auto-solve via loose concept text matching
 function evaluateAutoSolve(task) {
-    // 1. Exact Task ID match
     if (hcaptchaTrained[task.taskId]) {
         return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
     }
 
-    // 2. Video / Single Canvas tasks — Strictly require EXACT trained match, no loose concept inference
     const isVideoOrCoord = task.media && (task.media.length === 1 || task.media[0].type === 'video_frames' || task.media[0].frames);
     if (isVideoOrCoord) {
         return { solved: false };
     }
 
-    // 3. Grid Tasks Only (dHash Concept Matching)
     let cKey = getCleanKey(task);
     let targetDhashes = conceptBank[cKey];
 
@@ -139,12 +136,45 @@ function evaluateAutoSolve(task) {
     return { solved: false };
 }
 
+function notifyBrowsers(taskId, clicks) {
+    if (browserSockets.has(taskId)) {
+        const sockets = browserSockets.get(taskId);
+        const payload = JSON.stringify({ action: 'solve', taskId, clicks });
+        sockets.forEach(ws => {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(payload);
+            }
+        });
+        browserSockets.delete(taskId);
+    }
+}
+
+function notifyDashboard(type, data) {
+    if (!dashboardSockets.size) return;
+    const msg = JSON.stringify({ type, data });
+    dashboardSockets.forEach(ws => {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.send(msg);
+        }
+    });
+}
+
+function getCountsData() {
+    return {
+        pending: Object.keys(hcaptchaPending).length,
+        trained: Object.keys(hcaptchaTrained).length,
+        concepts: Object.keys(conceptBank).length
+    };
+}
+
 wss.on('connection', (ws) => {
     let boundTaskId = null;
+    let isDashboard = false;
 
     ws.on('message', (message) => {
         try {
             const data = JSON.parse(message);
+            
             if (data.action === 'register' && data.taskId) {
                 boundTaskId = data.taskId;
                 if (!browserSockets.has(boundTaskId)) {
@@ -159,6 +189,14 @@ wss.on('connection', (ws) => {
                         clicks: hcaptchaTrained[boundTaskId].clicks
                     }));
                 }
+                return;
+            }
+
+            if (data.action === 'dashboard') {
+                isDashboard = true;
+                dashboardSockets.add(ws);
+                ws.send(JSON.stringify({ type: 'counts', data: getCountsData() }));
+                return;
             }
         } catch (e) {}
     });
@@ -169,21 +207,11 @@ wss.on('connection', (ws) => {
             set.delete(ws);
             if (set.size === 0) browserSockets.delete(boundTaskId);
         }
+        if (isDashboard) {
+            dashboardSockets.delete(ws);
+        }
     });
 });
-
-function notifyBrowsers(taskId, clicks) {
-    if (browserSockets.has(taskId)) {
-        const sockets = browserSockets.get(taskId);
-        const payload = JSON.stringify({ action: 'solve', taskId, clicks });
-        sockets.forEach(ws => {
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.send(payload);
-            }
-        });
-        browserSockets.delete(taskId);
-    }
-}
 
 app.post('/api/new-hcaptcha', (req, res) => {
     const task = req.body;
@@ -206,6 +234,9 @@ app.post('/api/new-hcaptcha', (req, res) => {
         media: task.media,
         timestamp: task.timestamp
     };
+
+    notifyDashboard('new_task', hcaptchaPending[task.taskId]);
+    notifyDashboard('counts', getCountsData());
 
     res.json({ success: true, autoSolved: false });
 });
@@ -256,6 +287,8 @@ app.post('/api/submit-hcaptcha', (req, res) => {
         delete hcaptchaPending[taskId];
         persistDatabase();
         notifyBrowsers(taskId, clicks);
+        notifyDashboard('task_solved', { taskId });
+        notifyDashboard('counts', getCountsData());
     }
     res.json({ success: true });
 });
@@ -263,7 +296,7 @@ app.post('/api/submit-hcaptcha', (req, res) => {
 app.get('/api/tasks', (req, res) => {
     const tab = req.query.tab === 'trained' ? 'trained' : 'pending';
     const page = Math.max(0, parseInt(req.query.page) || 0);
-    const size = Math.min(30, Math.max(1, parseInt(req.query.size) || DASHBOARD_PAGE_SIZE));
+    const size = Math.min(40, Math.max(1, parseInt(req.query.size) || DASHBOARD_PAGE_SIZE));
 
     let source = tab === 'trained' ? hcaptchaTrained : hcaptchaPending;
     let ids = Object.keys(source);
@@ -278,11 +311,7 @@ app.get('/api/tasks', (req, res) => {
 });
 
 app.get('/api/counts', (req, res) => {
-    res.json({
-        pending: Object.keys(hcaptchaPending).length,
-        trained: Object.keys(hcaptchaTrained).length,
-        concepts: Object.keys(conceptBank).length
-    });
+    res.json(getCountsData());
 });
 
 app.delete('/api/delete-hcaptcha/:id', (req, res) => {
@@ -290,6 +319,8 @@ app.delete('/api/delete-hcaptcha/:id', (req, res) => {
     delete hcaptchaTrained[req.params.id];
     rebuildConceptBank(); 
     persistDatabase();
+    notifyDashboard('task_deleted', { taskId: req.params.id });
+    notifyDashboard('counts', getCountsData());
     res.json({ success: true });
 });
 
