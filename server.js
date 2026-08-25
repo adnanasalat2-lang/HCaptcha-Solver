@@ -187,10 +187,18 @@ function handleNewTask(task, wsSource) {
 
     let autoRes = evaluateAutoSolve(task);
     if (autoRes.solved) {
+        // Auto-solve ho gaya: Sirf browser ko solution bhejo, Dashboard par mat bhejo
         if (wsSource && wsSource.readyState === WebSocket.OPEN) {
             wsSource.send(JSON.stringify({ action: 'solve', taskId: task.taskId, clicks: autoRes.clicks }));
         }
         notifyBrowsers(task.taskId, autoRes.clicks);
+        
+        // Agar pehle ghalti se pending mein tha toh delete karo aur dashboard se remove karo
+        if (hcaptchaPending[task.taskId]) {
+            delete hcaptchaPending[task.taskId];
+            broadcastDashboard({ action: 'task_solved', taskId: task.taskId });
+            broadcastCounts();
+        }
         return { success: true, autoSolved: true, clicks: autoRes.clicks };
     }
 
@@ -274,7 +282,6 @@ function handleSubmitTask(taskId, clicks) {
         delete hcaptchaPending[taskId];
         persistDatabase();
         
-        // Instant Browser Notification
         notifyBrowsers(taskId, clicks);
 
         broadcastDashboard({ action: 'task_solved', taskId, trainedTask: hcaptchaTrained[taskId] });
