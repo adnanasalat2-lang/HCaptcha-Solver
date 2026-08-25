@@ -238,7 +238,6 @@ function dispatchTaskToWorker(taskData) {
 function handleNewTask(task, wsSource) {
     if (!task || !task.taskId) return { success: false };
 
-    // Prevent duplicate tasks already pending or assigned
     if (hcaptchaPending[task.taskId]) {
         return { success: true, autoSolved: false };
     }
@@ -340,7 +339,8 @@ function handleSubmitTask(taskId, clicks) {
         persistDatabase();
         notifyBrowsers(taskId, clicks);
 
-        const solveMsg = JSON.stringify({ action: 'task_solved', taskId, trainedTask: hcaptchaTrained[taskId] });
+        // Broadcast remove command to all active dashboards so no lingering cards remain
+        const solveMsg = JSON.stringify({ action: 'task_solved', taskId });
         activeWorkers.forEach((meta, ws) => {
             meta.assignedTasks.delete(taskId);
             if (ws.readyState === WebSocket.OPEN) ws.send(solveMsg);
