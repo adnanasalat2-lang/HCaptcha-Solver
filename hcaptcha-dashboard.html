@@ -91,7 +91,8 @@
     <div class="ai-bar">
         <span class="live-status" id="wsStatus">🔴 Offline</span>
         <span class="sync-status" id="syncStatus">🧠 AI Ready</span>
-        <button id="btnAutoTrain" class="btn-toggle on" onclick="toggleAutoTrain()">🧠 AI Suggestions: ON</button>
+        <button id="btnAutoTrain" class="btn-toggle on" onclick="toggleAutoTrain()">🧠 Auto Train: ON</button>
+        <button id="btnAutoSave" class="btn-toggle on" onclick="toggleAutoSave()">💾 Auto Save: ON</button>
         <button class="btn-clear-ai" onclick="resetAIBrain()">🧹 Reset Brain</button>
         <div class="search-box">
             <input type="text" id="searchInput" oninput="filterTasks()" placeholder="🔍 Task ID..."/>
@@ -141,10 +142,9 @@ let isFetching = false;
 let trainedPage = 0;
 
 let isAIReady = false, aiModel, knn;
-let autoTrainEnabled = true;
+let autoTrainEnabled = true, autoSaveEnabled = true;
 let isEvaluatingAI = false;
 
-// ── Anti-Throttle Background Web Worker ──
 const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 1000);`], { type: 'text/javascript' });
 const bgWorker = new Worker(URL.createObjectURL(timerBlob));
 bgWorker.onmessage = () => {
@@ -153,7 +153,6 @@ bgWorker.onmessage = () => {
     }
 };
 
-// ── WEBSOCKET LIVE ENGINE ──
 let ws = null;
 function initWS() {
     if (ws && ws.readyState < 2) return;
@@ -233,13 +232,13 @@ function updateAIStatus() {
     if (!knn) return;
     try {
         let ds = knn.getClassExampleCount();
-        let concepts = Object.keys(ds).filter(k => !k.startsWith('negative_')).length;
+        let concepts = Object.keys(ds).filter(k => !k.startsWith('neg_')).length;
         syncStatus.innerHTML = `🤖 AI Ready ✅ (${concepts} Concepts)`;
         syncStatus.classList.add('active');
     } catch(e) {}
 }
 
-const IDB = { name:'hcm_knn_master', store:'knn', key:'model_v7' };
+const IDB = { name:'hcm_knn_master', store:'knn', key:'model_v9' };
 function idbOpen() {
     return new Promise((res,rej)=>{
         let r = indexedDB.open(IDB.name,1);
@@ -313,15 +312,36 @@ function toggleAutoTrain() {
     autoTrainEnabled = !autoTrainEnabled;
     let btn = document.getElementById('btnAutoTrain');
     btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
-    btn.textContent = '🧠 AI Suggestions: ' + (autoTrainEnabled ? 'ON' : 'OFF');
+    btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
     if (autoTrainEnabled && isAIReady) reEvaluatePending();
 }
 
-// ── FAST-LEARNING ENGINE (6x Boosted Weights & Retrain Penalty) ──
+function toggleAutoSave() {
+    autoSaveEnabled = !autoSaveEnabled;
+    let btn = document.getElementById('btnAutoSave');
+    btn.className = 'btn-toggle' + (autoSaveEnabled ? ' on' : '');
+    btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
+}
+
+// Simple hash for prompt string
+function fnv1a(str) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = (h * 0x01000193) >>> 0; }
+    return h.toString(36);
+}
+
+function getConceptKey(prompt) {
+    let parts = (prompt || '').split('|||');
+    let text = parts[0].trim().toLowerCase().replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ');
+    let exSnippet = parts[1] ? ("_EX" + fnv1a(parts[1].substring(0, 150))) : "";
+    return text + exSnippet;
+}
+
+// ── 10X BOOSTED LEARNER (Instant 1-Click Concept Registration) ──
 async function trainAIBrainAsync(task, wrongIndices = []) {
     if (!isAIReady || task.type !== 'grid' || !task.media) return;
-    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
-    let negLabel = 'negative_' + pText;
+    let pKey = getConceptKey(task.prompt);
+    let negLabel = 'neg_' + pKey;
 
     for (let m of task.media) {
         let imgSrc = m.thumb || m.src;
@@ -338,14 +358,12 @@ async function trainAIBrainAsync(task, wrongIndices = []) {
                 let features = aiModel.infer(tfImg, true);
                 
                 let isSelected = (task.clicks || []).includes(m.index);
-                let wasWrongSelection = wrongIndices.includes(m.index);
+                let wasWrong = wrongIndices.includes(m.index);
 
                 if (isSelected) {
-                    // 6x Positive Training
-                    for (let i = 0; i < 6; i++) knn.addExample(features, pText);
-                } else if (wasWrongSelection) {
-                    // 8x Negative Penalty for corrected mistake
-                    for (let i = 0; i < 8; i++) knn.addExample(features, negLabel);
+                    for (let i = 0; i < 10; i++) knn.addExample(features, pKey);
+                } else if (wasWrong) {
+                    for (let i = 0; i < 12; i++) knn.addExample(features, negLabel);
                 } else {
                     knn.addExample(features, negLabel);
                 }
@@ -357,12 +375,12 @@ async function trainAIBrainAsync(task, wrongIndices = []) {
     reEvaluatePending();
 }
 
-// ── STRICT HIGH-PRECISION PREDICTOR (0% Guesswork) ──
+// ── DYNAMIC PREDICTOR ──
 async function predictWithAI(task) {
     if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
-    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
+    let pKey = getConceptKey(task.prompt);
     let dataset = knn.getClassExampleCount();
-    if (!dataset[pText] || dataset[pText] < 1) return;
+    if (!dataset[pKey] || dataset[pKey] < 1) return;
 
     let predictedClicks = [];
     for (let m of task.media) {
@@ -382,26 +400,30 @@ async function predictWithAI(task) {
                 res = knn.predictClass(features);
             });
             let resolvedRes = await res;
-            let conf = resolvedRes.confidences[pText] || 0;
-            let negConf = resolvedRes.confidences['negative_' + pText] || 0;
+            let conf = resolvedRes.confidences[pKey] || 0;
+            let negConf = resolvedRes.confidences['neg_' + pKey] || 0;
             
-            // Ultra-Strict: Must be >= 88% sure with near-zero negative confidence
-            if (resolvedRes.label === pText && conf >= 0.88 && negConf <= 0.15) {
+            if (resolvedRes.label === pKey && conf >= 0.70 && negConf <= 0.25) {
                 predictedClicks.push(m.index);
             }
             await tf.nextFrame();
         } catch(e) {}
     }
 
-    if (predictedClicks.length >= 1 && predictedClicks.length <= 6) {
+    if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
+        task.clicks = predictedClicks;
         let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
         if (card) {
             card.classList.add('ai-processing');
-            task.clicks = [...predictedClicks];
             predictedClicks.forEach(idx => {
                 let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
                 if (imgEl) { imgEl.classList.add('ai-pick'); }
             });
+            if (autoSaveEnabled) {
+                let btn = card.querySelector('.btn-save');
+                if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Instant Solved'; }
+                sendToServer(task.id, btn, card);
+            }
         }
     }
 }
@@ -708,7 +730,6 @@ function sendToServer(taskId, btnEl, card) {
     delete activeTasksStore[taskId];
     updateCountsDisplay();
 
-    // 6x Boosted Learning on Manual Save
     if (isAIReady && t.type === 'grid' && t.clicks.length > 0) {
         trainAIBrainAsync(t);
     }
