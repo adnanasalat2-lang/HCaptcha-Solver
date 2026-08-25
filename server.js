@@ -4,7 +4,6 @@ const WebSocket = require('ws');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
-const Redis = require('ioredis');
 
 const app = express();
 app.use(cors());
@@ -17,9 +16,8 @@ const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE = path.join(DATA_DIR, 'database.json');
 const KNN_BRAIN_FILE = path.join(DATA_DIR, 'knn_brain.json');
 
-const MAX_PENDING = 100;
+const MAX_PENDING = 80;
 const MAX_TRAINED = 50000;
-const DASHBOARD_PAGE_SIZE = 20;
 
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
@@ -30,15 +28,13 @@ const taskAssignments = new Map();
 const browserSockets = new Map();
 const activeWorkers = new Map();
 
-let gridWorkerIndex = 0;
-let manualWorkerIndex = 0;
+let roundRobinWorkerIndex = 0;
 
-let redis = null;
-if (process.env.REDIS_URL) {
-    try {
-        redis = new Redis(process.env.REDIS_URL, { retryStrategy: () => 2000, lazyConnect: true });
-        redis.connect().then(() => console.log('✅ Redis Connected')).catch(() => {});
-    } catch(e) {}
+function isGridTask(task) {
+    if (!task || !task.media || task.media.length < 4) return false;
+    let p = (task.prompt || "").toLowerCase();
+    if (p.includes('drag') || p.includes('move') || p.includes('pattern') || p.includes('fit') || p.includes('spot')) return false;
+    return task.media.every(m => m.type === 'image');
 }
 
 function getCleanKey(task) {
@@ -46,55 +42,17 @@ function getCleanKey(task) {
     return "TXT_" + p;
 }
 
-function isActualGridTask(task) {
-    if (!task || !task.media || task.media.length <= 1) return false;
-    // Check if task is canvas/video/drag
-    let hasVideoOrCanvas = task.media.some(m => m.type === 'video_frames' || m.type === 'single_image' || m.type === 'canvas');
-    if (hasVideoOrCanvas) return false;
-    let p = (task.prompt || "").toLowerCase();
-    if (p.includes('drag') || p.includes('move') || p.includes('fit') || p.includes('place') || p.includes('pattern') || p.includes('spot')) {
-        return false;
-    }
-    // Only standard 2x2, 3x3, 4x4 image selections are grids
-    return task.media.length === 4 || task.media.length === 9 || task.media.length === 16;
-}
-
-function dhashToBigInt(hexOrBin) {
-    if (!hexOrBin || hexOrBin === "0000000000000000") return null;
-    if (/^[01]+$/.test(hexOrBin)) return BigInt('0b' + hexOrBin);
-    try { return BigInt('0x' + hexOrBin); } catch(e) { return null; }
-}
-
-function getHammingDistance(h1, h2) {
-    if (!h1 || !h2 || h1.length !== h2.length) return 999;
-    const b1 = dhashToBigInt(h1);
-    const b2 = dhashToBigInt(h2);
-    if (b1 !== null && b2 !== null) {
-        let xor = b1 ^ b2;
-        let diff = 0;
-        while (xor > 0n) { diff += Number(xor & 1n); xor >>= 1n; }
-        return diff;
-    }
-    let diff = 0;
-    for (let i = 0; i < h1.length; i++) { if (h1[i] !== h2[i]) diff++; }
-    return diff;
-}
-
 function rebuildConceptBank() {
     conceptBank = {};
     for (let id in hcaptchaTrained) {
-        _addToConceptBank(hcaptchaTrained[id]);
+        let cKey = getCleanKey(hcaptchaTrained[id]);
+        if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
+        (hcaptchaTrained[id].clicks || []).forEach(idx => {
+            if (typeof idx === 'number' && hcaptchaTrained[id].media && hcaptchaTrained[id].media[idx]?.dhash) {
+                conceptBank[cKey].add(hcaptchaTrained[id].media[idx].dhash);
+            }
+        });
     }
-}
-
-function _addToConceptBank(tr) {
-    let cKey = getCleanKey(tr);
-    if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
-    (tr.clicks || []).forEach(idx => {
-        if (typeof idx === 'number' && tr.media && tr.media[idx] && tr.media[idx].dhash && tr.media[idx].dhash !== "0000000000000000") {
-            conceptBank[cKey].add(tr.media[idx].dhash);
-        }
-    });
 }
 
 function initDB() {
@@ -105,15 +63,10 @@ function initDB() {
             hcaptchaPending = {};
             hcaptchaTrained = data.trained || {};
             rebuildConceptBank();
-            console.log(`[DB] Engine Loaded. Trained: ${Object.keys(hcaptchaTrained).length}`);
-        } catch (e) {
-            console.error("[DB] Error loading database:", e.message);
-        }
+        } catch (e) {}
     }
     if (fs.existsSync(KNN_BRAIN_FILE)) {
-        try {
-            centralizedKnnDataset = JSON.parse(fs.readFileSync(KNN_BRAIN_FILE, 'utf8'));
-        } catch(e) {}
+        try { centralizedKnnDataset = JSON.parse(fs.readFileSync(KNN_BRAIN_FILE, 'utf8')); } catch(e) {}
     }
 }
 initDB();
@@ -127,72 +80,34 @@ function persistDatabase() {
     }, 2000);
 }
 
-function evaluateAutoSolve(task) {
-    if (hcaptchaTrained[task.taskId]) {
-        return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
-    }
-
-    if (task.media && task.media.length === 1) {
-        const item = task.media[0];
-        for (let tid in hcaptchaTrained) {
-            const trained = hcaptchaTrained[tid];
-            if (trained.media && trained.media.length === 1) {
-                const trItem = trained.media[0];
-                if (trItem.stableHash && item.stableHash && trItem.stableHash === item.stableHash) {
-                    return { solved: true, clicks: trained.clicks || [] };
-                }
-                if (item.dhash && trItem.dhash && item.dhash !== "0000000000000000" && getHammingDistance(item.dhash, trItem.dhash) <= 1) {
-                    return { solved: true, clicks: trained.clicks || [] };
-                }
-            }
-        }
-        return { solved: false };
-    }
-
-    let cKey = getCleanKey(task);
-    let targetDhashes = conceptBank[cKey];
-
-    if (targetDhashes && targetDhashes.size > 0 && isActualGridTask(task)) {
-        let matchedClicks = [];
-        task.media.forEach((item, idx) => {
-            if (!item.dhash || item.dhash === "0000000000000000") return;
-            for (let savedHash of targetDhashes) {
-                if (getHammingDistance(item.dhash, savedHash) <= 2) {
-                    matchedClicks.push(idx);
-                    break;
-                }
-            }
-        });
-
-        if (matchedClicks.length >= 2 && matchedClicks.length <= 5) {
-            return { solved: true, clicks: matchedClicks };
-        }
-    }
-    return { solved: false };
-}
-
-function getOnlineWorkers(mode) {
+function getOnlineWorkers(preferredMode) {
     let list = [];
     activeWorkers.forEach((meta, ws) => {
-        if (ws.readyState === WebSocket.OPEN && meta.mode === mode) {
+        if (ws.readyState === WebSocket.OPEN && meta.mode === preferredMode) {
             list.push({ ws, meta });
         }
     });
+    if (list.length === 0) {
+        activeWorkers.forEach((meta, ws) => {
+            if (ws.readyState === WebSocket.OPEN) list.push({ ws, meta });
+        });
+    }
     return list;
 }
 
 function broadcastCounts() {
-    let gridWorkers = getOnlineWorkers('grid').map(w => w.meta.name);
-    let manualWorkers = getOnlineWorkers('manual').map(w => w.meta.name);
+    let gridWorkers = 0, manualWorkers = 0;
+    activeWorkers.forEach(meta => {
+        if (meta.mode === 'grid') gridWorkers++; else manualWorkers++;
+    });
 
     const payload = JSON.stringify({
         action: 'counts_update',
         counts: {
             pending: Object.keys(hcaptchaPending).length,
             trained: Object.keys(hcaptchaTrained).length,
-            concepts: Object.keys(conceptBank).length,
-            gridWorkersOnline: gridWorkers.length,
-            manualWorkersOnline: manualWorkers.length
+            gridWorkersOnline: gridWorkers,
+            manualWorkersOnline: manualWorkers
         }
     });
 
@@ -205,33 +120,18 @@ function notifyBrowsers(taskId, clicks) {
     if (browserSockets.has(taskId)) {
         const sockets = browserSockets.get(taskId);
         const payload = JSON.stringify({ action: 'solve', taskId, clicks });
-        sockets.forEach(ws => {
-            if (ws.readyState === WebSocket.OPEN) ws.send(payload);
-        });
+        sockets.forEach(ws => { if (ws.readyState === WebSocket.OPEN) ws.send(payload); });
         browserSockets.delete(taskId);
     }
 }
 
 function dispatchTaskToWorker(taskData) {
-    let isGrid = isActualGridTask(taskData);
-    let targetMode = isGrid ? 'grid' : 'manual';
+    let targetMode = isGridTask(taskData) ? 'grid' : 'manual';
     let workers = getOnlineWorkers(targetMode);
-
-    // Fallback: If no workers in preferred mode, check if other mode workers are available
-    if (workers.length === 0) {
-        workers = getOnlineWorkers(targetMode === 'grid' ? 'manual' : 'grid');
-    }
-
     if (workers.length === 0) return;
 
-    let targetWorker = null;
-    if (targetMode === 'grid') {
-        gridWorkerIndex = (gridWorkerIndex + 1) % workers.length;
-        targetWorker = workers[gridWorkerIndex];
-    } else {
-        manualWorkerIndex = (manualWorkerIndex + 1) % workers.length;
-        targetWorker = workers[manualWorkerIndex];
-    }
+    roundRobinWorkerIndex = (roundRobinWorkerIndex + 1) % workers.length;
+    let targetWorker = workers[roundRobinWorkerIndex];
 
     if (targetWorker && targetWorker.ws.readyState === WebSocket.OPEN) {
         taskAssignments.set(taskData.id, targetWorker.ws);
@@ -243,27 +143,14 @@ function dispatchTaskToWorker(taskData) {
 function handleNewTask(task, wsSource) {
     if (!task || !task.taskId) return { success: false };
 
-    let autoRes = evaluateAutoSolve(task);
-    if (autoRes.solved) {
+    // Auto solve by direct ID match
+    if (hcaptchaTrained[task.taskId]) {
+        let clicks = hcaptchaTrained[task.taskId].clicks || [];
         if (wsSource && wsSource.readyState === WebSocket.OPEN) {
-            wsSource.send(JSON.stringify({ action: 'solve', taskId: task.taskId, clicks: autoRes.clicks }));
+            wsSource.send(JSON.stringify({ action: 'solve', taskId: task.taskId, clicks }));
         }
-        notifyBrowsers(task.taskId, autoRes.clicks);
-        return { success: true, autoSolved: true, clicks: autoRes.clicks };
-    }
-
-    const keys = Object.keys(hcaptchaPending);
-    if (keys.length >= MAX_PENDING) {
-        let deletedKeys = keys.slice(0, 15);
-        deletedKeys.forEach(k => {
-            delete hcaptchaPending[k];
-            taskAssignments.delete(k);
-        });
-        activeWorkers.forEach((_, ws) => {
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ action: 'bulk_remove_pending', taskIds: deletedKeys }));
-            }
-        });
+        notifyBrowsers(task.taskId, clicks);
+        return { success: true, autoSolved: true, clicks };
     }
 
     const taskData = {
@@ -292,36 +179,21 @@ function handleSubmitTask(taskId, clicks) {
             thumb: m.thumb || (m.frames ? m.frames[0] : "")
         }));
 
-        let cKey = getCleanKey(source);
-        if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
-
-        clicks.forEach(idx => {
-            if (typeof idx === 'number' && lightMedia[idx] && lightMedia[idx].dhash && lightMedia[idx].dhash !== "0000000000000000") {
-                conceptBank[cKey].add(lightMedia[idx].dhash);
-            }
-        });
-
         hcaptchaTrained[taskId] = {
             id: taskId,
             prompt: source.prompt,
-            conceptKey: cKey,
+            conceptKey: getCleanKey(source),
             media: lightMedia,
             clicks: clicks,
             trainedAt: new Date().toISOString()
         };
-
-        const trainedKeys = Object.keys(hcaptchaTrained);
-        if (trainedKeys.length > MAX_TRAINED) {
-            const oldest = trainedKeys.slice(0, trainedKeys.length - MAX_TRAINED);
-            oldest.forEach(k => delete hcaptchaTrained[k]);
-        }
 
         delete hcaptchaPending[taskId];
         taskAssignments.delete(taskId);
         persistDatabase();
         notifyBrowsers(taskId, clicks);
 
-        const solveMsg = JSON.stringify({ action: 'task_solved', taskId, trainedTask: hcaptchaTrained[taskId] });
+        const solveMsg = JSON.stringify({ action: 'task_solved', taskId });
         activeWorkers.forEach((meta, ws) => {
             meta.assignedTasks.delete(taskId);
             if (ws.readyState === WebSocket.OPEN) ws.send(solveMsg);
@@ -341,18 +213,15 @@ wss.on('connection', (ws) => {
 
             if (data.action === 'register_dashboard') {
                 const workerMeta = {
-                    name: data.workerName || 'Worker_' + Math.floor(Math.random()*1000),
-                    mode: data.mode || 'grid',
+                    name: data.workerName || 'Worker_' + Math.floor(Math.random()*100),
+                    mode: data.mode || 'manual',
                     assignedTasks: new Set()
                 };
                 activeWorkers.set(ws, workerMeta);
 
-                let isGrid = workerMeta.mode === 'grid';
                 let availablePending = {};
-                
                 Object.values(hcaptchaPending).forEach(task => {
-                    let taskIsGrid = isActualGridTask(task);
-                    if (((isGrid && taskIsGrid) || (!isGrid && !taskIsGrid)) && !taskAssignments.has(task.id)) {
+                    if (!taskAssignments.has(task.id)) {
                         taskAssignments.set(task.id, ws);
                         workerMeta.assignedTasks.add(task.id);
                         availablePending[task.id] = task;
@@ -365,8 +234,7 @@ wss.on('connection', (ws) => {
                     knnBrain: centralizedKnnDataset,
                     counts: {
                         pending: Object.keys(hcaptchaPending).length,
-                        trained: Object.keys(hcaptchaTrained).length,
-                        concepts: Object.keys(conceptBank).length
+                        trained: Object.keys(hcaptchaTrained).length
                     }
                 }));
 
@@ -377,7 +245,6 @@ wss.on('connection', (ws) => {
             if (data.action === 'sync_knn_update' && data.knnUpdates) {
                 Object.assign(centralizedKnnDataset, data.knnUpdates);
                 persistDatabase();
-                
                 const syncPayload = JSON.stringify({ action: 'knn_sync_broadcast', knnUpdates: data.knnUpdates });
                 activeWorkers.forEach((meta, clientWs) => {
                     if (clientWs !== ws && clientWs.readyState === WebSocket.OPEN && meta.mode === 'grid') {
@@ -402,7 +269,6 @@ wss.on('connection', (ws) => {
                 boundTaskId = data.taskId;
                 if (!browserSockets.has(boundTaskId)) browserSockets.set(boundTaskId, new Set());
                 browserSockets.get(boundTaskId).add(ws);
-
                 if (hcaptchaTrained[boundTaskId]) {
                     ws.send(JSON.stringify({ action: 'solve', taskId: boundTaskId, clicks: hcaptchaTrained[boundTaskId].clicks }));
                 }
@@ -419,17 +285,13 @@ wss.on('connection', (ws) => {
     ws.on('close', () => {
         if (activeWorkers.has(ws)) {
             const leavingWorker = activeWorkers.get(ws);
-            const orphanedTasks = Array.from(leavingWorker.assignedTasks);
             activeWorkers.delete(ws);
-
-            orphanedTasks.forEach(tid => {
+            leavingWorker.assignedTasks.forEach(tid => {
                 taskAssignments.delete(tid);
                 if (hcaptchaPending[tid]) dispatchTaskToWorker(hcaptchaPending[tid]);
             });
-
             broadcastCounts();
         }
-
         if (boundTaskId && browserSockets.has(boundTaskId)) {
             const set = browserSockets.get(boundTaskId);
             set.delete(ws);
@@ -442,31 +304,14 @@ app.post('/api/new-hcaptcha', (req, res) => res.json(handleNewTask(req.body)));
 app.post('/api/submit-hcaptcha', (req, res) => res.json(handleSubmitTask(req.body.taskId, req.body.clicks)));
 
 app.get('/api/tasks', (req, res) => {
-    const tab = req.query.tab === 'trained' ? 'trained' : 'pending';
-    const page = Math.max(0, parseInt(req.query.page) || 0);
-    const size = Math.min(30, Math.max(1, parseInt(req.query.size) || DASHBOARD_PAGE_SIZE));
-
-    let source = tab === 'trained' ? hcaptchaTrained : hcaptchaPending;
-    let ids = Object.keys(source);
-
-    if (tab === 'trained') ids = ids.reverse();
-    let total = ids.length;
-    let pageIds = ids.slice(page * size, (page + 1) * size);
-    let tasks = {};
-    pageIds.forEach(id => { tasks[id] = source[id]; });
-
-    res.json({ tasks, total, page, pages: Math.ceil(total / size), tab });
+    let source = req.query.tab === 'trained' ? hcaptchaTrained : hcaptchaPending;
+    res.json({ tasks: source, total: Object.keys(source).length });
 });
 
 app.get('/api/counts', (req, res) => {
-    let gridWorkers = getOnlineWorkers('grid').map(w => w.meta.name);
-    let manualWorkers = getOnlineWorkers('manual').map(w => w.meta.name);
     res.json({
         pending: Object.keys(hcaptchaPending).length,
-        trained: Object.keys(hcaptchaTrained).length,
-        concepts: Object.keys(conceptBank).length,
-        gridWorkersOnline: gridWorkers.length,
-        manualWorkersOnline: manualWorkers.length
+        trained: Object.keys(hcaptchaTrained).length
     });
 });
 
@@ -474,15 +319,11 @@ app.delete('/api/delete-hcaptcha/:id', (req, res) => {
     delete hcaptchaPending[req.params.id];
     delete hcaptchaTrained[req.params.id];
     taskAssignments.delete(req.params.id);
-    rebuildConceptBank(); 
     persistDatabase();
-    
-    const delMsg = JSON.stringify({ action: 'task_deleted', taskId: req.params.id });
     activeWorkers.forEach((meta, ws) => {
         meta.assignedTasks.delete(req.params.id);
-        if (ws.readyState === WebSocket.OPEN) ws.send(delMsg);
+        if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'task_deleted', taskId: req.params.id }));
     });
-
     broadcastCounts();
     res.json({ success: true });
 });
