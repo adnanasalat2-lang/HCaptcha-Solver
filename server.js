@@ -1,259 +1,303 @@
-// ============================================================
-// server.js — Strict Exact-Match Auto-Solver & AI Storage
-// ============================================================
-'use strict';
-
 const express = require('express');
-const http    = require('http');
-const WS      = require('ws');
-const cors    = require('cors');
-const fs      = require('fs');
-const path    = require('path');
+const http = require('http');
+const WebSocket = require('ws');
+const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
+const Redis = require('ioredis');
 
-const app    = express();
-const server = http.createServer(app);
-
+const app = express();
 app.use(cors());
-app.use(express.json({ limit: '45mb' }));
+app.use(express.json({ limit: '60mb' }));
 
-const wss = new WS.Server({ server, perMessageDeflate: false });
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
-const DB_FILE  = path.join(DATA_DIR, 'database.json');
-const AI_FILE  = path.join(DATA_DIR, 'ai_brain.json');
+const DB_FILE = path.join(DATA_DIR, 'database.json');
 
 const MAX_PENDING = 60;
-let pending   = {};
-let trained   = {};
-let aiBrainDS = {};
+const MAX_TRAINED = 50000;
+const DASHBOARD_PAGE_SIZE = 20;
 
-const bMap = new Map(); // taskId -> Extension WS
-const dSet = new Set(); // Dashboard WS
+let hcaptchaPending = {};
+let hcaptchaTrained = {};
+let conceptBank = {};
+
+const browserSockets = new Map();
+
+let redis = null;
+if (process.env.REDIS_URL) {
+    try {
+        redis = new Redis(process.env.REDIS_URL, { retryStrategy: () => 2000, lazyConnect: true });
+        redis.connect().then(() => console.log('✅ Redis Connected')).catch(() => {});
+    } catch(e) {}
+}
+
+function getCleanKey(task) {
+    let p = (task.prompt || "").split("|||")[0].trim().toLowerCase();
+    return "TXT_" + p;
+}
+
+function dhashToBigInt(hexOrBin) {
+    if (!hexOrBin || hexOrBin === "0000000000000000") return null;
+    if (/^[01]+$/.test(hexOrBin)) return BigInt('0b' + hexOrBin);
+    try { return BigInt('0x' + hexOrBin); } catch(e) { return null; }
+}
+
+function getHammingDistance(h1, h2) {
+    if (!h1 || !h2 || h1.length !== h2.length) return 999;
+    const b1 = dhashToBigInt(h1);
+    const b2 = dhashToBigInt(h2);
+    if (b1 !== null && b2 !== null) {
+        let xor = b1 ^ b2;
+        let diff = 0;
+        while (xor > 0n) { diff += Number(xor & 1n); xor >>= 1n; }
+        return diff;
+    }
+    let diff = 0;
+    for (let i = 0; i < h1.length; i++) { if (h1[i] !== h2[i]) diff++; }
+    return diff;
+}
+
+function rebuildConceptBank() {
+    conceptBank = {};
+    for (let id in hcaptchaTrained) {
+        _addToConceptBank(hcaptchaTrained[id]);
+    }
+}
+
+function _addToConceptBank(tr) {
+    let cKey = getCleanKey(tr);
+    if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
+    (tr.clicks || []).forEach(idx => {
+        if (typeof idx === 'number' && tr.media && tr.media[idx] && tr.media[idx].dhash && tr.media[idx].dhash !== "0000000000000000") {
+            conceptBank[cKey].add(tr.media[idx].dhash);
+        }
+    });
+}
 
 function initDB() {
     if (fs.existsSync(DB_FILE)) {
         try {
-            let d = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-            trained = d.trained || {};
-            console.log(`[DB] Trained tasks in memory: ${Object.keys(trained).length}`);
-        } catch(e) {}
+            const raw = fs.readFileSync(DB_FILE, 'utf8');
+            const data = JSON.parse(raw);
+            hcaptchaPending = {};
+            hcaptchaTrained = data.trained || {};
+            rebuildConceptBank();
+            console.log(`[DB] Engine Loaded. Trained: ${Object.keys(hcaptchaTrained).length}`);
+        } catch (e) {
+            console.error("[DB] Error loading database:", e.message);
+        }
     }
-    if (fs.existsSync(AI_FILE)) {
-        try {
-            aiBrainDS = JSON.parse(fs.readFileSync(AI_FILE, 'utf8'));
-        } catch(e) {}
+}
+initDB();
+
+let saveTimeout = null;
+function persistDatabase() {
+    if (saveTimeout) clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => {
+        fs.writeFile(DB_FILE, JSON.stringify({ trained: hcaptchaTrained }), 'utf8', (err) => {
+            if (err) console.error('[DB] PERSIST ERROR:', err.message);
+        });
+    }, 2000);
+}
+
+// STRICT EVALUATOR: Video tasks must NEVER auto-solve via loose concept text matching
+function evaluateAutoSolve(task) {
+    // 1. Exact Task ID match
+    if (hcaptchaTrained[task.taskId]) {
+        return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
     }
-}
 
-let _saveTimer = null;
-function saveDB() {
-    if (_saveTimer) clearTimeout(_saveTimer);
-    _saveTimer = setTimeout(() => {
-        try { 
-            fs.writeFileSync(DB_FILE, JSON.stringify({ trained }), 'utf8'); 
-        } catch(e) {}
-    }, 1200);
-}
+    // 2. Video / Single Canvas tasks — Strictly require EXACT trained match, no loose concept inference
+    const isVideoOrCoord = task.media && (task.media.length === 1 || task.media[0].type === 'video_frames' || task.media[0].frames);
+    if (isVideoOrCoord) {
+        return { solved: false };
+    }
 
-function pushBrowserInstant(taskId, clicks) {
-    let sockets = bMap.get(taskId);
-    if (!sockets) return;
-    let msg = JSON.stringify({ action: 'solve', taskId, clicks });
-    sockets.forEach(ws => { 
-        if (ws.readyState === WS.OPEN) ws.send(msg); 
-    });
-    bMap.delete(taskId);
-}
+    // 3. Grid Tasks Only (dHash Concept Matching)
+    let cKey = getCleanKey(task);
+    let targetDhashes = conceptBank[cKey];
 
-function pushDash(type, data) {
-    if (!dSet.size) return;
-    let msg = JSON.stringify({ type, data });
-    dSet.forEach(ws => { 
-        if (ws.readyState === WS.OPEN) ws.send(msg); 
-    });
-}
+    if (targetDhashes && targetDhashes.size > 0 && task.media && task.media.length > 1) {
+        let matchedClicks = [];
+        task.media.forEach((item, idx) => {
+            if (!item.dhash || item.dhash === "0000000000000000") return;
+            for (let savedHash of targetDhashes) {
+                if (getHammingDistance(item.dhash, savedHash) <= 2) {
+                    matchedClicks.push(idx);
+                    break;
+                }
+            }
+        });
 
-function getCounts() {
-    return {
-        pending: Object.keys(pending).length,
-        trained: Object.keys(trained).length
-    };
+        if (matchedClicks.length >= 2 && matchedClicks.length <= 5) {
+            return { solved: true, clicks: matchedClicks };
+        }
+    }
+    return { solved: false };
 }
 
 wss.on('connection', (ws) => {
-    ws.isAlive = true;
-    ws.on('pong', () => { ws.isAlive = true; });
+    let boundTaskId = null;
 
-    ws.on('message', raw => {
+    ws.on('message', (message) => {
         try {
-            let msg = JSON.parse(raw);
-            
-            // Operator dashboard se save dabaye to instant browser ko solve bhej do
-            if (msg.action === 'submit' && msg.taskId && msg.clicks) {
-                pushBrowserInstant(msg.taskId, msg.clicks);
-                return;
-            }
+            const data = JSON.parse(message);
+            if (data.action === 'register' && data.taskId) {
+                boundTaskId = data.taskId;
+                if (!browserSockets.has(boundTaskId)) {
+                    browserSockets.set(boundTaskId, new Set());
+                }
+                browserSockets.get(boundTaskId).add(ws);
 
-            // Extension register hone par check karo kya ye EXACT task pehle trained hai
-            if (msg.action === 'register' && msg.taskId) {
-                ws.type = 'browser';
-                ws.taskId = msg.taskId;
-                if (!bMap.has(msg.taskId)) bMap.set(msg.taskId, new Set());
-                bMap.get(msg.taskId).add(ws);
-
-                // SAME TASK RE-APPEAR: Auto-solve immediately
-                if (trained[msg.taskId] && trained[msg.taskId].clicks?.length) {
-                    ws.send(JSON.stringify({ 
-                        action: 'solve', 
-                        taskId: msg.taskId, 
-                        clicks: trained[msg.taskId].clicks 
+                if (hcaptchaTrained[boundTaskId]) {
+                    ws.send(JSON.stringify({
+                        action: 'solve',
+                        taskId: boundTaskId,
+                        clicks: hcaptchaTrained[boundTaskId].clicks
                     }));
                 }
-                return;
             }
-
-            if (msg.action === 'dashboard') {
-                ws.type = 'dashboard';
-                dSet.add(ws);
-                ws.send(JSON.stringify({ type: 'counts', data: getCounts() }));
-                return;
-            }
-        } catch(e) {}
+        } catch (e) {}
     });
 
     ws.on('close', () => {
-        if (ws.type === 'browser' && ws.taskId) {
-            let s = bMap.get(ws.taskId);
-            if (s) { 
-                s.delete(ws); 
-                if (!s.size) bMap.delete(ws.taskId); 
-            }
+        if (boundTaskId && browserSockets.has(boundTaskId)) {
+            const set = browserSockets.get(boundTaskId);
+            set.delete(ws);
+            if (set.size === 0) browserSockets.delete(boundTaskId);
         }
-        if (ws.type === 'dashboard') dSet.delete(ws);
     });
 });
 
-setInterval(() => {
-    wss.clients.forEach(ws => {
-        if (!ws.isAlive) return ws.terminate();
-        ws.isAlive = false;
-        ws.ping();
-    });
-}, 25000);
+function notifyBrowsers(taskId, clicks) {
+    if (browserSockets.has(taskId)) {
+        const sockets = browserSockets.get(taskId);
+        const payload = JSON.stringify({ action: 'solve', taskId, clicks });
+        sockets.forEach(ws => {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(payload);
+            }
+        });
+        browserSockets.delete(taskId);
+    }
+}
 
-// Naya Task aane par sirf EXACT pehle se trained task solve hoga
 app.post('/api/new-hcaptcha', (req, res) => {
-    let task = req.body;
-    if (!task?.taskId) return res.json({ success: false });
+    const task = req.body;
+    if (!task || !task.taskId) return res.json({ success: false, error: 'Missing taskId' });
 
-    // EXACT MATCH ONLY: Agar ye same task pehle save ho chuka hai
-    if (trained[task.taskId] && trained[task.taskId].clicks?.length) {
-        let savedClicks = trained[task.taskId].clicks;
-        pushBrowserInstant(task.taskId, savedClicks);
-        return res.json({ success: true, autoSolved: true, clicks: savedClicks });
+    let autoRes = evaluateAutoSolve(task);
+    if (autoRes.solved) {
+        notifyBrowsers(task.taskId, autoRes.clicks);
+        return res.json({ success: true, autoSolved: true, clicks: autoRes.clicks });
     }
 
-    // Naya task hai — Auto-solve nahi hoga, Dashboard ko bhej do
-    let pKeys = Object.keys(pending);
-    if (pKeys.length >= MAX_PENDING) {
-        pKeys.slice(0, 15).forEach(k => delete pending[k]);
+    const keys = Object.keys(hcaptchaPending);
+    if (keys.length >= MAX_PENDING) {
+        keys.slice(0, 15).forEach(k => delete hcaptchaPending[k]);
     }
 
-    pending[task.taskId] = {
+    hcaptchaPending[task.taskId] = {
         id: task.taskId,
-        prompt: task.prompt || '',
-        media: task.media || [],
-        timestamp: Date.now()
+        prompt: task.prompt,
+        media: task.media,
+        timestamp: task.timestamp
     };
 
-    pushDash('new_pending', pending[task.taskId]);
-    pushDash('counts', getCounts());
     res.json({ success: true, autoSolved: false });
 });
 
-// Task Submit (Dashboard se train hone par DB save)
 app.post('/api/submit-hcaptcha', (req, res) => {
-    let { taskId, clicks } = req.body;
-    if (!taskId || !clicks || !Array.isArray(clicks) || clicks.length === 0) {
-        return res.json({ success: false, error: 'Invalid submission' });
+    const { taskId, clicks } = req.body;
+    if (!taskId) return res.json({ success: false, error: 'Missing taskId' });
+
+    if (!clicks || !Array.isArray(clicks) || clicks.length === 0) {
+        return res.json({ success: false, error: 'Empty clicks blocked' });
     }
 
-    pushBrowserInstant(taskId, clicks);
-    pushDash('task_solved', { taskId, clicks });
-    res.json({ success: true });
+    let source = hcaptchaPending[taskId] || hcaptchaTrained[taskId];
 
-    let src = pending[taskId] || trained[taskId];
-    if (src) {
-        let lm = (src.media || []).map(m => ({
-            dhash: m.dhash || '',
-            stableHash: m.stableHash || '',
-            type: m.type || 'image',
-            index: m.index ?? 0,
-            thumb: m.thumb || m.src || ''
+    if (source) {
+        let lightMedia = (source.media || []).map(m => ({
+            dhash: m.dhash || "",
+            stableHash: m.stableHash || "",
+            type: m.type || "image",
+            index: m.index !== undefined ? m.index : 0,
+            thumb: m.thumb || (m.frames ? m.frames[0] : "")
         }));
 
-        // Trained DB mein save karo taake agli baar same task aane par auto solve ho sake
-        trained[taskId] = {
+        let cKey = getCleanKey(source);
+        if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
+
+        clicks.forEach(idx => {
+            if (typeof idx === 'number' && lightMedia[idx] && lightMedia[idx].dhash && lightMedia[idx].dhash !== "0000000000000000") {
+                conceptBank[cKey].add(lightMedia[idx].dhash);
+            }
+        });
+
+        hcaptchaTrained[taskId] = {
             id: taskId,
-            prompt: src.prompt,
-            media: lm,
-            clicks,
+            prompt: source.prompt,
+            conceptKey: getCleanKey(source),
+            media: lightMedia,
+            clicks: clicks,
             trainedAt: new Date().toISOString()
         };
 
-        delete pending[taskId];
-        saveDB();
-        pushDash('counts', getCounts());
-    }
-});
+        const trainedKeys = Object.keys(hcaptchaTrained);
+        if (trainedKeys.length > MAX_TRAINED) {
+            const oldest = trainedKeys.slice(0, trainedKeys.length - MAX_TRAINED);
+            oldest.forEach(k => delete hcaptchaTrained[k]);
+        }
 
-app.get('/api/check-hcaptcha/:id', (req, res) => {
-    let t = trained[req.params.id];
-    res.json(t ? { status: 'solved', clicks: t.clicks || [] } : { status: 'pending' });
+        delete hcaptchaPending[taskId];
+        persistDatabase();
+        notifyBrowsers(taskId, clicks);
+    }
+    res.json({ success: true });
 });
 
 app.get('/api/tasks', (req, res) => {
-    let tab = req.query.tab === 'trained' ? 'trained' : 'pending';
-    let src = tab === 'trained' ? trained : pending;
-    let ids = Object.keys(src);
+    const tab = req.query.tab === 'trained' ? 'trained' : 'pending';
+    const page = Math.max(0, parseInt(req.query.page) || 0);
+    const size = Math.min(30, Math.max(1, parseInt(req.query.size) || DASHBOARD_PAGE_SIZE));
+
+    let source = tab === 'trained' ? hcaptchaTrained : hcaptchaPending;
+    let ids = Object.keys(source);
+
     if (tab === 'trained') ids = ids.reverse();
-    
-    let size = tab === 'trained' ? 15 : 40;
-    let pageIds = ids.slice(0, size);
+    let total = ids.length;
+    let pageIds = ids.slice(page * size, (page + 1) * size);
     let tasks = {};
-    pageIds.forEach(id => { tasks[id] = src[id]; });
-    
-    res.json({ tasks, total: ids.length });
+    pageIds.forEach(id => { tasks[id] = source[id]; });
+
+    res.json({ tasks, total, page, pages: Math.ceil(total / size), tab });
 });
 
-app.get('/api/counts', (req, res) => res.json(getCounts()));
+app.get('/api/counts', (req, res) => {
+    res.json({
+        pending: Object.keys(hcaptchaPending).length,
+        trained: Object.keys(hcaptchaTrained).length,
+        concepts: Object.keys(conceptBank).length
+    });
+});
 
 app.delete('/api/delete-hcaptcha/:id', (req, res) => {
-    delete pending[req.params.id];
-    delete trained[req.params.id];
-    saveDB();
-    pushDash('task_deleted', { taskId: req.params.id });
-    pushDash('counts', getCounts());
-    res.json({ success: true });
-});
-
-app.get('/api/ai-brain', (req, res) => res.json(aiBrainDS));
-app.post('/api/ai-brain', (req, res) => {
-    aiBrainDS = req.body || {};
-    try { fs.writeFileSync(AI_FILE, JSON.stringify(aiBrainDS), 'utf8'); } catch(e) {}
-    res.json({ success: true });
-});
-app.delete('/api/ai-brain', (req, res) => {
-    aiBrainDS = {};
-    try { fs.writeFileSync(AI_FILE, '{}', 'utf8'); } catch(e) {}
+    delete hcaptchaPending[req.params.id];
+    delete hcaptchaTrained[req.params.id];
+    rebuildConceptBank(); 
+    persistDatabase();
     res.json({ success: true });
 });
 
 app.get('/', (req, res) => {
     let f = path.join(__dirname, 'hcaptcha-dashboard.html');
-    fs.existsSync(f) ? res.sendFile(f) : res.status(404).send('Dashboard not found');
+    if (fs.existsSync(f)) res.sendFile(f);
+    else res.status(404).send('hcaptcha-dashboard.html not found.');
 });
 
-initDB();
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`🚀 Master Server Live on Port ${PORT}`));
