@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — Active AI Brain</title>
+    <title>hCaptcha Master Pro</title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { background-color: #0c0c0c; color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; padding: 8px; gap: 8px; }
@@ -20,11 +20,9 @@
         .ai-bar { display: flex; align-items: center; gap: 6px; }
         .live-status { font-size: 11px; font-weight: bold; padding: 4px 8px; border-radius: 4px; background: #1a1a1a; border: 1px solid #ff4444; color: #ff4444; }
         .live-status.active { border-color: #00ff88; color: #00ff88; }
-        .sync-status { font-size: 11px; color: #ffaa00; font-weight: bold; padding: 4px 8px; background: #1a1a1a; border-radius: 4px; border: 1px solid #333; }
-        .sync-status.active { color: #00ff88; border-color: #00ff88; }
+        .sync-status { font-size: 11px; color: #00ff88; font-weight: bold; padding: 4px 8px; background: #1a1a1a; border-radius: 4px; border: 1px solid #00ff88; }
         .btn-toggle { padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: bold; border: 1px solid #555; background: #222; color: #888; }
         .btn-toggle.on { background: #00ff88; color: #000; border-color: #00ff88; }
-        .btn-clear-ai { background: #331111; color: #ff5555; border: 1px solid #772222; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; cursor: pointer; }
         .search-box input { padding: 4px 8px; background: #222; border: 1px solid #444; color: #00ff88; border-radius: 4px; font-size: 11px; outline: none; width: 110px; }
 
         .workspace-split { display: flex; gap: 8px; flex: 1; min-height: 0; }
@@ -79,7 +77,7 @@
 
 <div class="header">
     <div class="header-left">
-        <h1>⚡ hCaptcha Master Pro (Active AI)</h1>
+        <h1>⚡ hCaptcha Master Pro</h1>
         <div class="tabs">
             <button class="tab-btn active" id="btn-pending" onclick="setTab('pending')">Pending <span class="count-badge" id="c-pending">0</span></button>
             <button class="tab-btn" id="btn-trained" onclick="setTab('trained')">Trained <span class="count-badge" id="c-trained">0</span></button>
@@ -87,10 +85,9 @@
     </div>
     <div class="ai-bar">
         <span class="live-status" id="wsStatus">🔴 Offline</span>
-        <span class="sync-status" id="syncStatus">🧠 Loading Brain...</span>
+        <span class="sync-status" id="syncStatus">🧠 Engine Active</span>
         <button id="btnAutoTrain" class="btn-toggle on" onclick="toggleAutoTrain()">🧠 Auto Train: ON</button>
         <button id="btnAutoSave" class="btn-toggle on" onclick="toggleAutoSave()">💾 Auto Save: ON</button>
-        <button class="btn-clear-ai" onclick="resetAIBrain()">🧹 Reset Memory</button>
         <div class="search-box">
             <input type="text" id="searchInput" oninput="filterTasks()" placeholder="🔍 Task ID..."/>
         </div>
@@ -100,7 +97,7 @@
 <div class="workspace-split" id="pendingView">
     <div class="column">
         <div class="column-header">
-            <span class="col-title-ai">🤖 AI Fast-Train Stream (Grids)</span>
+            <span class="col-title-ai">🤖 Fast-Train Stream (Grids)</span>
             <span class="stream-count" id="c-grid">0 Grids</span>
         </div>
         <div class="task-list" id="gridArea"></div>
@@ -139,19 +136,16 @@ let retrainEditingTasks = new Set();
 let isFetching = false;
 
 let autoTrainEnabled = true, autoSaveEnabled = true;
-
-// ── ROBUST CENTRAL CONCEPT BANK ──
-let aiConceptBank = {}; // { [pKey]: { pos: Set<dhash>, neg: Set<dhash> } }
+let localConceptBank = {}; // { [pKey]: Set<dhash> }
 
 function getConceptKey(prompt) {
     let p = (prompt || '').split('|||')[0].toLowerCase();
-    // Keep clean alphanumeric text
     return p.replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function hexToBin(h) {
     if (!h || h === "0000000000000000") return "";
-    if (/^[01]+$/.test(h)) return h; // already binary
+    if (/^[01]+$/.test(h)) return h;
     let s = "";
     for (let c of h) {
         let v = parseInt(c, 16);
@@ -169,18 +163,17 @@ function getHammingDistance(h1, h2) {
     return diff;
 }
 
-function updateAIStatus() {
-    let count = Object.keys(aiConceptBank).filter(k => aiConceptBank[k].pos && aiConceptBank[k].pos.size > 0).length;
-    syncStatus.className = 'sync-status active';
+function updateConceptCount() {
+    let count = Object.keys(localConceptBank).filter(k => localConceptBank[k] && localConceptBank[k].size > 0).length;
     syncStatus.innerText = `🧠 AI Active (${count} Concepts)`;
 }
 
-// ── DIRECT PREDICTOR ──
+// ── INSTANT PREDICTOR ──
 function predictTaskAI(task) {
     if (!autoTrainEnabled || task.type !== 'grid' || !task.media) return null;
     let pKey = getConceptKey(task.prompt);
-    let bank = aiConceptBank[pKey];
-    if (!bank || !bank.pos || bank.pos.size === 0) return null;
+    let targetHashes = localConceptBank[pKey];
+    if (!targetHashes || targetHashes.size === 0) return null;
 
     let matchedClicks = [];
 
@@ -188,23 +181,11 @@ function predictTaskAI(task) {
         let h = m.dhash || m.stableHash || "";
         if (!h || h === "0000000000000000") return;
 
-        let minPosDist = 999;
-        for (let posH of bank.pos) {
-            let d = getHammingDistance(h, posH);
-            if (d < minPosDist) minPosDist = d;
-        }
-
-        let minNegDist = 999;
-        if (bank.neg && bank.neg.size > 0) {
-            for (let negH of bank.neg) {
-                let d = getHammingDistance(h, negH);
-                if (d < minNegDist) minNegDist = d;
+        for (let savedHash of targetHashes) {
+            if (getHammingDistance(h, savedHash) <= 4) {
+                matchedClicks.push(idx);
+                break;
             }
-        }
-
-        // Positive Match: Distance <= 4 and closer to positive than negative
-        if (minPosDist <= 4 && minPosDist <= minNegDist) {
-            matchedClicks.push(idx);
         }
     });
 
@@ -214,8 +195,7 @@ function predictTaskAI(task) {
     return null;
 }
 
-// ── BATCH PREDICTOR ACROSS ALL CARDS ──
-function evaluateAllPendingTasksNow() {
+function evaluateAllVisibleTasks() {
     let pendingGrids = Object.values(activeTasksStore).filter(t => 
         t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0) && !ghostBlocker.has(t.id)
     );
@@ -231,18 +211,17 @@ function evaluateAllPendingTasksNow() {
                 if (autoSaveEnabled) {
                     let btn = card.querySelector('.btn-save');
                     if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Instant Solved'; }
-                    setTimeout(() => sendToServer(task.id, btn, card), 200);
+                    setTimeout(() => sendToServer(task.id, btn, card), 180);
                 }
             }
         }
     });
 }
 
-// ── AUTO-RESTORE FROM SERVER TRAINED ARCHIVE (Hydrates all 4000+ Tasks) ──
-async function loadServerBrain() {
+// ── SYNC TRAINED ARCHIVE DIRECTLY FROM SERVER ──
+async function syncTrainedArchive() {
     try {
-        // Fetch full trained archive to build concept bank directly
-        let r = await fetch(`${SERVER_URL}/api/tasks?tab=trained&page=0&size=5000&t=${Date.now()}`);
+        let r = await fetch(`${SERVER_URL}/api/tasks?tab=trained&page=0&size=500&t=${Date.now()}`);
         if (r.ok) {
             let resData = await r.json();
             let trainedTasks = resData.tasks || {};
@@ -250,18 +229,17 @@ async function loadServerBrain() {
                 let t = trainedTasks[id];
                 if (t.media && t.clicks && t.clicks.length > 0) {
                     let pKey = getConceptKey(t.prompt);
-                    if (!aiConceptBank[pKey]) aiConceptBank[pKey] = { pos: new Set(), neg: new Set() };
-                    t.media.forEach((m, idx) => {
-                        let h = m.dhash || m.stableHash;
-                        if (h && h !== "0000000000000000") {
-                            if (t.clicks.includes(idx)) aiConceptBank[pKey].pos.add(h);
-                            else aiConceptBank[pKey].neg.add(h);
+                    if (!localConceptBank[pKey]) localConceptBank[pKey] = new Set();
+                    t.clicks.forEach(idx => {
+                        if (t.media[idx]) {
+                            let h = t.media[idx].dhash || t.media[idx].stableHash;
+                            if (h && h !== "0000000000000000") localConceptBank[pKey].add(h);
                         }
                     });
                 }
             }
-            updateAIStatus();
-            evaluateAllPendingTasksNow();
+            updateConceptCount();
+            evaluateAllVisibleTasks();
         }
     } catch(e) {}
 }
@@ -296,7 +274,6 @@ function initWS() {
                     let card = buildCard(taskObj);
                     if (isGrid) {
                         gridArea.prepend(card);
-                        // Instant Prediction
                         let clicks = predictTaskAI(taskObj);
                         if (clicks && clicks.length > 0) {
                             taskObj.clicks = clicks;
@@ -305,7 +282,7 @@ function initWS() {
                             if (autoSaveEnabled) {
                                 let btn = card.querySelector('.btn-save');
                                 if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Instant Solved'; }
-                                setTimeout(() => sendToServer(taskObj.id, btn, card), 200);
+                                setTimeout(() => sendToServer(taskObj.id, btn, card), 180);
                             }
                         }
                     } else {
@@ -360,7 +337,7 @@ function toggleAutoTrain() {
     let btn = document.getElementById('btnAutoTrain');
     btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
     btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
-    if (autoTrainEnabled) evaluateAllPendingTasksNow();
+    if (autoTrainEnabled) evaluateAllVisibleTasks();
 }
 
 function toggleAutoSave() {
@@ -368,44 +345,23 @@ function toggleAutoSave() {
     let btn = document.getElementById('btnAutoSave');
     btn.className = 'btn-toggle' + (autoSaveEnabled ? ' on' : '');
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
-    if (autoSaveEnabled) evaluateAllPendingTasksNow();
+    if (autoSaveEnabled) evaluateAllVisibleTasks();
 }
 
-async function resetAIBrain() {
-    if (confirm("Kya aap AI Memory reset karna chahte hain?")) {
-        aiConceptBank = {};
-        await fetch(`${SERVER_URL}/api/ai-brain`, { method: 'DELETE' });
-        updateAIStatus();
-        location.reload();
-    }
-}
-
-// ── FAST MULTI-WEIGHT LEARNING ENGINE ──
-function trainConcept(task, wrongIndices = []) {
-    if (task.type !== 'grid' || !task.media) return;
+function trainConceptLocal(task) {
+    if (task.type !== 'grid' || !task.media || !task.clicks) return;
     let pKey = getConceptKey(task.prompt);
-    if (!aiConceptBank[pKey]) aiConceptBank[pKey] = { pos: new Set(), neg: new Set() };
+    if (!localConceptBank[pKey]) localConceptBank[pKey] = new Set();
 
-    task.media.forEach(m => {
-        let h = m.dhash || m.stableHash;
-        if (!h || h === "0000000000000000") return;
-
-        let isSelected = (task.clicks || []).includes(m.index);
-        let wasWrong = wrongIndices.includes(m.index);
-
-        if (isSelected) {
-            aiConceptBank[pKey].pos.add(h);
-            aiConceptBank[pKey].neg.delete(h);
-        } else if (wasWrong) {
-            aiConceptBank[pKey].neg.add(h);
-            aiConceptBank[pKey].pos.delete(h);
-        } else {
-            aiConceptBank[pKey].neg.add(h);
+    task.clicks.forEach(idx => {
+        if (task.media[idx]) {
+            let h = task.media[idx].dhash || task.media[idx].stableHash;
+            if (h && h !== "0000000000000000") localConceptBank[pKey].add(h);
         }
     });
 
-    updateAIStatus();
-    evaluateAllPendingTasksNow();
+    updateConceptCount();
+    evaluateAllVisibleTasks();
 }
 
 async function fetchTasks() {
@@ -573,14 +529,12 @@ document.addEventListener('click', (e) => {
                 setTimeout(() => { actionBtn.classList.remove('btn-warn'); actionBtn.textContent = '✅ Update & Train'; }, 1000);
                 return;
             }
-            
-            let wrongIndices = (t._oldClicks || []).filter(idx => !t.clicks.includes(idx));
 
             fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ taskId: tid, clicks: t.clicks })
             }).then(() => {
-                if (t.type === 'grid') trainConcept(t, wrongIndices);
+                if (t.type === 'grid') trainConceptLocal(t);
                 retrainEditingTasks.delete(tid);
                 delete t._oldClicks;
                 card.classList.remove('in-retrain');
@@ -713,7 +667,7 @@ function sendToServer(taskId, btnEl, card) {
     updateCountsDisplay();
 
     if (t.type === 'grid' && t.clicks.length > 0) {
-        trainConcept(t);
+        trainConceptLocal(t);
     }
 }
 
@@ -736,7 +690,7 @@ setInterval(() => {
 
 initWS();
 fetchTasks();
-loadServerBrain();
+syncTrainedArchive();
 </script>
 </body>
 </html>
