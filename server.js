@@ -1,5 +1,5 @@
 // ============================================================
-// server.js — Video-Safe & Dynamic Multi-Step Matcher
+// server.js — Instant Fast-Lane Relay & Video Safe Matching
 // ============================================================
 'use strict';
 
@@ -51,25 +51,11 @@ function saveDB() {
     _saveTimer = setTimeout(() => {
         try { 
             fs.writeFileSync(DB_FILE, JSON.stringify({ trained }), 'utf8'); 
-        } catch(e) {
-            console.error('[DB Save Error]', e.message);
-        }
+        } catch(e) {}
     }, 1200);
 }
 
-// STRICT Matcher: Video challenges require EXACT hash match (No Auto-Guess on prompt)
-function evaluateAutoSolve(task) {
-    if (!task?.taskId) return { ok: false };
-    
-    // Direct Exact Task ID Match
-    if (trained[task.taskId] && trained[task.taskId].clicks?.length) {
-        return { ok: true, clicks: trained[task.taskId].clicks };
-    }
-
-    return { ok: false };
-}
-
-function pushBrowser(taskId, clicks) {
+function pushBrowserInstant(taskId, clicks) {
     let sockets = bMap.get(taskId);
     if (!sockets) return;
     let msg = JSON.stringify({ action: 'solve', taskId, clicks });
@@ -102,7 +88,12 @@ wss.on('connection', (ws) => {
         try {
             let msg = JSON.parse(raw);
             
-            // 1. Browser Extension Registration
+            // Fast-Lane instant submission directly from Dashboard over WS
+            if (msg.action === 'submit' && msg.taskId && msg.clicks) {
+                pushBrowserInstant(msg.taskId, msg.clicks);
+                return;
+            }
+
             if (msg.action === 'register' && msg.taskId) {
                 ws.type = 'browser';
                 ws.taskId = msg.taskId;
@@ -119,7 +110,6 @@ wss.on('connection', (ws) => {
                 return;
             }
 
-            // 2. Dashboard Registration
             if (msg.action === 'dashboard') {
                 ws.type = 'dashboard';
                 dSet.add(ws);
@@ -141,7 +131,6 @@ wss.on('connection', (ws) => {
     });
 });
 
-// Heartbeat Loop (Railway WS Keep-Alive)
 setInterval(() => {
     wss.clients.forEach(ws => {
         if (!ws.isAlive) return ws.terminate();
@@ -150,15 +139,14 @@ setInterval(() => {
     });
 }, 25000);
 
-// API Routes
 app.post('/api/new-hcaptcha', (req, res) => {
     let task = req.body;
     if (!task?.taskId) return res.json({ success: false });
 
-    let match = evaluateAutoSolve(task);
-    if (match.ok) {
-        pushBrowser(task.taskId, match.clicks);
-        return res.json({ success: true, autoSolved: true, clicks: match.clicks });
+    // Exact ID match only
+    if (trained[task.taskId] && trained[task.taskId].clicks?.length) {
+        pushBrowserInstant(task.taskId, trained[task.taskId].clicks);
+        return res.json({ success: true, autoSolved: true, clicks: trained[task.taskId].clicks });
     }
 
     let pKeys = Object.keys(pending);
@@ -184,7 +172,7 @@ app.post('/api/submit-hcaptcha', (req, res) => {
         return res.json({ success: false, error: 'Invalid submission' });
     }
 
-    pushBrowser(taskId, clicks);
+    pushBrowserInstant(taskId, clicks);
     pushDash('task_solved', { taskId, clicks });
     res.json({ success: true });
 
