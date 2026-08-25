@@ -428,7 +428,7 @@ function applyKnnDataset(serialized) {
                 let incomingTensor = tf.tensor(new Float32Array(serialized[k].data), serialized[k].shape);
                 if (currentDs[k]) {
                     let merged = tf.concat([currentDs[k], incomingTensor], 0);
-                    currentDs[k].dispose(); // purana tensor dispose — memory leak fix
+                    currentDs[k].dispose();
                     incomingTensor.dispose();
                     currentDs[k] = merged;
                 } else {
@@ -531,28 +531,50 @@ async function trainAIBrainAsync(task) {
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let negLabel = 'negative_' + pText;
 
-    await Promise.all(task.media.map(async m => {
-        let imgSrc = m.thumb || m.src;
-        if (!imgSrc) return;
-        try {
-            let img = new Image();
-            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
-            img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 1200); });
-            if (!img.complete || img.naturalWidth === 0) return;
-            
-            // FIX: tf.tidy ke bahar addExample karo — tidy tensor dispose kar deta tha training se pehle
-            let tfImg = tf.browser.fromPixels(img);
-            let features = aiModel.infer(tfImg, true);
-            tfImg.dispose();
-            if (task.clicks.includes(m.index)) {
-                for (let i = 0; i < 3; i++) knn.addExample(features, pText);
-            } else {
-                knn.addExample(features, negLabel);
-            }
-            features.dispose();
-        } catch(e) {}
-    }));
+    // Seedha DOM card se images lo — already loaded hain, CORS issue nahi
+    let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
+    let domImages = card ? Array.from(card.querySelectorAll('.g-img')) : [];
+
+    if (domImages.length > 0) {
+        // DOM images available hain — fast path
+        domImages.forEach(imgEl => {
+            if (!imgEl.complete || imgEl.naturalWidth === 0) return;
+            let idx = parseInt(imgEl.dataset.index);
+            try {
+                let tfImg = tf.browser.fromPixels(imgEl);
+                let features = aiModel.infer(tfImg, true);
+                tfImg.dispose();
+                if (task.clicks.includes(idx)) {
+                    for (let i = 0; i < 3; i++) knn.addExample(features, pText);
+                } else {
+                    knn.addExample(features, negLabel);
+                }
+                features.dispose();
+            } catch(e) {}
+        });
+    } else {
+        // DOM card nahi — network se load karo (fallback)
+        await Promise.all(task.media.map(async m => {
+            let imgSrc = m.thumb || m.src;
+            if (!imgSrc) return;
+            try {
+                let img = new Image();
+                if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
+                img.src = imgSrc;
+                await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 1200); });
+                if (!img.complete || img.naturalWidth === 0) return;
+                let tfImg = tf.browser.fromPixels(img);
+                let features = aiModel.infer(tfImg, true);
+                tfImg.dispose();
+                if (task.clicks.includes(m.index)) {
+                    for (let i = 0; i < 3; i++) knn.addExample(features, pText);
+                } else {
+                    knn.addExample(features, negLabel);
+                }
+                features.dispose();
+            } catch(e) {}
+        }));
+    }
 
     await saveKNN();
 
@@ -576,8 +598,19 @@ async function predictWithAI(task) {
     let dataset = knn.getClassExampleCount();
     if (!dataset[pText] || dataset[pText] < 1) return;
 
-    let loadedImages = await Promise.all(task.media.map(m => {
-        return new Promise(resolve => {
+    // DOM card se images lo — already loaded, fast, no CORS
+    let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
+    let domImages = card ? Array.from(card.querySelectorAll('.g-img')) : [];
+
+    // Fallback: network se load karo agar DOM card nahi
+    let itemsToPredict = [];
+    if (domImages.length > 0) {
+        domImages.forEach(imgEl => {
+            if (imgEl.complete && imgEl.naturalWidth > 0)
+                itemsToPredict.push({ img: imgEl, index: parseInt(imgEl.dataset.index) });
+        });
+    } else {
+        let loaded = await Promise.all(task.media.map(m => new Promise(resolve => {
             let imgSrc = m.thumb || m.src;
             if (!imgSrc) return resolve(null);
             let img = new Image();
@@ -586,16 +619,16 @@ async function predictWithAI(task) {
             img.onload = () => resolve({ img, index: m.index });
             img.onerror = () => resolve(null);
             setTimeout(() => resolve(null), 1200);
-        });
-    }));
+        })));
+        itemsToPredict = loaded.filter(Boolean);
+    }
 
-    let validImages = loadedImages.filter(Boolean);
-    if (!validImages.length) return;
+    if (!itemsToPredict.length) return;
 
     let predictedClicks = [];
-    for (let item of validImages) {
+    for (let item of itemsToPredict) {
         try {
-            // FIX: tf.tidy ke bahar predict karo — predictClass async hai, tidy tensor dispose kar deta tha
+            // FIX: tf.tidy hataya — predictClass async Promise hai, tidy tensor dispose karta tha
             let tfImg = tf.browser.fromPixels(item.img);
             let features = aiModel.infer(tfImg, true);
             tfImg.dispose();
@@ -603,7 +636,6 @@ async function predictWithAI(task) {
             features.dispose();
             let conf = resolvedRes.confidences[pText] || 0;
             let negConf = resolvedRes.confidences['negative_' + pText] || 0;
-            
             if (resolvedRes.label === pText && conf >= 0.60 && negConf < 0.40) {
                 predictedClicks.push(item.index);
             }
@@ -944,13 +976,14 @@ function sendToServer(taskId, btnEl, card) {
         }).catch(()=>{});
     }
 
-    ghostBlocker.add(taskId);
-    if (card) card.remove();
-    delete activeTasksStore[taskId];
-
+    // Train PEHLE — card DOM mein hai to images available hain
     if (isAIReady && t.type === 'grid' && t.clicks.length > 0) {
         trainAIBrainAsync(t);
     }
+
+    ghostBlocker.add(taskId);
+    if (card) card.remove();
+    delete activeTasksStore[taskId];
 
     // Auto-focus next incoming card
     setTimeout(() => {
@@ -996,7 +1029,7 @@ setInterval(() => {
             el.src = vt.frames[vt.current];
         }
     });
-}, 150);
+}, 300);
 </script>
 </body>
 </html>
