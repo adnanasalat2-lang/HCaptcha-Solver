@@ -1,14 +1,17 @@
 {
   "name": "hcaptcha-master-server",
   "version": "3.0.0",
-  "description": "High-Precision hCaptcha Solver Backend",
+  "description": "hCaptcha Master Server",
   "main": "server.js",
   "scripts": {
-    "start": "node --max-old-space-size=450 server.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "ws": "^8.21.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
