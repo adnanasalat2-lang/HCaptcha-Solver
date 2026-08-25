@@ -238,6 +238,11 @@ function dispatchTaskToWorker(taskData) {
 function handleNewTask(task, wsSource) {
     if (!task || !task.taskId) return { success: false };
 
+    // Prevent duplicate tasks already pending or assigned
+    if (hcaptchaPending[task.taskId]) {
+        return { success: true, autoSolved: false };
+    }
+
     let autoRes = evaluateAutoSolve(task);
     if (autoRes.solved) {
         if (wsSource && wsSource.readyState === WebSocket.OPEN) {
@@ -272,25 +277,6 @@ function handleNewTask(task, wsSource) {
     dispatchTaskToWorker(taskData);
     broadcastCounts();
     return { success: true, autoSolved: false };
-}
-
-function handleTileUpdate(payload) {
-    const { taskId, index, thumb, dhash, stableHash } = payload;
-    if (!taskId || index === undefined) return;
-
-    let target = hcaptchaPending[taskId];
-    if (target && target.media && target.media[index]) {
-        target.media[index].thumb = thumb || target.media[index].thumb;
-        target.media[index].dhash = dhash || target.media[index].dhash;
-        if (stableHash) target.media[index].stableHash = stableHash;
-    }
-
-    const msg = JSON.stringify({ action: 'tile_patch', taskId, index, thumb, dhash });
-    activeWorkers.forEach((meta, ws) => {
-        if (ws.readyState === WebSocket.OPEN && meta.assignedTasks.has(taskId)) {
-            ws.send(msg);
-        }
-    });
 }
 
 function handleSubmitTask(taskId, clicks) {
@@ -388,11 +374,6 @@ wss.on('connection', (ws) => {
                 return;
             }
 
-            if (data.action === 'tile_update') {
-                handleTileUpdate(data);
-                return;
-            }
-
             if (data.action === 'sync_knn_update' && data.knnUpdates) {
                 Object.assign(centralizedKnnDataset, data.knnUpdates);
                 persistDatabase();
@@ -467,8 +448,7 @@ app.get('/api/tasks', (req, res) => {
 app.get('/api/counts', (req, res) => {
     res.json({
         pending: Object.keys(hcaptchaPending).length,
-        trained: Object.keys(hcaptchaTrained).length,
-        concepts: Object.keys(conceptBank).length
+        trained: Object.keys(hcaptchaTrained).length
     });
 });
 
