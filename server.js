@@ -1,5 +1,5 @@
 // ============================================================
-// server.js — High Concurrency Multi-Part Server
+// server.js — Video-Safe & Dynamic Multi-Step Matcher
 // ============================================================
 'use strict';
 
@@ -14,7 +14,7 @@ const app    = express();
 const server = http.createServer(app);
 
 app.use(cors());
-app.use(express.json({ limit: '40mb' }));
+app.use(express.json({ limit: '45mb' }));
 
 const wss = new WS.Server({ server, perMessageDeflate: false });
 
@@ -27,14 +27,15 @@ let pending   = {};
 let trained   = {};
 let aiBrainDS = {};
 
-const bMap = new Map();
-const dSet = new Set();
+const bMap = new Map(); // taskId -> Set of extension websockets
+const dSet = new Set(); // Dashboard websockets
 
 function initDB() {
     if (fs.existsSync(DB_FILE)) {
         try {
             let d = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
             trained = d.trained || {};
+            console.log(`[DB] Loaded: ${Object.keys(trained).length} trained records.`);
         } catch(e) {}
     }
     if (fs.existsSync(AI_FILE)) {
@@ -48,22 +49,42 @@ let _saveTimer = null;
 function saveDB() {
     if (_saveTimer) clearTimeout(_saveTimer);
     _saveTimer = setTimeout(() => {
-        try { fs.writeFileSync(DB_FILE, JSON.stringify({ trained }), 'utf8'); } catch(e) {}
-    }, 1500);
+        try { 
+            fs.writeFileSync(DB_FILE, JSON.stringify({ trained }), 'utf8'); 
+        } catch(e) {
+            console.error('[DB Save Error]', e.message);
+        }
+    }, 1200);
+}
+
+// STRICT Matcher: Video challenges require EXACT hash match (No Auto-Guess on prompt)
+function evaluateAutoSolve(task) {
+    if (!task?.taskId) return { ok: false };
+    
+    // Direct Exact Task ID Match
+    if (trained[task.taskId] && trained[task.taskId].clicks?.length) {
+        return { ok: true, clicks: trained[task.taskId].clicks };
+    }
+
+    return { ok: false };
 }
 
 function pushBrowser(taskId, clicks) {
     let sockets = bMap.get(taskId);
     if (!sockets) return;
     let msg = JSON.stringify({ action: 'solve', taskId, clicks });
-    sockets.forEach(ws => { if (ws.readyState === WS.OPEN) ws.send(msg); });
+    sockets.forEach(ws => { 
+        if (ws.readyState === WS.OPEN) ws.send(msg); 
+    });
     bMap.delete(taskId);
 }
 
 function pushDash(type, data) {
     if (!dSet.size) return;
     let msg = JSON.stringify({ type, data });
-    dSet.forEach(ws => { if (ws.readyState === WS.OPEN) ws.send(msg); });
+    dSet.forEach(ws => { 
+        if (ws.readyState === WS.OPEN) ws.send(msg); 
+    });
 }
 
 function getCounts() {
@@ -74,9 +95,14 @@ function getCounts() {
 }
 
 wss.on('connection', (ws) => {
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
+
     ws.on('message', raw => {
         try {
             let msg = JSON.parse(raw);
+            
+            // 1. Browser Extension Registration
             if (msg.action === 'register' && msg.taskId) {
                 ws.type = 'browser';
                 ws.taskId = msg.taskId;
@@ -84,10 +110,16 @@ wss.on('connection', (ws) => {
                 bMap.get(msg.taskId).add(ws);
 
                 if (trained[msg.taskId]) {
-                    ws.send(JSON.stringify({ action: 'solve', taskId: msg.taskId, clicks: trained[msg.taskId].clicks }));
+                    ws.send(JSON.stringify({ 
+                        action: 'solve', 
+                        taskId: msg.taskId, 
+                        clicks: trained[msg.taskId].clicks 
+                    }));
                 }
                 return;
             }
+
+            // 2. Dashboard Registration
             if (msg.action === 'dashboard') {
                 ws.type = 'dashboard';
                 dSet.add(ws);
@@ -100,23 +132,39 @@ wss.on('connection', (ws) => {
     ws.on('close', () => {
         if (ws.type === 'browser' && ws.taskId) {
             let s = bMap.get(ws.taskId);
-            if (s) { s.delete(ws); if (!s.size) bMap.delete(ws.taskId); }
+            if (s) { 
+                s.delete(ws); 
+                if (!s.size) bMap.delete(ws.taskId); 
+            }
         }
         if (ws.type === 'dashboard') dSet.delete(ws);
     });
 });
 
+// Heartbeat Loop (Railway WS Keep-Alive)
+setInterval(() => {
+    wss.clients.forEach(ws => {
+        if (!ws.isAlive) return ws.terminate();
+        ws.isAlive = false;
+        ws.ping();
+    });
+}, 25000);
+
+// API Routes
 app.post('/api/new-hcaptcha', (req, res) => {
     let task = req.body;
     if (!task?.taskId) return res.json({ success: false });
 
-    if (trained[task.taskId] && trained[task.taskId].clicks?.length) {
-        pushBrowser(task.taskId, trained[task.taskId].clicks);
-        return res.json({ success: true, autoSolved: true, clicks: trained[task.taskId].clicks });
+    let match = evaluateAutoSolve(task);
+    if (match.ok) {
+        pushBrowser(task.taskId, match.clicks);
+        return res.json({ success: true, autoSolved: true, clicks: match.clicks });
     }
 
     let pKeys = Object.keys(pending);
-    if (pKeys.length >= MAX_PENDING) pKeys.slice(0, 15).forEach(k => delete pending[k]);
+    if (pKeys.length >= MAX_PENDING) {
+        pKeys.slice(0, 15).forEach(k => delete pending[k]);
+    }
 
     pending[task.taskId] = {
         id: task.taskId,
@@ -132,7 +180,9 @@ app.post('/api/new-hcaptcha', (req, res) => {
 
 app.post('/api/submit-hcaptcha', (req, res) => {
     let { taskId, clicks } = req.body;
-    if (!taskId || !clicks?.length) return res.json({ success: false });
+    if (!taskId || !clicks || !Array.isArray(clicks) || clicks.length === 0) {
+        return res.json({ success: false, error: 'Invalid submission' });
+    }
 
     pushBrowser(taskId, clicks);
     pushDash('task_solved', { taskId, clicks });
@@ -162,10 +212,23 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     }
 });
 
+app.get('/api/check-hcaptcha/:id', (req, res) => {
+    let t = trained[req.params.id];
+    res.json(t ? { status: 'solved', clicks: t.clicks || [] } : { status: 'pending' });
+});
+
 app.get('/api/tasks', (req, res) => {
     let tab = req.query.tab === 'trained' ? 'trained' : 'pending';
     let src = tab === 'trained' ? trained : pending;
-    res.json({ tasks: src, total: Object.keys(src).length });
+    let ids = Object.keys(src);
+    if (tab === 'trained') ids = ids.reverse();
+    
+    let size = tab === 'trained' ? 15 : 40;
+    let pageIds = ids.slice(0, size);
+    let tasks = {};
+    pageIds.forEach(id => { tasks[id] = src[id]; });
+    
+    res.json({ tasks, total: ids.length });
 });
 
 app.get('/api/counts', (req, res) => res.json(getCounts()));
@@ -198,4 +261,4 @@ app.get('/', (req, res) => {
 
 initDB();
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 Server Live on Port ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 Master Server 3.0 Live on Port ${PORT}`));
