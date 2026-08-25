@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — Focused Zoom Training</title>
+    <title>hCaptcha Master Pro</title>
     <style>
         * { box-sizing: border-box; }
         body { background-color: #0c0c0c; color: #ffffff; font-family: Arial, sans-serif; margin: 0; padding: 12px; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
@@ -70,7 +70,6 @@
         .task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 8px rgba(255,0,255,0.3); }
         .task-card.in-retrain { border: 2px solid #ff8800 !important; background: #221405 !important; }
 
-        /* ── Focused Zoom Training State ── */
         .task-card.focused-task {
             border: 2px solid #00ff88 !important;
             box-shadow: 0 0 25px rgba(0, 255, 136, 0.45);
@@ -130,12 +129,12 @@
             <div class="mode-card" onclick="joinSession('grid')">
                 <div style="font-size: 32px;">🧠</div>
                 <h3 style="color:#00ff88;">Grid Worker</h3>
-                <p>10x AI + Zoom-on-Focus + Shortcuts</p>
+                <p>10x AI + Shortcuts (1-9 & Enter)</p>
             </div>
             <div class="mode-card manual-card" onclick="joinSession('manual')">
                 <div style="font-size: 32px;">👷</div>
                 <h3 style="color:#ff9900;">Manual Worker</h3>
-                <p>Ultra Fast (Coordinates & Videos)</p>
+                <p>Ultra Fast (4s Video & Coordinates)</p>
             </div>
         </div>
     </div>
@@ -175,7 +174,7 @@
 <div class="workspace-split" id="pendingView">
     <div class="column" id="col-grid" style="display:none;">
         <div class="column-header">
-            <span class="col-title-ai">🤖 AI Fast-Train Stream (Auto-Zoom on Focus)</span>
+            <span class="col-title-ai">🤖 AI Fast-Train Stream (Assigned to You)</span>
             <span class="stream-count" id="c-grid">0 Tasks</span>
         </div>
         <div class="task-list" id="gridArea"></div>
@@ -183,7 +182,7 @@
 
     <div class="column" id="col-manual" style="display:none;">
         <div class="column-header">
-            <span class="col-title-manual">👷 Manual Worker Stream (Auto-Zoom on Focus)</span>
+            <span class="col-title-manual">👷 Manual Worker Stream (Assigned to You)</span>
             <span class="stream-count" id="c-manual">0 Tasks</span>
         </div>
         <div class="task-list" id="manualArea"></div>
@@ -331,18 +330,6 @@ function connectDashboardWS() {
                     if (isAIReady && autoTrainEnabled && selectedAppMode === 'grid') {
                         let t = activeTasksStore[msg.task.id];
                         if (t && t.type === 'grid') predictWithAI(t);
-                    }
-                }
-
-                if (msg.action === 'tile_patch') {
-                    let card = document.querySelector(`.task-card[data-id="${msg.taskId}"]`);
-                    if (card) {
-                        let imgEl = card.querySelector(`.g-img[data-index="${msg.index}"]`);
-                        if (imgEl && msg.thumb) imgEl.src = msg.thumb;
-                    }
-                    if (activeTasksStore[msg.taskId] && activeTasksStore[msg.taskId].media[msg.index]) {
-                        activeTasksStore[msg.taskId].media[msg.index].thumb = msg.thumb;
-                        activeTasksStore[msg.taskId].media[msg.index].dhash = msg.dhash;
                     }
                 }
 
@@ -679,7 +666,6 @@ function renderPendingStreams() {
     if (selectedAppMode === 'grid') gridArea.appendChild(gridFrag);
     if (selectedAppMode === 'manual') manualArea.appendChild(manualFrag);
 
-    // Auto Focus first task if none focused
     if (!currentlyFocusedTaskId) {
         let firstCard = document.querySelector('#pendingView .task-card');
         if (firstCard) setTaskFocus(firstCard.dataset.id);
@@ -776,7 +762,6 @@ function buildCard(t, isTrained = false) {
     return card;
 }
 
-// ── Interactive UI Event Handlers ──
 document.body.addEventListener('click', (e) => {
     let actionBtn = e.target.closest('[data-action]');
     let card = e.target.closest('.task-card');
@@ -787,7 +772,6 @@ document.body.addEventListener('click', (e) => {
     let isTrainedCard = card.closest('#trainedView') !== null;
     let isInRetrain = retrainEditingTasks.has(tid);
 
-    // Auto Zoom/Focus on card interaction
     if (!isTrainedCard) setTaskFocus(tid);
 
     if (actionBtn) {
@@ -948,14 +932,12 @@ function sendToServer(taskId, btnEl, card) {
         trainAIBrainAsync(t);
     }
 
-    // Auto-focus next incoming card
     setTimeout(() => {
         let nextCard = document.querySelector('#pendingView .task-card');
         if (nextCard) setTaskFocus(nextCard.dataset.id);
     }, 50);
 }
 
-// ── Numpad Shortcuts targeting Focused Task ──
 document.addEventListener('keydown', (e) => {
     if (selectedAppMode !== 'grid') return;
     
@@ -992,7 +974,7 @@ setInterval(() => {
             el.src = vt.frames[vt.current];
         }
     });
-}, 150);
+}, 125);
 </script>
 </body>
 </html>
