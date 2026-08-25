@@ -59,6 +59,7 @@ body { background-color: #0c0c0c; color: #ffffff; font-family: -apple-system, Bl
 .single-box .frame-layer.active { display: block; }
 .dot { position: absolute; width: 14px; height: 14px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 10; box-shadow: 0 0 6px #00ff88; }
 .dot.end-dot { background: #ff8800; box-shadow: 0 0 6px #ff8800; }
+.dot.retrain-dot { background: #ff8800; }
 
 .actions { display: flex; gap: 4px; margin-top: 6px; }
 .btn { flex: 1; padding: 6px; border: none; font-weight: bold; cursor: pointer; color: #fff; font-size: 11px; border-radius: 3px; }
@@ -68,6 +69,7 @@ body { background-color: #0c0c0c; color: #ffffff; font-family: -apple-system, Bl
 .btn-retrain { background: #ff8800; color: #000; }
 .btn-confirm { background: #00ff88; color: #000; }
 .btn-cancel { background: #555; }
+.retrain-banner { font-size: 11px; color: #ff8800; margin-bottom: 4px; padding: 4px; background: #331c00; border-radius: 3px; border: 1px dashed #ff8800; font-weight: bold; text-align: center; }
 
 #trainedView { display: none; flex: 1; flex-direction: column; background: #141414; border: 1px solid #262626; border-radius: 4px; overflow: hidden; }
 .trained-container { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-content: flex-start; }
@@ -470,7 +472,7 @@ function animateZeroBlinkVideos(timestamp) {
 }
 requestAnimationFrame(animateZeroBlinkVideos);
 
-// Exact Coordinate Normalizer Event
+// Full Retrain & Normalizing Click Delegation
 document.body.addEventListener('click', (e) => {
     let actionBtn = e.target.closest('[data-action]');
     let card = e.target.closest('.task-card');
@@ -478,35 +480,87 @@ document.body.addEventListener('click', (e) => {
     let tid = card.dataset.id, t = activeTasksStore[tid];
     if (!t) return;
 
+    let isTrainedCard = card.closest('#trainedView') !== null;
+    let isInRetrain = retrainEditingTasks.has(tid);
+
     if (actionBtn) {
         let act = actionBtn.dataset.action;
+        
         if (act === 'save') sendToServer(tid, actionBtn, card);
+        
         if (act === 'reset') {
             t.clicks = [];
             card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick'));
             card.querySelectorAll('.dot').forEach(d => d.remove());
             card.classList.remove('ai-processing');
         }
+        
         if (act === 'del') {
             ghostBlocker.add(tid); card.remove(); delete activeTasksStore[tid];
             videoControllers.delete(tid); updateStreamCounts();
             fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' });
         }
+        
         if (act === 'del-trained') {
             fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).then(() => fetchTrained());
             card.remove(); delete activeTasksStore[tid];
         }
+
+        if (act === 'retrain') {
+            retrainEditingTasks.add(tid);
+            card.classList.add('in-retrain');
+            let banner = document.createElement('div');
+            banner.className = 'retrain-banner'; banner.id = `banner-${tid}`;
+            banner.textContent = '🟠 RETRAIN MODE: Click items to change, then Update';
+            card.querySelector('.prompt-container').after(banner);
+
+            let actBox = card.querySelector(`#act-${tid}`);
+            actBox.innerHTML = `
+                <button class="btn btn-confirm" data-action="confirm-retrain">✅ Update & Train</button>
+                <button class="btn btn-cancel" data-action="cancel-retrain">Cancel</button>`;
+            return;
+        }
+
+        if (act === 'confirm-retrain') {
+            fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ taskId: tid, clicks: t.clicks })
+            }).then(() => {
+                if (isAIReady && t.type === 'grid') trainAIBrainAsync(t);
+                retrainEditingTasks.delete(tid);
+                card.classList.remove('in-retrain');
+                let b = card.querySelector(`#banner-${tid}`); if (b) b.remove();
+                let actBox = card.querySelector(`#act-${tid}`);
+                actBox.innerHTML = `
+                    <button class="btn btn-retrain" data-action="retrain">🔧 Retrain</button>
+                    <button class="btn btn-del" data-action="del-trained">❌</button>`;
+                fetchTrained();
+            });
+            return;
+        }
+
+        if (act === 'cancel-retrain') {
+            retrainEditingTasks.delete(tid);
+            card.classList.remove('in-retrain');
+            let b = card.querySelector(`#banner-${tid}`); if (b) b.remove();
+            let actBox = card.querySelector(`#act-${tid}`);
+            actBox.innerHTML = `
+                <button class="btn btn-retrain" data-action="retrain">🔧 Retrain</button>
+                <button class="btn btn-del" data-action="del-trained">❌</button>`;
+            fetchTrained();
+            return;
+        }
     }
 
-    if (card.closest('#trainedView') && !retrainEditingTasks.has(tid)) return;
+    if (isTrainedCard && !isInRetrain) return;
 
     if (e.target.classList.contains('g-img')) {
         let idx = parseInt(e.target.dataset.index);
-        if (e.target.classList.contains('selected') || e.target.classList.contains('ai-pick')) {
-            e.target.classList.remove('selected', 'ai-pick');
+        if (e.target.classList.contains('selected') || e.target.classList.contains('ai-pick') || e.target.classList.contains('retrain-pick')) {
+            e.target.classList.remove('selected', 'ai-pick', 'retrain-pick');
             t.clicks = t.clicks.filter(i => i !== idx);
         } else {
-            e.target.classList.add('selected');
+            e.target.classList.add(isInRetrain ? 'retrain-pick' : 'selected');
             t.clicks.push(idx);
         }
     } else if (e.target.closest('.single-box')) {
@@ -539,7 +593,7 @@ document.body.addEventListener('click', (e) => {
         t.clicks.push({ px, py });
 
         let dot = document.createElement('div');
-        dot.className = 'dot' + (t.clicks.length % 2 === 0 ? ' end-dot' : '');
+        dot.className = 'dot' + (isInRetrain ? ' retrain-dot' : (t.clicks.length % 2 === 0 ? ' end-dot' : ''));
         dot.style.left = `${((e.clientX - rect.left) / rect.width) * 100}%`;
         dot.style.top = `${((e.clientY - rect.top) / rect.height) * 100}%`;
         sbox.appendChild(dot);
