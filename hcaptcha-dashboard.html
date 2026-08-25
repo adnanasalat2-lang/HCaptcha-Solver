@@ -58,8 +58,8 @@
         .img-grid img.ai-pick { border-color: #ff00ff; opacity: 0.9; }
         .img-grid img.retrain-pick { border-color: #ff8800 !important; opacity: 0.95; }
         
-        .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; align-items: center; background: #111; border-radius: 4px; border: 1px solid #444; overflow: hidden; min-height: 280px; }
-        .single-box img { width: 100%; height: auto; min-height: 280px; max-height: 480px; object-fit: contain; display: block; user-select: none; }
+        .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; align-items: center; background: #111; border-radius: 4px; border: 1px solid #444; overflow: hidden; min-height: 420px; max-height: 520px; }
+        .single-box img { width: 100%; height: 100%; min-height: 420px; max-height: 520px; object-fit: contain; display: block; user-select: none; }
         .single-box .no-media { color: #555; font-size: 13px; text-align: center; padding: 20px; }
         .dot { position: absolute; width: 16px; height: 16px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 10; }
         .dot.retrain-dot { background: #ff8800; }
@@ -169,38 +169,39 @@ function loadImageSafe(src, timeoutMs = 5000) {
 }
 
 // ── IMAGE RETRY ENGINE ──
-// Failed ❌ images ko track karo aur retry karo
 let failedImages = new Map(); // imgEl -> { src, attempts, taskId }
 
 function registerImageForRetry(imgEl, src, taskId) {
     if (!src || src === BLANK_IMG) return;
+    // Agar already registered hai to skip
+    if (failedImages.has(imgEl)) return;
     failedImages.set(imgEl, { src, attempts: 0, taskId });
 }
 
 async function retryFailedImages() {
     if (failedImages.size === 0) return;
     for (let [imgEl, info] of failedImages) {
-        // Element DOM mein nahi raha? Remove karo
         if (!document.body.contains(imgEl)) { failedImages.delete(imgEl); continue; }
-        // Max 5 attempts
-        if (info.attempts >= 5) { failedImages.delete(imgEl); continue; }
-        // Abhi BLANK_IMG show ho raha hai? Retry karo
-        if (imgEl.src.includes('data:image/svg')) {
+        if (info.attempts >= 6) { failedImages.delete(imgEl); continue; }
+        // Check: abhi bhi broken/blank hai?
+        let isBroken = imgEl.naturalWidth === 0 || imgEl.src.includes('data:image/svg');
+        if (isBroken) {
             info.attempts++;
-            let result = await loadImageSafe(info.src, 6000);
+            // Progressive delay: attempt * 3 sec
+            await new Promise(r => setTimeout(r, info.attempts * 500));
+            let result = await loadImageSafe(info.src, 7000);
             if (result) {
-                imgEl.src = info.src; // loaded! DOM update
+                imgEl.src = info.src;
+                imgEl.style.removeProperty('opacity');
                 failedImages.delete(imgEl);
+                console.log('Retry success:', info.src.slice(0, 60));
             }
-            // nahi load hua? agli dafa try hoga
         } else {
             failedImages.delete(imgEl); // already loaded
         }
     }
 }
-
-// Har 8 sec mein retry karo failed images
-setInterval(retryFailedImages, 8000);
+setInterval(retryFailedImages, 6000);
 
 // ── WEBSOCKET ──
 let ws = null;
@@ -244,6 +245,7 @@ function initWS() {
                     delete activeTasksStore[tid];
                     delete serverData.pending[tid];
                     videoTasks = videoTasks.filter(v => v.id !== tid);
+                    stopVideoTask(tid);
                     updateCountsDisplay();
                 }
             } catch(e) {}
@@ -698,7 +700,10 @@ function buildCard(t, isTrained = false) {
         // Register video animator
         if (isVid && !isTrained) {
             videoTasks = videoTasks.filter(v => v.id !== t.id); // dedupe
-            videoTasks.push({ id: t.id, frames: frames, current: 0 });
+            let vt = { id: t.id, frames: frames, current: 0 };
+            videoTasks.push(vt);
+            // Card DOM mein add hone ke baad timer start karo
+            setTimeout(() => startVideoTask(vt), 100);
         }
     }
 
@@ -723,16 +728,23 @@ function buildCard(t, isTrained = false) {
         ${actions}`;
 
     // Failed images ko retry system mein register karo
-    // (setTimeout se karo taake DOM update ho jaye pehle)
     setTimeout(() => {
         if (t.type === 'grid') {
             card.querySelectorAll('.g-img').forEach((imgEl, i) => {
                 let m = t.media[i];
-                if (m) {
-                    let src = m.thumb || m.src || '';
-                    // Retry register karo — onerror pe BLANK_IMG set hogi, retry engine load karega
+                if (!m) return;
+                let src = m.thumb || m.src || '';
+                if (!src) return;
+                // Agar already broken hai (naturalWidth === 0)
+                if (imgEl.complete && imgEl.naturalWidth === 0) {
+                    imgEl.src = BLANK_IMG;
+                    imgEl.style.opacity = '0.4';
+                    registerImageForRetry(imgEl, src, t.id);
+                } else if (!imgEl.complete) {
+                    // Load hone ka intezaar karo
                     imgEl.addEventListener('error', () => {
                         imgEl.src = BLANK_IMG;
+                        imgEl.style.opacity = '0.4';
                         registerImageForRetry(imgEl, src, t.id);
                     }, { once: true });
                 }
@@ -742,13 +754,18 @@ function buildCard(t, isTrained = false) {
             if (sImg) {
                 let m = t.media[0] || {};
                 let src = m.src || m.url || m.image || m.thumb || '';
-                sImg.addEventListener('error', () => {
-                    sImg.src = BLANK_IMG;
-                    registerImageForRetry(sImg, src, t.id);
-                }, { once: true });
+                if (src) {
+                    if (sImg.complete && sImg.naturalWidth === 0) {
+                        registerImageForRetry(sImg, src, t.id);
+                    } else {
+                        sImg.addEventListener('error', () => {
+                            registerImageForRetry(sImg, src, t.id);
+                        }, { once: true });
+                    }
+                }
             }
         }
-    }, 0);
+    }, 200); // 200ms — DOM update ho jaye
 
     return card;
 }
@@ -925,15 +942,47 @@ function filterTasks() {
 }
 
 // ── VIDEO ANIMATOR ──
-setInterval(() => {
-    videoTasks.forEach(vt => {
+// 3-4 second mein poori video chalao
+// Frame interval = 3500ms / total frames (min 200ms, max 600ms per frame)
+function getFrameInterval(frameCount) {
+    if (!frameCount || frameCount <= 1) return 800;
+    return Math.min(600, Math.max(200, Math.round(3500 / frameCount)));
+}
+
+let videoTimers = new Map(); // taskId -> { timer, vt }
+
+function startVideoTask(vt) {
+    stopVideoTask(vt.id); // pehle purana band karo
+    if (!vt.frames || vt.frames.length <= 1) return;
+    let interval = getFrameInterval(vt.frames.length);
+    let timer = setInterval(() => {
         let el = document.querySelector(`.vid-player[data-id="${vt.id}"]`);
-        if (el && vt.frames?.length > 0) {
-            vt.current = (vt.current + 1) % vt.frames.length;
-            el.src = vt.frames[vt.current];
-        }
+        if (!el) { stopVideoTask(vt.id); return; } // element DOM mein nahi — band karo
+        vt.current = (vt.current + 1) % vt.frames.length;
+        el.src = vt.frames[vt.current];
+    }, interval);
+    videoTimers.set(vt.id, timer);
+}
+
+function stopVideoTask(taskId) {
+    if (videoTimers.has(taskId)) {
+        clearInterval(videoTimers.get(taskId));
+        videoTimers.delete(taskId);
+    }
+}
+
+// videoTasks array update hone pe timers bhi update karo
+function syncVideoTimers() {
+    // Jo tasks hat gaye unke timers band karo
+    for (let [id] of videoTimers) {
+        if (!videoTasks.find(v => v.id === id)) stopVideoTask(id);
+    }
+    // Naye tasks ke timers shuru karo
+    videoTasks.forEach(vt => {
+        if (!videoTimers.has(vt.id)) startVideoTask(vt);
     });
-}, 150);
+}
+setInterval(syncVideoTimers, 2000);
 
 // ── INIT ──
 initWS();
