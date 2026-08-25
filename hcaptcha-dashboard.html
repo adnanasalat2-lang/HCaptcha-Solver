@@ -426,32 +426,51 @@ async function megaBatchGPUExecutor() {
     isEvaluatingAI = false;
 }
 
-// Train logic — DOM card pe depend nahi, seedha task.media se image load karo
-async function trainAIBrainAsync(task, wrongIndices = []) {
-    if (!isAIReady || task.type !== 'grid' || !task.media) return;
+// Train directly from DOM card images — already loaded, no network needed
+function trainAIBrainFromCard(task, card) {
+    if (!isAIReady || !card) return;
+    let pKey = getConceptKey(task.prompt);
+    let negLabel = 'neg_' + pKey;
+    let trained = 0;
+
+    card.querySelectorAll('.g-img').forEach(imgEl => {
+        if (!imgEl.complete || imgEl.naturalWidth === 0) return;
+        let idx = parseInt(imgEl.dataset.index);
+        try {
+            let features = getFeatures(imgEl);
+            if (!features) return;
+            let isSelected = (task.clicks || []).includes(idx);
+            if (isSelected) {
+                knn.addExample(features, pKey);
+                knn.addExample(features, pKey);
+                knn.addExample(features, pKey);
+            } else {
+                knn.addExample(features, negLabel);
+            }
+            features.dispose();
+            trained++;
+        } catch(e) {}
+    });
+
+    if (trained > 0) scheduleServerBrainSave();
+}
+
+// Retrain — wrong indices ke saath, card abhi bhi DOM mein hai
+function trainAIBrainAsync(task, wrongIndices = []) {
+    if (!isAIReady || task.type !== 'grid') return;
+    let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
+    if (!card) return;
     let pKey = getConceptKey(task.prompt);
     let negLabel = 'neg_' + pKey;
 
-    for (let m of task.media) {
-        let imgSrc = m.thumb || m.src || '';
-        if (!imgSrc) continue;
+    card.querySelectorAll('.g-img').forEach(imgEl => {
+        if (!imgEl.complete || imgEl.naturalWidth === 0) return;
+        let idx = parseInt(imgEl.dataset.index);
         try {
-            let imgEl = new Image();
-            imgEl.crossOrigin = 'anonymous';
-            await new Promise(res => {
-                imgEl.onload = res;
-                imgEl.onerror = res;
-                setTimeout(res, 1500);
-                imgEl.src = imgSrc;
-            });
-            if (!imgEl.complete || imgEl.naturalWidth === 0) continue;
-
             let features = getFeatures(imgEl);
-            if (!features) continue;
-
-            let isSelected = (task.clicks || []).includes(m.index);
-            let wasWrong = wrongIndices.includes(m.index);
-
+            if (!features) return;
+            let isSelected = (task.clicks || []).includes(idx);
+            let wasWrong = wrongIndices.includes(idx);
             if (isSelected) {
                 knn.addExample(features, pKey);
                 knn.addExample(features, pKey);
@@ -463,9 +482,8 @@ async function trainAIBrainAsync(task, wrongIndices = []) {
                 knn.addExample(features, negLabel);
             }
             features.dispose();
-            await tf.nextFrame();
         } catch(e) {}
-    }
+    });
 
     scheduleServerBrainSave();
 }
@@ -771,15 +789,17 @@ function sendToServer(taskId, btnEl, card) {
         body: JSON.stringify({ taskId, clicks: t.clicks })
     }).catch(()=>{});
 
+    // Train PEHLE — card DOM mein hota hai to images milti hain
+    // Card remove baad mein karo
+    if (isAIReady && t.type === 'grid' && t.clicks.length > 0 && card) {
+        trainAIBrainFromCard(t, card);
+    }
+
     ghostBlocker.add(taskId);
     if (card) card.remove();
     delete activeTasksStore[taskId];
     videoTasksMap.delete(taskId);
     updateCountsDisplay();
-
-    if (isAIReady && t.type === 'grid' && t.clicks.length > 0) {
-        trainAIBrainAsync(t);
-    }
 }
 
 function filterTasks() {
