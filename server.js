@@ -26,9 +26,7 @@ let hcaptchaTrained = {};
 let conceptBank = {};
 let centralizedKnnDataset = {};
 
-// Task ID -> Worker WebSocket (Strict 1-to-1 Mapping)
 const taskAssignments = new Map();
-
 const browserSockets = new Map();
 const activeWorkers = new Map();
 
@@ -201,7 +199,6 @@ function notifyBrowsers(taskId, clicks) {
     }
 }
 
-// ── Strict 1-to-1 Task Dispatcher ──
 function dispatchTaskToWorker(taskData) {
     let isGrid = taskData.media && taskData.media.length > 1;
     let targetMode = isGrid ? 'grid' : 'manual';
@@ -209,7 +206,6 @@ function dispatchTaskToWorker(taskData) {
 
     if (workers.length === 0) return;
 
-    // Pick next worker via Round-Robin
     let targetWorker = null;
     if (targetMode === 'grid') {
         gridWorkerIndex = (gridWorkerIndex + 1) % workers.length;
@@ -333,14 +329,11 @@ wss.on('connection', (ws) => {
                 };
                 activeWorkers.set(ws, workerMeta);
 
-                // Unassigned tasks me se sirf match hone wale mode ke tasks bhejo
                 let isGrid = workerMeta.mode === 'grid';
                 let availablePending = {};
                 
                 Object.values(hcaptchaPending).forEach(task => {
                     let taskIsGrid = task.media && task.media.length > 1;
-                    
-                    // Strictly check mode & ensure task is NOT already assigned to someone else
                     if (((isGrid && taskIsGrid) || (!isGrid && !taskIsGrid)) && !taskAssignments.has(task.id)) {
                         taskAssignments.set(task.id, ws);
                         workerMeta.assignedTasks.add(task.id);
