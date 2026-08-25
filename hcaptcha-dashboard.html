@@ -220,13 +220,21 @@ async function loadServerBrain() {
         let r = await fetch(`${SERVER_URL}/api/ai-brain?t=${Date.now()}`);
         if (!r.ok) return;
         let ser = await r.json();
-        if (ser && Object.keys(ser).length > 0) {
-            let ds = {};
-            for (let k in ser) {
-                if (ser[k]?.data && ser[k]?.shape) {
-                    ds[k] = tf.tensor(ser[k].data, ser[k].shape);
-                }
-            }
+        if (!ser || !Object.keys(ser).length) return;
+        
+        let ds = {};
+        let loaded = 0;
+        for (let k in ser) {
+            try {
+                let item = ser[k];
+                if (!item?.data || !item?.shape) continue;
+                // Float32Array se tensor banao — plain array nahi
+                let arr = new Float32Array(item.data);
+                ds[k] = tf.tensor(arr, item.shape);
+                loaded++;
+            } catch(e) {}
+        }
+        if (loaded > 0) {
             knn.setClassifierDataset(ds);
             updateAIStatus();
         }
@@ -239,10 +247,19 @@ function scheduleServerBrainSave() {
         if (!knn) return;
         try {
             let ds = knn.getClassifierDataset();
+            let keys = Object.keys(ds);
+            if (!keys.length) return;
+            
             let ser = {};
-            for (let k in ds) {
-                ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape };
+            for (let k of keys) {
+                try {
+                    // dataSync Float32Array — JSON.stringify ke liye Array mein convert
+                    let raw = ds[k].dataSync();
+                    ser[k] = { data: Array.from(raw), shape: ds[k].shape };
+                } catch(e) {}
             }
+            if (!Object.keys(ser).length) return;
+            
             await fetch(`${SERVER_URL}/api/ai-brain`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -250,41 +267,27 @@ function scheduleServerBrainSave() {
             });
             updateAIStatus();
         } catch(e) {}
-    }, 1000);
+    }, 2000);
 }
 
 async function initAI() {
     try {
-        // WebGL errors suppress karo — pehle webgl try, fail ho to cpu
-        tf.env().set('WEBGL_VERSION', 1);
-        tf.env().set('WEBGL_FORCE_F16_TEXTURES', false);
+        syncStatus.innerHTML = '🧠 AI Loading...';
         
-        let backend = 'cpu';
-        try {
-            await tf.setBackend('webgl');
-            await tf.ready();
-            if (tf.getBackend() === 'webgl') backend = 'webgl';
-        } catch(e) {}
-        
-        if (backend !== 'webgl') {
-            await tf.setBackend('cpu');
-            await tf.ready();
-        }
-        
-        syncStatus.innerHTML = `🧠 Loading AI (${backend.toUpperCase()})...`;
-        
-        // CPU pe alpha 0.50 — halka model, same accuracy for KNN
-        let alpha = backend === 'webgl' ? 1.0 : 0.50;
-        aiModel = await mobilenet.load({ version: 2, alpha });
+        // Is device pe WebGL support nahi — seedha CPU
+        await tf.setBackend('cpu');
+        await tf.ready();
+
+        // alpha 0.25 — sabse halka, CPU pe fast, KNN ke liye kafi
+        aiModel = await mobilenet.load({ version: 2, alpha: 0.25 });
         knn = knnClassifier.create();
         await loadServerBrain();
         isAIReady = true;
         updateAIStatus();
         megaBatchGPUExecutor();
     } catch(e) {
-        syncStatus.innerHTML = "⚠️ AI Failed: " + e.message;
-        // 10 second baad retry
-        setTimeout(initAI, 10000);
+        syncStatus.innerHTML = '⚠️ AI Failed — Retry...';
+        setTimeout(initAI, 8000);
     }
 }
 
