@@ -208,6 +208,86 @@ let dashWS = null;
 
 let isAIReady = false, aiModel, knn;
 let autoTrainEnabled = true, autoSaveEnabled = true;
+let isEvaluatingAI = false;
+
+// ── IndexedDB Brain Memory (Permanent Local Store) ──
+const IDB = { name: 'hcm_knn_master', store: 'knn', key: 'model_v6' };
+function idbOpen() {
+    return new Promise((res, rej) => {
+        let r = indexedDB.open(IDB.name, 1);
+        r.onupgradeneeded = e => e.target.result.createObjectStore(IDB.store);
+        r.onsuccess = e => res(e.target.result);
+        r.onerror = () => rej(r.error);
+    });
+}
+async function idbSet(val) {
+    let db = await idbOpen();
+    return new Promise((res, rej) => {
+        let tx = db.transaction(IDB.store, 'readwrite');
+        tx.objectStore(IDB.store).put(val, IDB.key);
+        tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+    });
+}
+async function idbGet() {
+    let db = await idbOpen();
+    return new Promise((res, rej) => {
+        let tx = db.transaction(IDB.store, 'readonly');
+        let req = tx.objectStore(IDB.store).get(IDB.key);
+        req.onsuccess = () => res(req.result || null);
+        req.onerror = () => rej(req.error);
+    });
+}
+async function saveKNN() {
+    if (!knn) return;
+    try {
+        let ds = knn.getClassifierDataset();
+        let ser = {};
+        for (let k in ds) { ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape }; }
+        await idbSet(ser);
+        updateAIStatus();
+    } catch(e) {}
+}
+async function loadKNN() {
+    try {
+        let ser = await idbGet();
+        if (!ser) return;
+        let ds = {};
+        for (let k in ser) { ds[k] = tf.tensor(ser[k].data, ser[k].shape); }
+        knn.setClassifierDataset(ds);
+    } catch(e) {}
+}
+function applyKnnDataset(serialized) {
+    if (!knn || !serialized) return;
+    try {
+        let currentDs = knn.getClassifierDataset();
+        for (let k in serialized) {
+            let incomingTensor = tf.tensor(serialized[k].data, serialized[k].shape);
+            if (currentDs[k]) {
+                currentDs[k] = tf.concat([currentDs[k], incomingTensor], 0);
+            } else {
+                currentDs[k] = incomingTensor;
+            }
+        }
+        knn.setClassifierDataset(currentDs);
+        updateAIStatus();
+    } catch(e) {}
+}
+async function resetAIBrain() {
+    if (confirm("Kya aap AI Brain ki memory reset karna chahte hain?")) {
+        indexedDB.deleteDatabase(IDB.name);
+        if (knn) knn.clearAllClasses();
+        location.reload();
+    }
+}
+function updateAIStatus() {
+    if (!knn) return;
+    try {
+        let ds = knn.getClassExampleCount();
+        let concepts = Object.keys(ds).filter(k => !k.startsWith('negative_')).length;
+        syncStatus.innerHTML = `🤖 AI Ready ✅ (${concepts} Concepts)`;
+        syncStatus.classList.add('active');
+    } catch(e) {}
+}
 
 async function joinSession(mode) {
     let name = workerNameInput.value.trim() || 'Worker_' + Math.floor(Math.random()*100);
@@ -226,7 +306,7 @@ async function joinSession(mode) {
         document.getElementById('col-grid').style.display = 'flex';
         document.getElementById('col-manual').style.display = 'none';
         aiControlGroup.style.display = 'flex';
-        initAI();
+        await initAI();
     } else {
         document.getElementById('col-grid').style.display = 'none';
         document.getElementById('col-manual').style.display = 'flex';
@@ -276,6 +356,28 @@ function connectDashboardWS() {
                         appendCard(msg.pending[id]);
                     }
                     updateCounts(msg.counts);
+
+                    if (msg.knnBrain && knn) {
+                        applyKnnDataset(msg.knnBrain);
+                    }
+                    if (isAIReady && autoTrainEnabled && selectedAppMode === 'grid') reEvaluatePending();
+                }
+
+                if (msg.action === 'knn_sync_broadcast' && msg.knnUpdates && knn) {
+                    applyKnnDataset(msg.knnUpdates);
+                    if (isAIReady && autoTrainEnabled && selectedAppMode === 'grid') reEvaluatePending();
+                }
+
+                if (msg.action === 'tile_patch') {
+                    let card = document.querySelector(`.task-card[data-id="${msg.taskId}"]`);
+                    if (card) {
+                        let imgEl = card.querySelector(`.g-img[data-index="${msg.index}"]`);
+                        if (imgEl && msg.thumb) imgEl.src = msg.thumb;
+                    }
+                    if (activeTasksStore[msg.taskId] && activeTasksStore[msg.taskId].media[msg.index]) {
+                        activeTasksStore[msg.taskId].media[msg.index].thumb = msg.thumb;
+                        activeTasksStore[msg.taskId].media[msg.index].dhash = msg.dhash;
+                    }
                 }
 
                 if (msg.action === 'new_task' && msg.task) {
@@ -333,9 +435,10 @@ async function initAI() {
         await tf.ready();
         aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
         knn = knnClassifier.create();
+        await loadKNN();
         isAIReady = true;
-        syncStatus.innerHTML = "🤖 AI Ready ✅";
-        syncStatus.classList.add('active');
+        updateAIStatus();
+        reEvaluatePending();
     } catch(e) {
         syncStatus.innerHTML = "⚠️ AI Fallback";
     }
@@ -346,6 +449,7 @@ function toggleAutoTrain() {
     let btn = document.getElementById('btnAutoTrain');
     btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
     btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
+    if (autoTrainEnabled && isAIReady) reEvaluatePending();
 }
 
 function toggleAutoSave() {
@@ -381,6 +485,22 @@ async function trainAIBrainAsync(task) {
             });
         } catch(e) {}
     }
+
+    await saveKNN();
+
+    // Broadcast trained update to server
+    try {
+        let ds = knn.getClassifierDataset();
+        let updateSer = {};
+        if (ds[pText]) updateSer[pText] = { data: Array.from(ds[pText].dataSync()), shape: ds[pText].shape };
+        if (ds[negLabel]) updateSer[negLabel] = { data: Array.from(ds[negLabel].dataSync()), shape: ds[negLabel].shape };
+
+        if (dashWS && dashWS.readyState === WebSocket.OPEN) {
+            dashWS.send(JSON.stringify({ action: 'sync_knn_update', knnUpdates: updateSer }));
+        }
+    } catch(e) {}
+
+    reEvaluatePending();
 }
 
 async function predictWithAI(task) {
@@ -430,6 +550,18 @@ async function predictWithAI(task) {
             }
         }
     }
+}
+
+async function reEvaluatePending() {
+    if (isEvaluatingAI) return;
+    isEvaluatingAI = true;
+    for (let id in activeTasksStore) {
+        let t = activeTasksStore[id];
+        if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
+            await predictWithAI(t);
+        }
+    }
+    isEvaluatingAI = false;
 }
 
 function appendCard(td) {
