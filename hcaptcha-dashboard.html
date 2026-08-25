@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — Ultra Fast Learner</title>
+    <title>hCaptcha Master Pro — Live Stream</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -145,6 +145,7 @@ let isAIReady = false, aiModel, knn;
 let autoTrainEnabled = true, autoSaveEnabled = true;
 let isEvaluatingAI = false;
 
+// ── Anti-Throttle Background Web Worker ──
 const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 1000);`], { type: 'text/javascript' });
 const bgWorker = new Worker(URL.createObjectURL(timerBlob));
 bgWorker.onmessage = () => {
@@ -153,6 +154,7 @@ bgWorker.onmessage = () => {
     }
 };
 
+// ── WEBSOCKET LIVE ENGINE ──
 let ws = null;
 function initWS() {
     if (ws && ws.readyState < 2) return;
@@ -232,13 +234,13 @@ function updateAIStatus() {
     if (!knn) return;
     try {
         let ds = knn.getClassExampleCount();
-        let concepts = Object.keys(ds).filter(k => !k.startsWith('neg_')).length;
+        let concepts = Object.keys(ds).filter(k => !k.startsWith('negative_')).length;
         syncStatus.innerHTML = `🤖 AI Ready ✅ (${concepts} Concepts)`;
         syncStatus.classList.add('active');
     } catch(e) {}
 }
 
-const IDB = { name:'hcm_knn_master', store:'knn', key:'model_v9' };
+const IDB = { name:'hcm_knn_master', store:'knn', key:'model_v6' };
 function idbOpen() {
     return new Promise((res,rej)=>{
         let r = indexedDB.open(IDB.name,1);
@@ -323,25 +325,10 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
-// Simple hash for prompt string
-function fnv1a(str) {
-    let h = 0x811c9dc5;
-    for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = (h * 0x01000193) >>> 0; }
-    return h.toString(36);
-}
-
-function getConceptKey(prompt) {
-    let parts = (prompt || '').split('|||');
-    let text = parts[0].trim().toLowerCase().replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ');
-    let exSnippet = parts[1] ? ("_EX" + fnv1a(parts[1].substring(0, 150))) : "";
-    return text + exSnippet;
-}
-
-// ── 10X BOOSTED LEARNER (Instant 1-Click Concept Registration) ──
-async function trainAIBrainAsync(task, wrongIndices = []) {
-    if (!isAIReady || task.type !== 'grid' || !task.media) return;
-    let pKey = getConceptKey(task.prompt);
-    let negLabel = 'neg_' + pKey;
+async function trainAIBrainAsync(task) {
+    if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
+    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
+    let negLabel = 'negative_' + pText;
 
     for (let m of task.media) {
         let imgSrc = m.thumb || m.src;
@@ -356,14 +343,10 @@ async function trainAIBrainAsync(task, wrongIndices = []) {
             tf.tidy(() => {
                 let tfImg = tf.browser.fromPixels(img);
                 let features = aiModel.infer(tfImg, true);
-                
-                let isSelected = (task.clicks || []).includes(m.index);
-                let wasWrong = wrongIndices.includes(m.index);
-
-                if (isSelected) {
-                    for (let i = 0; i < 10; i++) knn.addExample(features, pKey);
-                } else if (wasWrong) {
-                    for (let i = 0; i < 12; i++) knn.addExample(features, negLabel);
+                if (task.clicks.includes(m.index)) {
+                    knn.addExample(features, pText);
+                    knn.addExample(features, pText);
+                    knn.addExample(features, pText);
                 } else {
                     knn.addExample(features, negLabel);
                 }
@@ -375,12 +358,11 @@ async function trainAIBrainAsync(task, wrongIndices = []) {
     reEvaluatePending();
 }
 
-// ── DYNAMIC PREDICTOR ──
 async function predictWithAI(task) {
     if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
-    let pKey = getConceptKey(task.prompt);
+    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let dataset = knn.getClassExampleCount();
-    if (!dataset[pKey] || dataset[pKey] < 1) return;
+    if (!dataset[pText] || dataset[pText] < 1) return;
 
     let predictedClicks = [];
     for (let m of task.media) {
@@ -400,10 +382,10 @@ async function predictWithAI(task) {
                 res = knn.predictClass(features);
             });
             let resolvedRes = await res;
-            let conf = resolvedRes.confidences[pKey] || 0;
-            let negConf = resolvedRes.confidences['neg_' + pKey] || 0;
+            let conf = resolvedRes.confidences[pText] || 0;
+            let negConf = resolvedRes.confidences['negative_' + pText] || 0;
             
-            if (resolvedRes.label === pKey && conf >= 0.70 && negConf <= 0.25) {
+            if (resolvedRes.label === pText && conf >= 0.80 && negConf < 0.30) {
                 predictedClicks.push(m.index);
             }
             await tf.nextFrame();
@@ -573,7 +555,6 @@ document.body.addEventListener('click', (e) => {
         
         if (act === 'retrain') {
             retrainEditingTasks.add(tid);
-            t._oldClicks = [...(t.clicks || [])];
             card.classList.add('in-retrain');
             let banner = document.createElement('div');
             banner.className = 'retrain-banner'; banner.id = `banner-${tid}`;
@@ -595,16 +576,12 @@ document.body.addEventListener('click', (e) => {
                 setTimeout(() => { actionBtn.classList.remove('btn-warn'); actionBtn.textContent = '✅ Update & Train'; }, 1000);
                 return;
             }
-            
-            let wrongIndices = (t._oldClicks || []).filter(idx => !t.clicks.includes(idx));
-
             fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ taskId: tid, clicks: t.clicks })
             }).then(() => {
-                if (isAIReady && t.type === 'grid') trainAIBrainAsync(t, wrongIndices);
+                if (isAIReady && t.type === 'grid') trainAIBrainAsync(t);
                 retrainEditingTasks.delete(tid);
-                delete t._oldClicks;
                 card.classList.remove('in-retrain');
                 let b = card.querySelector(`#banner-${tid}`); if (b) b.remove();
                 let actBox = card.querySelector(`#act-${tid}`);
@@ -625,7 +602,6 @@ document.body.addEventListener('click', (e) => {
 
         if (act === 'cancel-retrain') {
             retrainEditingTasks.delete(tid);
-            delete t._oldClicks;
             card.classList.remove('in-retrain');
             let b = card.querySelector(`#banner-${tid}`); if (b) b.remove();
             let actBox = card.querySelector(`#act-${tid}`);
@@ -649,7 +625,7 @@ document.body.addEventListener('click', (e) => {
 
         if (act === 'reset') {
             t.clicks = [];
-            card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick', 'retrain-pick'));
+            card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick'));
             card.querySelectorAll('.dot').forEach(d => d.remove());
             card.classList.remove('ai-processing');
             return;
