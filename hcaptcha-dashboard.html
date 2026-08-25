@@ -4,65 +4,67 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — 100x GPU Batch Solver</title>
+    <title>hCaptcha Master Pro — Live Stream</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { background-color: #0c0c0c; color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; padding: 8px; gap: 8px; }
+        * { box-sizing: border-box; }
+        body { background-color: #0c0c0c; color: #ffffff; font-family: Arial, sans-serif; margin: 0; padding: 12px; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
         
-        .header { background: #181818; padding: 8px 14px; border-bottom: 2px solid #00ff88; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-shrink: 0; border-radius: 4px; }
-        .header-left { display: flex; align-items: center; gap: 12px; }
-        .header h1 { margin: 0; font-size: 16px; color: #00ff88; }
-        .tabs { display: flex; gap: 4px; }
-        .tab-btn { background: #282828; color: #aaa; border: 1px solid #444; padding: 5px 12px; font-size: 12px; font-weight: bold; cursor: pointer; border-radius: 4px; }
+        .header { background: #181818; padding: 10px 16px; border-bottom: 2px solid #00ff88; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-shrink: 0; border-radius: 4px; }
+        .header-left { display: flex; align-items: center; gap: 15px; }
+        .header h1 { margin: 0; font-size: 17px; color: #00ff88; }
+        .tabs { display: flex; gap: 6px; }
+        .tab-btn { background: #282828; color: #aaa; border: 1px solid #444; padding: 6px 14px; font-size: 13px; font-weight: bold; cursor: pointer; border-radius: 4px; }
         .tab-btn.active { background: #00ff88; color: #000; border-color: #00ff88; }
         .count-badge { background: #000; color: #fff; padding: 1px 6px; border-radius: 8px; font-size: 11px; margin-left: 4px; }
 
-        .ai-bar { display: flex; align-items: center; gap: 6px; }
+        .ai-bar { display: flex; align-items: center; gap: 8px; }
         .live-status { font-size: 11px; font-weight: bold; padding: 4px 8px; border-radius: 4px; background: #1a1a1a; border: 1px solid #ff4444; color: #ff4444; }
         .live-status.active { border-color: #00ff88; color: #00ff88; }
-        .sync-status { font-size: 11px; color: #ffaa00; font-weight: bold; padding: 4px 8px; background: #1a1a1a; border-radius: 4px; border: 1px solid #333; }
-        .sync-status.active { color: #00ff88; border-color: #00ff88; }
-        .btn-toggle { padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: bold; border: 1px solid #555; background: #222; color: #888; }
+        .sync-status { font-size: 12px; color: #ffaa00; font-weight: bold; }
+        .sync-status.active { color: #00ff88; }
+        .btn-toggle { padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; border: 1px solid #555; background: #222; color: #888; }
         .btn-toggle.on { background: #00ff88; color: #000; border-color: #00ff88; }
-        .btn-clear-ai { background: #331111; color: #ff5555; border: 1px solid #772222; padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; cursor: pointer; }
-        .search-box input { padding: 4px 8px; background: #222; border: 1px solid #444; color: #00ff88; border-radius: 4px; font-size: 11px; outline: none; width: 110px; }
+        .btn-clear-ai { background: #331111; color: #ff5555; border: 1px solid #772222; padding: 6px 10px; border-radius: 4px; font-size: 11px; font-weight: bold; cursor: pointer; }
+        .search-box input { padding: 6px 10px; background: #222; border: 1px solid #444; color: #00ff88; border-radius: 4px; font-size: 12px; outline: none; width: 140px; }
 
-        .workspace-split { display: flex; gap: 8px; flex: 1; min-height: 0; }
-        .column { flex: 1; display: flex; flex-direction: column; background: #141414; border: 1px solid #262626; border-radius: 4px; overflow: hidden; }
-        .column-header { padding: 6px 10px; background: #1c1c1c; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; font-weight: bold; font-size: 12px; }
-        .col-title-ai { color: #00ff88; }
-        .col-title-manual { color: #ff9900; }
-        .stream-count { background: #000; padding: 1px 6px; border-radius: 6px; font-size: 11px; color: #fff; }
+        .workspace-split { display: flex; gap: 12px; flex: 1; min-height: 0; margin-top: 10px; }
         
-        .task-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
-        .task-card { background: #1c1c1c; border: 1px solid #333; border-radius: 4px; padding: 8px; contain: layout; }
-        .task-card.ai-processing { border: 2px solid #ff00ff !important; box-shadow: 0 0 8px rgba(255,0,255,0.3); }
+        .column { flex: 1; display: flex; flex-direction: column; background: #141414; border: 1px solid #262626; border-radius: 6px; overflow: hidden; }
+        .column-header { padding: 8px 12px; background: #1c1c1c; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; font-weight: bold; }
+        .col-title-ai { color: #00ff88; font-size: 14px; }
+        .col-title-manual { color: #ff9900; font-size: 14px; }
+        .stream-count { background: #000; padding: 2px 6px; border-radius: 8px; font-size: 11px; color: #fff; }
+        
+        .task-list { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+        
+        .task-card { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; padding: 10px; }
+        .task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 8px rgba(255,0,255,0.3); }
         .task-card.in-retrain { border: 2px solid #ff8800 !important; background: #221405 !important; }
-        .task-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
-        .task-id { color: #ff4444; font-family: monospace; font-size: 12px; font-weight: bold; }
+        .task-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+        .task-id { color: #ff4444; font-family: monospace; font-size: 13px; font-weight: bold; }
         
-        .prompt-container { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; background: #222; padding: 4px; border-radius: 4px; border: 1px solid #333; }
-        .example-wrap { flex-shrink: 0; width: 38px; height: 38px; }
-        .example-img { width: 38px; height: 38px; object-fit: cover; border-radius: 3px; border: 1px solid #555; }
-        .example-img-placeholder { width: 38px; height: 38px; border-radius: 3px; background: #2a2a2a; border: 1px dashed #555; display: flex; align-items: center; justify-content: center; font-size: 14px; }
-        .task-prompt { color: #fff; font-size: 11px; font-weight: bold; line-height: 1.2; }
+        .prompt-container { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; background: #222; padding: 5px; border-radius: 4px; border: 1px solid #333; }
+        .example-wrap { flex-shrink: 0; width: 42px; height: 42px; }
+        .example-img { width: 42px; height: 42px; object-fit: cover; border-radius: 3px; border: 1px solid #555; }
+        .example-img-placeholder { width: 42px; height: 42px; border-radius: 3px; background: #2a2a2a; border: 1px dashed #555; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+        .task-prompt { color: #fff; font-size: 12px; font-weight: bold; line-height: 1.3; }
 
-        .img-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; width: 100%; max-width: 480px; margin: 0 auto; }
-        .img-grid img { width: 100%; height: 95px; object-fit: cover; cursor: pointer; border: 3px solid transparent; background: #222; border-radius: 3px; display: block; }
+        .img-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
+        .img-grid img { width: 100%; height: 105px; object-fit: cover; cursor: pointer; border: 3px solid transparent; background: #222; border-radius: 3px; }
         .img-grid img.selected { border-color: #00ff88; opacity: 0.85; }
-        .img-grid img.ai-pick { border-color: #ff00ff !important; opacity: 0.9; }
+        .img-grid img.ai-pick { border-color: #ff00ff; opacity: 0.9; }
         .img-grid img.retrain-pick { border-color: #ff8800 !important; opacity: 0.95; }
         
         .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; align-items: center; background: #000; border-radius: 4px; border: 1px solid #444; overflow: hidden; }
-        .single-box img { width: 100%; height: auto; min-height: 320px; max-height: 420px; object-fit: contain; display: block; user-select: none; }
-        .dot { position: absolute; width: 14px; height: 14px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 10; }
+        .single-box img { width: 100%; height: auto; min-height: 380px; max-height: 480px; object-fit: contain; display: block; user-select: none; }
+        .dot { position: absolute; width: 16px; height: 16px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 10; }
         .dot.retrain-dot { background: #ff8800; }
 
-        .actions { display: flex; gap: 4px; margin-top: 6px; }
-        .btn { flex: 1; padding: 7px; border: none; font-weight: bold; cursor: pointer; color: #fff; font-size: 11px; border-radius: 3px; }
+        .actions { display: flex; gap: 6px; margin-top: 8px; }
+        .btn { flex: 1; padding: 8px; border: none; font-weight: bold; cursor: pointer; color: #fff; font-size: 12px; border-radius: 4px; }
         .btn-save { background: #00ff88; color: #000; }
         .btn-reset { background: #444; }
         .btn-del { background: #ff4444; flex: 0.3; }
@@ -71,18 +73,16 @@
         .btn-cancel { background: #555; }
         .btn-warn { background: #ff2222 !important; color: #fff !important; }
 
-        #trainedView { display: none; flex: 1; flex-direction: column; background: #141414; border: 1px solid #262626; border-radius: 4px; overflow: hidden; }
-        .trained-container { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-wrap: wrap; gap: 8px; align-content: flex-start; }
-        .retrain-banner { font-size: 11px; color: #ff8800; margin-bottom: 4px; padding: 4px; background: #331c00; border-radius: 3px; border: 1px dashed #ff8800; font-weight: bold; text-align: center; }
-        ::-webkit-scrollbar { width: 4px; }
-        ::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+        #trainedView { display: none; flex: 1; flex-direction: column; background: #141414; border: 1px solid #262626; border-radius: 6px; overflow: hidden; margin-top: 10px; }
+        .trained-container { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-wrap: wrap; gap: 12px; }
+        .retrain-banner { font-size: 11px; color: #ff8800; margin-bottom: 6px; padding: 5px; background: #331c00; border-radius: 3px; border: 1px dashed #ff8800; font-weight: bold; text-align: center; }
     </style>
 </head>
 <body>
 
 <div class="header">
     <div class="header-left">
-        <h1>⚡ hCaptcha Master Pro (Instant Batch Engine)</h1>
+        <h1>hCaptcha Master Pro</h1>
         <div class="tabs">
             <button class="tab-btn active" id="btn-pending" onclick="setTab('pending')">Pending <span class="count-badge" id="c-pending">0</span></button>
             <button class="tab-btn" id="btn-trained" onclick="setTab('trained')">Trained <span class="count-badge" id="c-trained">0</span></button>
@@ -104,7 +104,7 @@
     <div class="column">
         <div class="column-header">
             <span class="col-title-ai">🤖 AI Fast-Train Stream (Grids)</span>
-            <span class="stream-count" id="c-grid">0 Grids</span>
+            <span class="stream-count" id="c-grid">0 Tasks</span>
         </div>
         <div class="task-list" id="gridArea"></div>
     </div>
@@ -119,7 +119,7 @@
 
 <div id="trainedView">
     <div class="column-header">
-        <span style="color:#00ff88">🗂️ Trained Database Archive</span>
+        <span style="color:#00ff88;font-size:14px;">🗂️ Trained Database Archive</span>
         <span class="stream-count" id="c-trained-total">0 Solved</span>
     </div>
     <div class="trained-container" id="trainedArea"></div>
@@ -135,24 +135,17 @@ const syncStatus = document.getElementById('syncStatus');
 const wsStatus = document.getElementById('wsStatus');
 
 let currentTab = 'pending';
-let serverData = { pending: {}, trained: {} }, activeTasksStore = {};
-let videoTasksMap = new Map();
+let serverData = { pending: {}, trained: {} }, activeTasksStore = {}, videoTasks = [];
 let ghostBlocker = new Set();
 let retrainEditingTasks = new Set();
 let isFetching = false;
+let trainedPage = 0;
 
-let isAIReady = false, aiModel = null, knn = null;
+let isAIReady = false, aiModel, knn;
 let autoTrainEnabled = true, autoSaveEnabled = true;
 let isEvaluatingAI = false;
-let brainSyncTimer = null;
 
-// Controlled AI loop — Worker hataya, simple interval use karo
-setInterval(() => {
-    if (isAIReady && autoTrainEnabled && !isEvaluatingAI) {
-        megaBatchGPUExecutor();
-    }
-}, 800);
-
+// ── WEBSOCKET LIVE ENGINE ──
 let ws = null;
 function initWS() {
     if (ws && ws.readyState < 2) return;
@@ -163,7 +156,7 @@ function initWS() {
             wsStatus.innerText = '🟢 Live';
             ws.send(JSON.stringify({ action: 'dashboard' }));
         };
-        ws.onmessage = async (ev) => {
+        ws.onmessage = (ev) => {
             try {
                 let msg = JSON.parse(ev.data);
                 if (msg.type === 'counts') {
@@ -176,12 +169,11 @@ function initWS() {
                     if (!ghostBlocker.has(td.id) && !activeTasksStore[td.id]) {
                         serverData.pending[td.id] = td;
                         let isGrid = (td.media || []).length > 1;
-                        let taskObj = { id: td.id, clicks: [], type: isGrid ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '' };
-                        activeTasksStore[td.id] = taskObj;
-
-                        let card = buildCard(taskObj);
+                        activeTasksStore[td.id] = { id: td.id, clicks: [], type: isGrid ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '' };
+                        let card = buildCard(activeTasksStore[td.id]);
                         if (isGrid) {
                             gridArea.prepend(card);
+                            if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[td.id]);
                         } else {
                             manualArea.prepend(card);
                         }
@@ -194,7 +186,7 @@ function initWS() {
                     document.querySelector(`.task-card[data-id="${tid}"]`)?.remove();
                     delete activeTasksStore[tid];
                     delete serverData.pending[tid];
-                    videoTasksMap.delete(tid);
+                    videoTasks = videoTasks.filter(v => v.id !== tid);
                     updateCountsDisplay();
                 }
             } catch(e) {}
@@ -214,80 +206,18 @@ function updateCountsDisplay() {
     document.getElementById('c-manual').innerText = `${manualArea.children.length} Tasks`;
 }
 
-// AI Engine Storage
-async function loadServerBrain() {
-    try {
-        let r = await fetch(`${SERVER_URL}/api/ai-brain?t=${Date.now()}`);
-        if (!r.ok) return;
-        let ser = await r.json();
-        if (!ser || !Object.keys(ser).length) return;
-        
-        let ds = {};
-        let loaded = 0;
-        for (let k in ser) {
-            try {
-                let item = ser[k];
-                if (!item?.data || !item?.shape) continue;
-                // Float32Array se tensor banao — plain array nahi
-                let arr = new Float32Array(item.data);
-                ds[k] = tf.tensor(arr, item.shape);
-                loaded++;
-            } catch(e) {}
-        }
-        if (loaded > 0) {
-            knn.setClassifierDataset(ds);
-            updateAIStatus();
-        }
-    } catch(e) {}
-}
-
-function scheduleServerBrainSave() {
-    if (brainSyncTimer) clearTimeout(brainSyncTimer);
-    brainSyncTimer = setTimeout(async () => {
-        if (!knn) return;
-        try {
-            let ds = knn.getClassifierDataset();
-            let keys = Object.keys(ds);
-            if (!keys.length) return;
-            
-            let ser = {};
-            for (let k of keys) {
-                try {
-                    // dataSync Float32Array — JSON.stringify ke liye Array mein convert
-                    let raw = ds[k].dataSync();
-                    ser[k] = { data: Array.from(raw), shape: ds[k].shape };
-                } catch(e) {}
-            }
-            if (!Object.keys(ser).length) return;
-            
-            await fetch(`${SERVER_URL}/api/ai-brain`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(ser)
-            });
-            updateAIStatus();
-        } catch(e) {}
-    }, 2000);
-}
-
 async function initAI() {
     try {
-        syncStatus.innerHTML = '🧠 AI Loading...';
-        
-        // Is device pe WebGL support nahi — seedha CPU
-        await tf.setBackend('cpu');
+        await tf.setBackend('webgl');
         await tf.ready();
-
-        // version 1 alpha 0.25 — CPU pe sabse fast, valid combination
-        aiModel = await mobilenet.load({ version: 1, alpha: 0.25 });
+        aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
         knn = knnClassifier.create();
-        await loadServerBrain();
+        await loadKNN();
         isAIReady = true;
         updateAIStatus();
-        megaBatchGPUExecutor();
+        reEvaluatePending();
     } catch(e) {
-        syncStatus.innerHTML = '⚠️ AI Failed — Retry...';
-        setTimeout(initAI, 8000);
+        syncStatus.innerHTML = "⚠️ AI Fallback";
     }
 }
 
@@ -295,15 +225,61 @@ function updateAIStatus() {
     if (!knn) return;
     try {
         let ds = knn.getClassExampleCount();
-        let concepts = Object.keys(ds).filter(k => !k.startsWith('neg_')).length;
+        let concepts = Object.keys(ds).filter(k => !k.startsWith('negative_')).length;
         syncStatus.innerHTML = `🤖 AI Ready ✅ (${concepts} Concepts)`;
         syncStatus.classList.add('active');
     } catch(e) {}
 }
 
+const IDB = { name:'hcm_knn_master', store:'knn', key:'model_v6' };
+function idbOpen() {
+    return new Promise((res,rej)=>{
+        let r = indexedDB.open(IDB.name,1);
+        r.onupgradeneeded = e => e.target.result.createObjectStore(IDB.store);
+        r.onsuccess = e => res(e.target.result);
+        r.onerror = () => rej(r.error);
+    });
+}
+async function idbSet(val) {
+    let db = await idbOpen();
+    return new Promise((res,rej)=>{
+        let tx = db.transaction(IDB.store,'readwrite');
+        tx.objectStore(IDB.store).put(val, IDB.key);
+        tx.oncomplete = res; tx.onerror = ()=>rej(tx.error);
+    });
+}
+async function idbGet() {
+    let db = await idbOpen();
+    return new Promise((res,rej)=>{
+        let tx = db.transaction(IDB.store,'readonly');
+        let req = tx.objectStore(IDB.store).get(IDB.key);
+        req.onsuccess = () => res(req.result||null);
+        req.onerror = () => rej(req.error);
+    });
+}
+async function saveKNN() {
+    if (!knn) return;
+    try {
+        let ds = knn.getClassifierDataset();
+        let ser = {};
+        for (let k in ds) { ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape }; }
+        await idbSet(ser);
+        updateAIStatus();
+    } catch(e) {}
+}
+async function loadKNN() {
+    try {
+        let ser = await idbGet();
+        if (!ser) return;
+        let ds = {};
+        for (let k in ser) { ds[k] = tf.tensor(ser[k].data, ser[k].shape); }
+        knn.setClassifierDataset(ds);
+    } catch(e) {}
+}
+
 async function resetAIBrain() {
-    if (confirm("Kya aap AI memory reset karna chahte hain?")) {
-        await fetch(`${SERVER_URL}/api/ai-brain`, { method: 'DELETE' });
+    if (confirm("Kya aap AI Brain ki sari memory reset karna chahte hain?")) {
+        indexedDB.deleteDatabase(IDB.name);
         if (knn) knn.clearAllClasses();
         location.reload();
     }
@@ -330,7 +306,7 @@ function toggleAutoTrain() {
     let btn = document.getElementById('btnAutoTrain');
     btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
     btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
-    if (autoTrainEnabled && isAIReady) megaBatchGPUExecutor();
+    if (autoTrainEnabled && isAIReady) reEvaluatePending();
 }
 
 function toggleAutoSave() {
@@ -340,164 +316,114 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
-function getConceptKey(prompt) {
-    return (prompt || '').split('|||')[0].trim().toLowerCase().replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ');
-}
+async function trainAIBrainAsync(task) {
+    if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
+    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
+    let negLabel = 'negative_' + pText;
 
-// MobileNet ke liye image 224x224 pe resize karo — CPU pe bhi fast
-function getFeatures(imgEl) {
-    try {
-        let tc = document.createElement('canvas');
-        tc.width = 224; tc.height = 224;
-        let ctx = tc.getContext('2d');
-        ctx.drawImage(imgEl, 0, 0, 224, 224);
-        let tensor = tf.browser.fromPixels(tc);
-        let features = aiModel.infer(tensor, true);
-        tensor.dispose();
-        return features;
-    } catch(e) { return null; }
-}
-
-// ── BATCH INFERENCE ──
-async function megaBatchGPUExecutor() {
-    if (isEvaluatingAI || !isAIReady || !autoTrainEnabled) return;
-    isEvaluatingAI = true;
-
-    try {
-        let dataset = knn.getClassExampleCount();
-        let pendingGrids = Object.values(activeTasksStore).filter(t => 
-            t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0) && !ghostBlocker.has(t.id)
-        );
-
-        if (!pendingGrids.length) { isEvaluatingAI = false; return; }
-
-        let trainableTasks = pendingGrids.filter(t => {
-            let k = getConceptKey(t.prompt);
-            return dataset[k] && dataset[k] > 0;
-        });
-
-        if (!trainableTasks.length) { isEvaluatingAI = false; return; }
-
-        for (let task of trainableTasks) {
-            let pKey = getConceptKey(task.prompt);
-            let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
-            if (!card) continue;
-
-            let imgElements = card.querySelectorAll('.g-img');
-            if (imgElements.length === 0) continue;
-
-            let predictedClicks = [];
-
-            // tf.tidy NAHI — predictClass async Promise hai, tidy se tensor dispose ho jaata tha
-            for (let imgEl of imgElements) {
-                let idx = parseInt(imgEl.dataset.index);
-                if (!imgEl.complete || imgEl.naturalWidth === 0) continue;
-                try {
-                    let features = getFeatures(imgEl);
-                    if (!features) continue;
-                    let res = await knn.predictClass(features);
-                    features.dispose();
-
-                    let conf = res.confidences[pKey] || 0;
-                    let negConf = res.confidences['neg_' + pKey] || 0;
-                    // v1 CPU model: 0.50 threshold — 0.65 bohot strict tha
-                    if (res.label === pKey && conf >= 0.50 && negConf <= 0.50) {
-                        predictedClicks.push(idx);
-                    }
-                    await tf.nextFrame();
-                } catch(e) {}
-            }
-
-            if (predictedClicks.length >= 1 && predictedClicks.length <= 6) {
-                task.clicks = predictedClicks;
-                card.classList.add('ai-processing');
-                predictedClicks.forEach(idx => {
-                    let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
-                    if (imgEl) imgEl.classList.add('ai-pick');
-                });
-
-                if (autoSaveEnabled) {
-                    sendToServer(task.id, null, card);
+    for (let m of task.media) {
+        let imgSrc = m.thumb || m.src;
+        if (!imgSrc) continue;
+        try {
+            let img = new Image();
+            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
+            img.src = imgSrc;
+            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 300); });
+            if (!img.complete || img.naturalWidth === 0) continue;
+            
+            tf.tidy(() => {
+                let tfImg = tf.browser.fromPixels(img);
+                let features = aiModel.infer(tfImg, true);
+                if (task.clicks.includes(m.index)) {
+                    knn.addExample(features, pText);
+                    knn.addExample(features, pText);
+                    knn.addExample(features, pText);
+                } else {
+                    knn.addExample(features, negLabel);
                 }
+            });
+            await tf.nextFrame();
+        } catch(e) {}
+    }
+    await saveKNN();
+    reEvaluatePending();
+}
+
+async function predictWithAI(task) {
+    if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
+    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
+    let dataset = knn.getClassExampleCount();
+    if (!dataset[pText] || dataset[pText] < 1) return;
+
+    let predictedClicks = [];
+    for (let m of task.media) {
+        let imgSrc = m.thumb || m.src;
+        if (!imgSrc) continue;
+        try {
+            let img = new Image();
+            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
+            img.src = imgSrc;
+            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 200); });
+            if (!img.complete || img.naturalWidth === 0) continue;
+            
+            let res = null;
+            tf.tidy(() => {
+                let tfImg = tf.browser.fromPixels(img);
+                let features = aiModel.infer(tfImg, true);
+                res = knn.predictClass(features);
+            });
+            let resolvedRes = await res;
+            let conf = resolvedRes.confidences[pText] || 0;
+            let negConf = resolvedRes.confidences['negative_' + pText] || 0;
+            
+            if (resolvedRes.label === pText && conf >= 0.80 && negConf < 0.30) {
+                predictedClicks.push(m.index);
+            }
+            await tf.nextFrame();
+        } catch(e) {}
+    }
+
+    if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
+        task.clicks = predictedClicks;
+        let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
+        if (card) {
+            card.classList.add('ai-processing');
+            predictedClicks.forEach(idx => {
+                let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
+                if (imgEl) { imgEl.classList.add('ai-pick'); }
+            });
+            if (autoSaveEnabled) {
+                let btn = card.querySelector('.btn-save');
+                if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Instant Solved'; }
+                sendToServer(task.id, btn, card);
             }
         }
-    } catch(e) {}
+    }
+}
 
+async function reEvaluatePending() {
+    if (isEvaluatingAI) return;
+    isEvaluatingAI = true;
+    for (let id in serverData.pending) {
+        let t = activeTasksStore[id];
+        if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
+            await predictWithAI(t);
+        }
+    }
     isEvaluatingAI = false;
-}
-
-// Train directly from DOM card images — already loaded, no network needed
-function trainAIBrainFromCard(task, card) {
-    if (!isAIReady || !card) return;
-    let pKey = getConceptKey(task.prompt);
-    let negLabel = 'neg_' + pKey;
-    let trained = 0;
-
-    card.querySelectorAll('.g-img').forEach(imgEl => {
-        if (!imgEl.complete || imgEl.naturalWidth === 0) return;
-        let idx = parseInt(imgEl.dataset.index);
-        try {
-            let features = getFeatures(imgEl);
-            if (!features) return;
-            let isSelected = (task.clicks || []).includes(idx);
-            if (isSelected) {
-                knn.addExample(features, pKey);
-                knn.addExample(features, pKey);
-                knn.addExample(features, pKey);
-            } else {
-                knn.addExample(features, negLabel);
-            }
-            features.dispose();
-            trained++;
-        } catch(e) {}
-    });
-
-    if (trained > 0) scheduleServerBrainSave();
-}
-
-// Retrain — wrong indices ke saath, card abhi bhi DOM mein hai
-function trainAIBrainAsync(task, wrongIndices = []) {
-    if (!isAIReady || task.type !== 'grid') return;
-    let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
-    if (!card) return;
-    let pKey = getConceptKey(task.prompt);
-    let negLabel = 'neg_' + pKey;
-
-    card.querySelectorAll('.g-img').forEach(imgEl => {
-        if (!imgEl.complete || imgEl.naturalWidth === 0) return;
-        let idx = parseInt(imgEl.dataset.index);
-        try {
-            let features = getFeatures(imgEl);
-            if (!features) return;
-            let isSelected = (task.clicks || []).includes(idx);
-            let wasWrong = wrongIndices.includes(idx);
-            if (isSelected) {
-                knn.addExample(features, pKey);
-                knn.addExample(features, pKey);
-                knn.addExample(features, pKey);
-            } else if (wasWrong) {
-                knn.addExample(features, negLabel);
-                knn.addExample(features, negLabel);
-            } else {
-                knn.addExample(features, negLabel);
-            }
-            features.dispose();
-        } catch(e) {}
-    });
-
-    scheduleServerBrainSave();
 }
 
 async function fetchTasks() {
     if (isFetching) return;
     isFetching = true;
     try {
-        const res = await fetch(`${SERVER_URL}/api/tasks?tab=${currentTab}&page=0&size=40&t=${Date.now()}`, { cache: 'no-store' });
+        const res = await fetch(`${SERVER_URL}/api/tasks?tab=${currentTab}&page=${trainedPage}&size=40&t=${Date.now()}`, { cache: 'no-store' });
         if (res.ok) {
             const data = await res.json();
             if (currentTab === 'pending') {
                 serverData.pending = data.tasks || {};
                 renderPendingStreams();
+                if (isAIReady && autoTrainEnabled) reEvaluatePending();
             } else {
                 serverData.trained = data.tasks || {};
                 renderTrainedStream();
@@ -515,7 +441,6 @@ function renderPendingStreams() {
         if (!pending[id] || ghostBlocker.has(id)) {
             card.remove();
             delete activeTasksStore[id];
-            videoTasksMap.delete(id);
         }
     });
 
@@ -528,12 +453,12 @@ function renderPendingStreams() {
 
         if (isGrid) {
             gridArea.prepend(card);
+            if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[id]);
         } else {
             manualArea.prepend(card);
         }
     }
     updateCountsDisplay();
-    if (isAIReady && autoTrainEnabled) megaBatchGPUExecutor();
 }
 
 function renderTrainedStream() {
@@ -561,15 +486,6 @@ function buildCard(t, isTrained = false) {
     card.className = 'task-card';
     card.dataset.id = t.id;
     card.style.minWidth = isTrained ? '320px' : 'auto';
-    // Broken image retry — 1 baar reload
-    card.addEventListener('error', e => {
-        if (e.target.tagName === 'IMG' && !e.target.dataset.retried) {
-            e.target.dataset.retried = '1';
-            let s = e.target.src;
-            e.target.src = '';
-            setTimeout(() => { e.target.src = s; }, 500);
-        }
-    }, true);
 
     let parts = t.prompt.split('|||');
     let exHtml = parts[1] ? `<img src="${parts[1]}" class="example-img">` : `<div class="example-img-placeholder">🖼️</div>`;
@@ -583,18 +499,14 @@ function buildCard(t, isTrained = false) {
         });
         mediaHTML += '</div>';
     } else {
-        let m = t.media[0] || {};
-        let isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
+        let m = t.media[0], isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
         let src = isVid ? m.frames[0] : (m.src || '');
         mediaHTML = `<div class="single-box"><img src="${src}" class="s-img ${isVid?'vid-player':''}" data-id="${t.id}" draggable="false"/>`;
         t.clicks.forEach(pt => {
             mediaHTML += `<div class="dot" style="left:${pt.px}%;top:${pt.py}%;"></div>`;
         });
         mediaHTML += '</div>';
-        
-        if (isVid && !isTrained) {
-            videoTasksMap.set(t.id, { frames: m.frames, current: 0 });
-        }
+        if (isVid && !isTrained) videoTasks.push({ id: t.id, frames: m.frames, current: 0 });
     }
 
     let actions = !isTrained ? `
@@ -619,7 +531,7 @@ function buildCard(t, isTrained = false) {
     return card;
 }
 
-document.addEventListener('click', (e) => {
+document.body.addEventListener('click', (e) => {
     let actionBtn = e.target.closest('[data-action]');
     let card = e.target.closest('.task-card');
     if (!card) return;
@@ -634,7 +546,6 @@ document.addEventListener('click', (e) => {
         
         if (act === 'retrain') {
             retrainEditingTasks.add(tid);
-            t._oldClicks = [...(t.clicks || [])];
             card.classList.add('in-retrain');
             let banner = document.createElement('div');
             banner.className = 'retrain-banner'; banner.id = `banner-${tid}`;
@@ -656,16 +567,12 @@ document.addEventListener('click', (e) => {
                 setTimeout(() => { actionBtn.classList.remove('btn-warn'); actionBtn.textContent = '✅ Update & Train'; }, 1000);
                 return;
             }
-            
-            let wrongIndices = (t._oldClicks || []).filter(idx => !t.clicks.includes(idx));
-
             fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ taskId: tid, clicks: t.clicks })
             }).then(() => {
-                if (isAIReady && t.type === 'grid') trainAIBrainAsync(t, wrongIndices);
+                if (isAIReady && t.type === 'grid') trainAIBrainAsync(t);
                 retrainEditingTasks.delete(tid);
-                delete t._oldClicks;
                 card.classList.remove('in-retrain');
                 let b = card.querySelector(`#banner-${tid}`); if (b) b.remove();
                 let actBox = card.querySelector(`#act-${tid}`);
@@ -686,7 +593,6 @@ document.addEventListener('click', (e) => {
 
         if (act === 'cancel-retrain') {
             retrainEditingTasks.delete(tid);
-            delete t._oldClicks;
             card.classList.remove('in-retrain');
             let b = card.querySelector(`#banner-${tid}`); if (b) b.remove();
             let actBox = card.querySelector(`#act-${tid}`);
@@ -710,17 +616,14 @@ document.addEventListener('click', (e) => {
 
         if (act === 'reset') {
             t.clicks = [];
-            card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick', 'retrain-pick'));
+            card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick'));
             card.querySelectorAll('.dot').forEach(d => d.remove());
             card.classList.remove('ai-processing');
             return;
         }
 
         if (act === 'del') {
-            ghostBlocker.add(tid); 
-            card.remove(); 
-            delete activeTasksStore[tid];
-            videoTasksMap.delete(tid);
+            ghostBlocker.add(tid); card.remove(); delete activeTasksStore[tid];
             updateCountsDisplay();
             fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).catch(()=>{});
             return;
@@ -742,7 +645,7 @@ document.addEventListener('click', (e) => {
         } else {
             e.target.classList.add('selected');
             if (isInRetrain) e.target.classList.add('retrain-pick');
-            if (!t.clicks.includes(idx)) t.clicks.push(idx);
+            t.clicks.push(idx);
         }
     } else if (e.target.classList.contains('s-img')) {
         let img = e.target;
@@ -789,17 +692,14 @@ function sendToServer(taskId, btnEl, card) {
         body: JSON.stringify({ taskId, clicks: t.clicks })
     }).catch(()=>{});
 
-    // Train PEHLE — card DOM mein hota hai to images milti hain
-    // Card remove baad mein karo
-    if (isAIReady && t.type === 'grid' && t.clicks.length > 0 && card) {
-        trainAIBrainFromCard(t, card);
-    }
-
     ghostBlocker.add(taskId);
     if (card) card.remove();
     delete activeTasksStore[taskId];
-    videoTasksMap.delete(taskId);
     updateCountsDisplay();
+
+    if (isAIReady && t.type === 'grid' && t.clicks.length > 0) {
+        trainAIBrainAsync(t);
+    }
 }
 
 function filterTasks() {
@@ -810,14 +710,14 @@ function filterTasks() {
 }
 
 setInterval(() => {
-    videoTasksMap.forEach((entry, tid) => {
-        let el = document.querySelector(`.vid-player[data-id="${tid}"]`);
-        if (el && entry.frames && entry.frames.length > 0) {
-            entry.current = (entry.current + 1) % entry.frames.length;
-            el.src = entry.frames[entry.current];
+    videoTasks.forEach(vt => {
+        let el = document.querySelector(`.vid-player[data-id="${vt.id}"]`);
+        if (el && vt.frames?.length > 0) {
+            vt.current = (vt.current + 1) % vt.frames.length;
+            el.src = vt.frames[vt.current];
         }
     });
-}, 350);
+}, 150);
 
 initWS();
 fetchTasks();
