@@ -24,7 +24,10 @@ const DASHBOARD_PAGE_SIZE = 20;
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
 let conceptBank = {};
-let centralizedKnnDataset = {}; // Shared tensor memory across all workers
+let centralizedKnnDataset = {};
+
+// Task ID -> Worker WebSocket (Strict 1-to-1 Mapping)
+const taskAssignments = new Map();
 
 const browserSockets = new Map();
 const activeWorkers = new Map();
@@ -99,7 +102,6 @@ function initDB() {
     if (fs.existsSync(KNN_BRAIN_FILE)) {
         try {
             centralizedKnnDataset = JSON.parse(fs.readFileSync(KNN_BRAIN_FILE, 'utf8'));
-            console.log(`[AI] Centralized Brain Loaded (${Object.keys(centralizedKnnDataset).length} classes)`);
         } catch(e) {}
     }
 }
@@ -199,15 +201,17 @@ function notifyBrowsers(taskId, clicks) {
     }
 }
 
+// ── Strict 1-to-1 Task Dispatcher ──
 function dispatchTaskToWorker(taskData) {
     let isGrid = taskData.media && taskData.media.length > 1;
-    let mode = isGrid ? 'grid' : 'manual';
-    let workers = getOnlineWorkers(mode);
+    let targetMode = isGrid ? 'grid' : 'manual';
+    let workers = getOnlineWorkers(targetMode);
 
     if (workers.length === 0) return;
 
+    // Pick next worker via Round-Robin
     let targetWorker = null;
-    if (mode === 'grid') {
+    if (targetMode === 'grid') {
         gridWorkerIndex = (gridWorkerIndex + 1) % workers.length;
         targetWorker = workers[gridWorkerIndex];
     } else {
@@ -216,6 +220,7 @@ function dispatchTaskToWorker(taskData) {
     }
 
     if (targetWorker && targetWorker.ws.readyState === WebSocket.OPEN) {
+        taskAssignments.set(taskData.id, targetWorker.ws);
         targetWorker.meta.assignedTasks.add(taskData.id);
         targetWorker.ws.send(JSON.stringify({ action: 'new_task', task: taskData }));
     }
@@ -236,7 +241,10 @@ function handleNewTask(task, wsSource) {
     const keys = Object.keys(hcaptchaPending);
     if (keys.length >= MAX_PENDING) {
         let deletedKeys = keys.slice(0, 15);
-        deletedKeys.forEach(k => delete hcaptchaPending[k]);
+        deletedKeys.forEach(k => {
+            delete hcaptchaPending[k];
+            taskAssignments.delete(k);
+        });
         activeWorkers.forEach((_, ws) => {
             if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ action: 'bulk_remove_pending', taskIds: deletedKeys }));
@@ -295,6 +303,7 @@ function handleSubmitTask(taskId, clicks) {
         }
 
         delete hcaptchaPending[taskId];
+        taskAssignments.delete(taskId);
         persistDatabase();
         notifyBrowsers(taskId, clicks);
 
@@ -324,12 +333,16 @@ wss.on('connection', (ws) => {
                 };
                 activeWorkers.set(ws, workerMeta);
 
+                // Unassigned tasks me se sirf match hone wale mode ke tasks bhejo
                 let isGrid = workerMeta.mode === 'grid';
                 let availablePending = {};
                 
                 Object.values(hcaptchaPending).forEach(task => {
                     let taskIsGrid = task.media && task.media.length > 1;
-                    if ((isGrid && taskIsGrid) || (!isGrid && !taskIsGrid)) {
+                    
+                    // Strictly check mode & ensure task is NOT already assigned to someone else
+                    if (((isGrid && taskIsGrid) || (!isGrid && !taskIsGrid)) && !taskAssignments.has(task.id)) {
+                        taskAssignments.set(task.id, ws);
                         workerMeta.assignedTasks.add(task.id);
                         availablePending[task.id] = task;
                     }
@@ -350,7 +363,6 @@ wss.on('connection', (ws) => {
                 return;
             }
 
-            // Sync AI Brain Updates across all connected grid instances
             if (data.action === 'sync_knn_update' && data.knnUpdates) {
                 Object.assign(centralizedKnnDataset, data.knnUpdates);
                 persistDatabase();
@@ -400,6 +412,7 @@ wss.on('connection', (ws) => {
             activeWorkers.delete(ws);
 
             orphanedTasks.forEach(tid => {
+                taskAssignments.delete(tid);
                 if (hcaptchaPending[tid]) dispatchTaskToWorker(hcaptchaPending[tid]);
             });
 
@@ -449,6 +462,7 @@ app.get('/api/counts', (req, res) => {
 app.delete('/api/delete-hcaptcha/:id', (req, res) => {
     delete hcaptchaPending[req.params.id];
     delete hcaptchaTrained[req.params.id];
+    taskAssignments.delete(req.params.id);
     rebuildConceptBank(); 
     persistDatabase();
     
