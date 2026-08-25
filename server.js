@@ -105,30 +105,13 @@ function persistDatabase() {
 }
 
 function evaluateAutoSolve(task) {
-    // 1. Direct match by Task ID
     if (hcaptchaTrained[task.taskId]) {
         return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
     }
 
-    // 2. Direct match by Fingerprint Hash for Single Canvas/Image
-    if (task.media && task.media.length === 1) {
-        const item = task.media[0];
-        for (let tid in hcaptchaTrained) {
-            const trained = hcaptchaTrained[tid];
-            if (trained.media && trained.media.length === 1) {
-                const trItem = trained.media[0];
-                if (trItem.stableHash && item.stableHash && trItem.stableHash === item.stableHash) {
-                    return { solved: true, clicks: trained.clicks || [] };
-                }
-                if (item.dhash && trItem.dhash && item.dhash !== "0000000000000000" && getHammingDistance(item.dhash, trItem.dhash) <= 1) {
-                    return { solved: true, clicks: trained.clicks || [] };
-                }
-            }
-        }
-        return { solved: false };
-    }
+    const isVideoOrCoord = task.media && (task.media.length === 1 || task.media[0].type === 'video_frames' || task.media[0].frames);
+    if (isVideoOrCoord) return { solved: false };
 
-    // 3. Grid Tasks Concept Matching
     let cKey = getCleanKey(task);
     let targetDhashes = conceptBank[cKey];
 
@@ -174,9 +157,7 @@ function notifyBrowsers(taskId, clicks) {
         const sockets = browserSockets.get(taskId);
         const payload = JSON.stringify({ action: 'solve', taskId, clicks });
         sockets.forEach(ws => {
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.send(payload);
-            }
+            if (ws.readyState === WebSocket.OPEN) ws.send(payload);
         });
         browserSockets.delete(taskId);
     }
@@ -187,18 +168,10 @@ function handleNewTask(task, wsSource) {
 
     let autoRes = evaluateAutoSolve(task);
     if (autoRes.solved) {
-        // Auto-solve ho gaya: Sirf browser ko solution bhejo, Dashboard par mat bhejo
         if (wsSource && wsSource.readyState === WebSocket.OPEN) {
             wsSource.send(JSON.stringify({ action: 'solve', taskId: task.taskId, clicks: autoRes.clicks }));
         }
         notifyBrowsers(task.taskId, autoRes.clicks);
-        
-        // Agar pehle ghalti se pending mein tha toh delete karo aur dashboard se remove karo
-        if (hcaptchaPending[task.taskId]) {
-            delete hcaptchaPending[task.taskId];
-            broadcastDashboard({ action: 'task_solved', taskId: task.taskId });
-            broadcastCounts();
-        }
         return { success: true, autoSolved: true, clicks: autoRes.clicks };
     }
 
@@ -281,7 +254,6 @@ function handleSubmitTask(taskId, clicks) {
 
         delete hcaptchaPending[taskId];
         persistDatabase();
-        
         notifyBrowsers(taskId, clicks);
 
         broadcastDashboard({ action: 'task_solved', taskId, trainedTask: hcaptchaTrained[taskId] });
