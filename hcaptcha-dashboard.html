@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — Live Stream</title>
+    <title>hCaptcha Master Pro — Ultra Fast Learner</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -91,8 +91,7 @@
     <div class="ai-bar">
         <span class="live-status" id="wsStatus">🔴 Offline</span>
         <span class="sync-status" id="syncStatus">🧠 AI Ready</span>
-        <button id="btnAutoTrain" class="btn-toggle on" onclick="toggleAutoTrain()">🧠 Auto Train: ON</button>
-        <button id="btnAutoSave" class="btn-toggle on" onclick="toggleAutoSave()">💾 Auto Save: ON</button>
+        <button id="btnAutoTrain" class="btn-toggle on" onclick="toggleAutoTrain()">🧠 AI Suggestions: ON</button>
         <button class="btn-clear-ai" onclick="resetAIBrain()">🧹 Reset Brain</button>
         <div class="search-box">
             <input type="text" id="searchInput" oninput="filterTasks()" placeholder="🔍 Task ID..."/>
@@ -142,7 +141,7 @@ let isFetching = false;
 let trainedPage = 0;
 
 let isAIReady = false, aiModel, knn;
-let autoTrainEnabled = true, autoSaveEnabled = true;
+let autoTrainEnabled = true;
 let isEvaluatingAI = false;
 
 // ── Anti-Throttle Background Web Worker ──
@@ -240,7 +239,7 @@ function updateAIStatus() {
     } catch(e) {}
 }
 
-const IDB = { name:'hcm_knn_master', store:'knn', key:'model_v6' };
+const IDB = { name:'hcm_knn_master', store:'knn', key:'model_v7' };
 function idbOpen() {
     return new Promise((res,rej)=>{
         let r = indexedDB.open(IDB.name,1);
@@ -314,19 +313,13 @@ function toggleAutoTrain() {
     autoTrainEnabled = !autoTrainEnabled;
     let btn = document.getElementById('btnAutoTrain');
     btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
-    btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
+    btn.textContent = '🧠 AI Suggestions: ' + (autoTrainEnabled ? 'ON' : 'OFF');
     if (autoTrainEnabled && isAIReady) reEvaluatePending();
 }
 
-function toggleAutoSave() {
-    autoSaveEnabled = !autoSaveEnabled;
-    let btn = document.getElementById('btnAutoSave');
-    btn.className = 'btn-toggle' + (autoSaveEnabled ? ' on' : '');
-    btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
-}
-
-async function trainAIBrainAsync(task) {
-    if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
+// ── FAST-LEARNING ENGINE (6x Boosted Weights & Retrain Penalty) ──
+async function trainAIBrainAsync(task, wrongIndices = []) {
+    if (!isAIReady || task.type !== 'grid' || !task.media) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let negLabel = 'negative_' + pText;
 
@@ -343,10 +336,16 @@ async function trainAIBrainAsync(task) {
             tf.tidy(() => {
                 let tfImg = tf.browser.fromPixels(img);
                 let features = aiModel.infer(tfImg, true);
-                if (task.clicks.includes(m.index)) {
-                    knn.addExample(features, pText);
-                    knn.addExample(features, pText);
-                    knn.addExample(features, pText);
+                
+                let isSelected = (task.clicks || []).includes(m.index);
+                let wasWrongSelection = wrongIndices.includes(m.index);
+
+                if (isSelected) {
+                    // 6x Positive Training
+                    for (let i = 0; i < 6; i++) knn.addExample(features, pText);
+                } else if (wasWrongSelection) {
+                    // 8x Negative Penalty for corrected mistake
+                    for (let i = 0; i < 8; i++) knn.addExample(features, negLabel);
                 } else {
                     knn.addExample(features, negLabel);
                 }
@@ -358,6 +357,7 @@ async function trainAIBrainAsync(task) {
     reEvaluatePending();
 }
 
+// ── STRICT HIGH-PRECISION PREDICTOR (0% Guesswork) ──
 async function predictWithAI(task) {
     if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
@@ -385,27 +385,23 @@ async function predictWithAI(task) {
             let conf = resolvedRes.confidences[pText] || 0;
             let negConf = resolvedRes.confidences['negative_' + pText] || 0;
             
-            if (resolvedRes.label === pText && conf >= 0.80 && negConf < 0.30) {
+            // Ultra-Strict: Must be >= 88% sure with near-zero negative confidence
+            if (resolvedRes.label === pText && conf >= 0.88 && negConf <= 0.15) {
                 predictedClicks.push(m.index);
             }
             await tf.nextFrame();
         } catch(e) {}
     }
 
-    if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
-        task.clicks = predictedClicks;
+    if (predictedClicks.length >= 1 && predictedClicks.length <= 6) {
         let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
         if (card) {
             card.classList.add('ai-processing');
+            task.clicks = [...predictedClicks];
             predictedClicks.forEach(idx => {
                 let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
                 if (imgEl) { imgEl.classList.add('ai-pick'); }
             });
-            if (autoSaveEnabled) {
-                let btn = card.querySelector('.btn-save');
-                if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Instant Solved'; }
-                sendToServer(task.id, btn, card);
-            }
         }
     }
 }
@@ -555,6 +551,7 @@ document.body.addEventListener('click', (e) => {
         
         if (act === 'retrain') {
             retrainEditingTasks.add(tid);
+            t._oldClicks = [...(t.clicks || [])];
             card.classList.add('in-retrain');
             let banner = document.createElement('div');
             banner.className = 'retrain-banner'; banner.id = `banner-${tid}`;
@@ -576,12 +573,16 @@ document.body.addEventListener('click', (e) => {
                 setTimeout(() => { actionBtn.classList.remove('btn-warn'); actionBtn.textContent = '✅ Update & Train'; }, 1000);
                 return;
             }
+            
+            let wrongIndices = (t._oldClicks || []).filter(idx => !t.clicks.includes(idx));
+
             fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ taskId: tid, clicks: t.clicks })
             }).then(() => {
-                if (isAIReady && t.type === 'grid') trainAIBrainAsync(t);
+                if (isAIReady && t.type === 'grid') trainAIBrainAsync(t, wrongIndices);
                 retrainEditingTasks.delete(tid);
+                delete t._oldClicks;
                 card.classList.remove('in-retrain');
                 let b = card.querySelector(`#banner-${tid}`); if (b) b.remove();
                 let actBox = card.querySelector(`#act-${tid}`);
@@ -602,6 +603,7 @@ document.body.addEventListener('click', (e) => {
 
         if (act === 'cancel-retrain') {
             retrainEditingTasks.delete(tid);
+            delete t._oldClicks;
             card.classList.remove('in-retrain');
             let b = card.querySelector(`#banner-${tid}`); if (b) b.remove();
             let actBox = card.querySelector(`#act-${tid}`);
@@ -625,7 +627,7 @@ document.body.addEventListener('click', (e) => {
 
         if (act === 'reset') {
             t.clicks = [];
-            card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick'));
+            card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick', 'retrain-pick'));
             card.querySelectorAll('.dot').forEach(d => d.remove());
             card.classList.remove('ai-processing');
             return;
@@ -706,6 +708,7 @@ function sendToServer(taskId, btnEl, card) {
     delete activeTasksStore[taskId];
     updateCountsDisplay();
 
+    // 6x Boosted Learning on Manual Save
     if (isAIReady && t.type === 'grid' && t.clicks.length > 0) {
         trainAIBrainAsync(t);
     }
