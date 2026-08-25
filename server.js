@@ -11,7 +11,7 @@ app.use(cors());
 app.use(express.json({ limit: '60mb' }));
 
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ server, perMessageDeflate: false });
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE = path.join(DATA_DIR, 'database.json');
@@ -447,9 +447,21 @@ app.get('/api/counts', (req, res) => {
 });
 
 app.delete('/api/delete-hcaptcha/:id', (req, res) => {
-    delete hcaptchaPending[req.params.id];
-    delete hcaptchaTrained[req.params.id];
-    rebuildConceptBank(); 
+    const delId = req.params.id;
+    delete hcaptchaPending[delId];
+    // Full rebuild mat karo — sirf is entry ka concept bank se data hatao
+    if (hcaptchaTrained[delId]) {
+        let cKey = getCleanKey(hcaptchaTrained[delId]);
+        delete hcaptchaTrained[delId];
+        // Sirf agar us concept ki koi aur entry nahi to bank se hatao
+        let stillExists = Object.values(hcaptchaTrained).some(t => getCleanKey(t) === cKey);
+        if (!stillExists) delete conceptBank[cKey];
+        else {
+            // Us concept ko sirf remaining entries se rebuild karo
+            conceptBank[cKey] = new Set();
+            Object.values(hcaptchaTrained).filter(t => getCleanKey(t) === cKey).forEach(t => _addToConceptBank(t));
+        }
+    }
     persistDatabase();
     
     const delMsg = JSON.stringify({ action: 'task_deleted', taskId: req.params.id });
