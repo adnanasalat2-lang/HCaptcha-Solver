@@ -212,6 +212,9 @@ function notifyBrowsers(taskId, clicks) {
 }
 
 function dispatchTaskToWorker(taskData) {
+    // If task is already assigned, don't re-dispatch
+    if (taskAssignments.has(taskData.id)) return;
+
     let targetMode = isGridTask(taskData) ? 'grid' : 'manual';
     let workers = getOnlineWorkers(targetMode);
 
@@ -439,9 +442,14 @@ app.get('/api/tasks', (req, res) => {
 });
 
 app.get('/api/counts', (req, res) => {
+    let gridWorkers = getOnlineWorkers('grid').map(w => w.meta.name);
+    let manualWorkers = getOnlineWorkers('manual').map(w => w.meta.name);
     res.json({
         pending: Object.keys(hcaptchaPending).length,
-        trained: Object.keys(hcaptchaTrained).length
+        trained: Object.keys(hcaptchaTrained).length,
+        concepts: Object.keys(conceptBank).length,
+        gridWorkersOnline: gridWorkers.length,
+        manualWorkersOnline: manualWorkers.length
     });
 });
 
