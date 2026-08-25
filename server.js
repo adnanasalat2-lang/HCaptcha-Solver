@@ -46,6 +46,19 @@ function getCleanKey(task) {
     return "TXT_" + p;
 }
 
+function isActualGridTask(task) {
+    if (!task || !task.media || task.media.length <= 1) return false;
+    // Check if task is canvas/video/drag
+    let hasVideoOrCanvas = task.media.some(m => m.type === 'video_frames' || m.type === 'single_image' || m.type === 'canvas');
+    if (hasVideoOrCanvas) return false;
+    let p = (task.prompt || "").toLowerCase();
+    if (p.includes('drag') || p.includes('move') || p.includes('fit') || p.includes('place') || p.includes('pattern') || p.includes('spot')) {
+        return false;
+    }
+    // Only standard 2x2, 3x3, 4x4 image selections are grids
+    return task.media.length === 4 || task.media.length === 9 || task.media.length === 16;
+}
+
 function dhashToBigInt(hexOrBin) {
     if (!hexOrBin || hexOrBin === "0000000000000000") return null;
     if (/^[01]+$/.test(hexOrBin)) return BigInt('0b' + hexOrBin);
@@ -139,7 +152,7 @@ function evaluateAutoSolve(task) {
     let cKey = getCleanKey(task);
     let targetDhashes = conceptBank[cKey];
 
-    if (targetDhashes && targetDhashes.size > 0 && task.media && task.media.length > 1) {
+    if (targetDhashes && targetDhashes.size > 0 && isActualGridTask(task)) {
         let matchedClicks = [];
         task.media.forEach((item, idx) => {
             if (!item.dhash || item.dhash === "0000000000000000") return;
@@ -200,9 +213,14 @@ function notifyBrowsers(taskId, clicks) {
 }
 
 function dispatchTaskToWorker(taskData) {
-    let isGrid = taskData.media && taskData.media.length > 1;
+    let isGrid = isActualGridTask(taskData);
     let targetMode = isGrid ? 'grid' : 'manual';
     let workers = getOnlineWorkers(targetMode);
+
+    // Fallback: If no workers in preferred mode, check if other mode workers are available
+    if (workers.length === 0) {
+        workers = getOnlineWorkers(targetMode === 'grid' ? 'manual' : 'grid');
+    }
 
     if (workers.length === 0) return;
 
@@ -333,7 +351,7 @@ wss.on('connection', (ws) => {
                 let availablePending = {};
                 
                 Object.values(hcaptchaPending).forEach(task => {
-                    let taskIsGrid = task.media && task.media.length > 1;
+                    let taskIsGrid = isActualGridTask(task);
                     if (((isGrid && taskIsGrid) || (!isGrid && !taskIsGrid)) && !taskAssignments.has(task.id)) {
                         taskAssignments.set(task.id, ws);
                         workerMeta.assignedTasks.add(task.id);
