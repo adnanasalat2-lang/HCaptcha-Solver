@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — Smooth Stable Stream</title>
+    <title>hCaptcha Master Pro — Smooth Multi-Worker</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -82,7 +82,7 @@
 
 <div class="header">
     <div class="header-left">
-        <h1>⚡ hCaptcha Master Pro (Smooth & Stable)</h1>
+        <h1>⚡ hCaptcha Master Pro (Smooth AI Stream)</h1>
         <div class="tabs">
             <button class="tab-btn active" id="btn-pending" onclick="setTab('pending')">Pending <span class="count-badge" id="c-pending">0</span></button>
             <button class="tab-btn" id="btn-trained" onclick="setTab('trained')">Trained <span class="count-badge" id="c-trained">0</span></button>
@@ -143,7 +143,18 @@ let isFetching = false;
 
 let isAIReady = false, aiModel = null, knn = null;
 let autoTrainEnabled = true, autoSaveEnabled = true;
+let isEvaluatingBatch = false;
 let brainSyncTimer = null;
+
+// Lightweight heartbeat loop
+const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 300);`], { type: 'text/javascript' });
+const bgWorker = new Worker(URL.createObjectURL(timerBlob));
+bgWorker.onmessage = () => {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'ping' }));
+    if (isAIReady && autoTrainEnabled && !isEvaluatingBatch) {
+        evaluateAllPendingCardsSafe();
+    }
+};
 
 let ws = null;
 function initWS() {
@@ -175,10 +186,7 @@ function initWS() {
                     let card = buildCard(taskObj);
                     if (isGrid) {
                         gridArea.prepend(card);
-                        // Instant Direct Predict (Zero Lag)
-                        if (isAIReady && autoTrainEnabled) {
-                            setTimeout(() => predictSingleCardDirect(taskObj, card), 40);
-                        }
+                        if (isAIReady && autoTrainEnabled) setTimeout(() => predictSingleCardDirect(taskObj, card), 50);
                     } else {
                         manualArea.prepend(card);
                     }
@@ -210,7 +218,7 @@ function updateCountsDisplay() {
     document.getElementById('c-manual').innerText = `${manualArea.children.length} Tasks`;
 }
 
-// AI Storage
+// ── RAILWAY VOLUME PERSISTENT BRAIN ──
 async function loadServerBrain() {
     try {
         let r = await fetch(`${SERVER_URL}/api/ai-brain?t=${Date.now()}`);
@@ -258,7 +266,7 @@ async function initAI() {
         await loadServerBrain();
         isAIReady = true;
         updateAIStatus();
-        reEvaluateAllUnpredicted();
+        evaluateAllPendingCardsSafe();
     } catch(e) {
         syncStatus.innerHTML = "⚠️ AI Fallback";
     }
@@ -275,7 +283,7 @@ function updateAIStatus() {
 }
 
 async function resetAIBrain() {
-    if (confirm("Kya aap AI memory reset karna chahte hain?")) {
+    if (confirm("Kya aap Railway volume par saved AI memory reset karna chahte hain?")) {
         await fetch(`${SERVER_URL}/api/ai-brain`, { method: 'DELETE' });
         if (knn) knn.clearAllClasses();
         location.reload();
@@ -303,7 +311,7 @@ function toggleAutoTrain() {
     let btn = document.getElementById('btnAutoTrain');
     btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
     btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
-    if (autoTrainEnabled && isAIReady) reEvaluateAllUnpredicted();
+    if (autoTrainEnabled && isAIReady) evaluateAllPendingCardsSafe();
 }
 
 function toggleAutoSave() {
@@ -311,23 +319,27 @@ function toggleAutoSave() {
     let btn = document.getElementById('btnAutoSave');
     btn.className = 'btn-toggle' + (autoSaveEnabled ? ' on' : '');
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
-    if (autoSaveEnabled && isAIReady) reEvaluateAllUnpredicted();
+    if (autoSaveEnabled && isAIReady) evaluateAllPendingCardsSafe();
 }
 
 function getConceptKey(prompt) {
     return (prompt || '').split('|||')[0].toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-// ── LEAK-FREE TENSOR INFERENCE (Strict Dispose) ──
+// Zero-Leak Single Tensor Inference
 function inferImageElement(imgEl) {
     if (!imgEl || imgEl.naturalWidth < 10) return null;
-    return tf.tidy(() => {
-        let tensor = tf.browser.fromPixels(imgEl);
-        return aiModel.infer(tensor, true);
-    });
+    try {
+        return tf.tidy(() => {
+            let tensor = tf.browser.fromPixels(imgEl);
+            return aiModel.infer(tensor, true);
+        });
+    } catch(e) {
+        return null;
+    }
 }
 
-// ── FAST SINGLE CARD PREDICTOR (Runs exactly ONCE per card) ──
+// ── FAST SINGLE CARD PREDICTOR (Runs once per card, sets pink border) ──
 async function predictSingleCardDirect(task, card) {
     if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media || task._evaluated) return;
     task._evaluated = true;
@@ -378,20 +390,30 @@ async function predictSingleCardDirect(task, card) {
     }
 }
 
-// ── RE-EVALUATE WHEN NEW CONCEPT LEARNED ──
-async function reEvaluateAllUnpredicted() {
-    let pendingGrids = Object.values(activeTasksStore).filter(t => 
-        t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0) && !ghostBlocker.has(t.id)
-    );
+// ── BATCH PREDICTOR ACROSS ALL UNPREDICTED CARDS ──
+async function evaluateAllPendingCardsSafe() {
+    if (isEvaluatingBatch || !isAIReady || !autoTrainEnabled) return;
+    isEvaluatingBatch = true;
 
-    for (let task of pendingGrids) {
-        task._evaluated = false; // Reset to allow prediction with newly learned brain
-        let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
-        if (card) predictSingleCardDirect(task, card);
-    }
+    try {
+        let dataset = knn.getClassExampleCount();
+        let pendingGrids = Object.values(activeTasksStore).filter(t => 
+            t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0) && !ghostBlocker.has(t.id) && !t._evaluated
+        );
+
+        for (let task of pendingGrids) {
+            let pKey = getConceptKey(task.prompt);
+            if (dataset[pKey] && dataset[pKey] > 0) {
+                let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
+                if (card) predictSingleCardDirect(task, card);
+            }
+        }
+    } catch(e) {}
+
+    isEvaluatingBatch = false;
 }
 
-// ── FAST TRAINING ON SAVE / RETRAIN ──
+// ── FAST TRAINING ON SAVE / RETRAIN (Instant Multi-Task Update) ──
 async function trainAIBrainAsync(task, wrongIndices = []) {
     if (!isAIReady || task.type !== 'grid' || !task.media) return;
     let pKey = getConceptKey(task.prompt);
@@ -417,8 +439,15 @@ async function trainAIBrainAsync(task, wrongIndices = []) {
     });
 
     scheduleServerBrainSave();
-    // Instantly solve all other pending cards of this concept
-    setTimeout(reEvaluateAllUnpredicted, 60);
+
+    // Reset evaluated flag for matching concept so other pending cards solve immediately
+    Object.values(activeTasksStore).forEach(t => {
+        if (t && t.type === 'grid' && getConceptKey(t.prompt) === pKey) {
+            t._evaluated = false;
+        }
+    });
+
+    setTimeout(evaluateAllPendingCardsSafe, 50);
 }
 
 async function fetchTasks() {
@@ -461,7 +490,7 @@ function renderPendingStreams() {
 
         if (isGrid) {
             gridArea.prepend(card);
-            if (isAIReady && autoTrainEnabled) setTimeout(() => predictSingleCardDirect(activeTasksStore[id], card), 40);
+            if (isAIReady && autoTrainEnabled) setTimeout(() => predictSingleCardDirect(activeTasksStore[id], card), 50);
         } else {
             manualArea.prepend(card);
         }
