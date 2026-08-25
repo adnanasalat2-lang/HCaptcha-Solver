@@ -278,20 +278,6 @@ function connectDashboardWS() {
                     updateCounts(msg.counts);
                 }
 
-                if (msg.action === 'tile_patch') {
-                    let card = document.querySelector(`.task-card[data-id="${msg.taskId}"]`);
-                    if (card) {
-                        let imgEl = card.querySelector(`.g-img[data-index="${msg.index}"]`);
-                        if (imgEl && msg.thumb) {
-                            imgEl.src = msg.thumb;
-                        }
-                    }
-                    if (activeTasksStore[msg.taskId] && activeTasksStore[msg.taskId].media[msg.index]) {
-                        activeTasksStore[msg.taskId].media[msg.index].thumb = msg.thumb;
-                        activeTasksStore[msg.taskId].media[msg.index].dhash = msg.dhash;
-                    }
-                }
-
                 if (msg.action === 'new_task' && msg.task) {
                     appendCard(msg.task);
                     if (isAIReady && autoTrainEnabled && selectedAppMode === 'grid') {
