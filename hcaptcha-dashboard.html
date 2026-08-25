@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — Ultra Learner</title>
+    <title>hCaptcha Master Pro — Live Stream</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -21,6 +21,8 @@
         .count-badge { background: #000; color: #fff; padding: 1px 6px; border-radius: 8px; font-size: 11px; margin-left: 4px; }
 
         .ai-bar { display: flex; align-items: center; gap: 8px; }
+        .live-status { font-size: 11px; font-weight: bold; padding: 4px 8px; border-radius: 4px; background: #1a1a1a; border: 1px solid #ff4444; color: #ff4444; }
+        .live-status.active { border-color: #00ff88; color: #00ff88; }
         .sync-status { font-size: 12px; color: #ffaa00; font-weight: bold; }
         .sync-status.active { color: #00ff88; }
         .btn-toggle { padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; border: 1px solid #555; background: #222; color: #888; }
@@ -87,6 +89,7 @@
         </div>
     </div>
     <div class="ai-bar">
+        <span class="live-status" id="wsStatus">🔴 Offline</span>
         <span class="sync-status" id="syncStatus">🧠 AI Ready</span>
         <button id="btnAutoTrain" class="btn-toggle on" onclick="toggleAutoTrain()">🧠 Auto Train: ON</button>
         <button id="btnAutoSave" class="btn-toggle on" onclick="toggleAutoSave()">💾 Auto Save: ON</button>
@@ -129,6 +132,7 @@ const gridArea = document.getElementById('gridArea');
 const manualArea = document.getElementById('manualArea');
 const trainedArea = document.getElementById('trainedArea');
 const syncStatus = document.getElementById('syncStatus');
+const wsStatus = document.getElementById('wsStatus');
 
 let currentTab = 'pending';
 let serverData = { pending: {}, trained: {} }, activeTasksStore = {}, videoTasks = [];
@@ -141,13 +145,15 @@ let isAIReady = false, aiModel, knn;
 let autoTrainEnabled = true, autoSaveEnabled = true;
 let isEvaluatingAI = false;
 
-// ── WEBSOCKET LIVE STREAM ──
+// ── WEBSOCKET LIVE ENGINE ──
 let ws = null;
 function initWS() {
     if (ws && ws.readyState < 2) return;
     try {
         ws = new WebSocket(WS_URL);
         ws.onopen = () => {
+            wsStatus.className = 'live-status active';
+            wsStatus.innerText = '🟢 Live';
             ws.send(JSON.stringify({ action: 'dashboard' }));
         };
         ws.onmessage = (ev) => {
@@ -185,7 +191,11 @@ function initWS() {
                 }
             } catch(e) {}
         };
-        ws.onclose = () => setTimeout(initWS, 1500);
+        ws.onclose = () => {
+            wsStatus.className = 'live-status';
+            wsStatus.innerText = '🔴 Offline';
+            setTimeout(initWS, 1500);
+        };
     } catch(e) {
         setTimeout(initWS, 1500);
     }
@@ -318,13 +328,12 @@ async function trainAIBrainAsync(task) {
             let img = new Image();
             if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
             img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 400); });
+            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 300); });
             if (!img.complete || img.naturalWidth === 0) continue;
             
             tf.tidy(() => {
                 let tfImg = tf.browser.fromPixels(img);
                 let features = aiModel.infer(tfImg, true);
-                
                 if (task.clicks.includes(m.index)) {
                     knn.addExample(features, pText);
                     knn.addExample(features, pText);
@@ -354,7 +363,7 @@ async function predictWithAI(task) {
             let img = new Image();
             if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
             img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 300); });
+            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 200); });
             if (!img.complete || img.naturalWidth === 0) continue;
             
             let res = null;
