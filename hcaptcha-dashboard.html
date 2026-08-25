@@ -71,7 +71,6 @@
         .task-card { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; padding: 10px; transition: transform 0.15s ease, box-shadow 0.15s ease; }
         .task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 8px rgba(255,0,255,0.3); }
 
-        /* ── Prominent Focus & Auto-Zoom ── */
         .task-card.focused-task {
             border: 2px solid #00ff88 !important;
             box-shadow: 0 0 20px rgba(0, 255, 136, 0.4);
@@ -279,6 +278,20 @@ function connectDashboardWS() {
                     updateCounts(msg.counts);
                 }
 
+                if (msg.action === 'tile_patch') {
+                    let card = document.querySelector(`.task-card[data-id="${msg.taskId}"]`);
+                    if (card) {
+                        let imgEl = card.querySelector(`.g-img[data-index="${msg.index}"]`);
+                        if (imgEl && msg.thumb) {
+                            imgEl.src = msg.thumb;
+                        }
+                    }
+                    if (activeTasksStore[msg.taskId] && activeTasksStore[msg.taskId].media[msg.index]) {
+                        activeTasksStore[msg.taskId].media[msg.index].thumb = msg.thumb;
+                        activeTasksStore[msg.taskId].media[msg.index].dhash = msg.dhash;
+                    }
+                }
+
                 if (msg.action === 'new_task' && msg.task) {
                     appendCard(msg.task);
                     if (isAIReady && autoTrainEnabled && selectedAppMode === 'grid') {
@@ -465,7 +478,8 @@ function buildCard(t) {
         let colCount = t.media.length > 9 ? 4 : (t.media.length === 4 ? 2 : 3);
         mediaHTML = `<div class="img-grid" style="grid-template-columns: repeat(${colCount}, 1fr);">`;
         t.media.forEach(m => {
-            mediaHTML += `<img src="${m.thumb || m.src || ''}" class="g-img" data-index="${m.index}" draggable="false" loading="lazy"/>`;
+            let src = m.thumb || m.src || '';
+            mediaHTML += `<img src="${src}" class="g-img" data-index="${m.index}" draggable="false" loading="eager"/>`;
         });
         mediaHTML += '</div>';
     } else {
@@ -528,8 +542,6 @@ document.body.addEventListener('click', (e) => {
             videoTasks = videoTasks.filter(v => v.id !== tid);
             updateStreamCounts();
             fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).catch(()=>{});
-            let nextCard = document.querySelector('#pendingView .task-card');
-            if (nextCard) setTaskFocus(nextCard.dataset.id);
             return;
         }
     }
@@ -593,11 +605,6 @@ function sendToServer(taskId, card) {
     if (isAIReady && t.type === 'grid' && t.clicks.length > 0) {
         trainAIBrainAsync(t);
     }
-
-    setTimeout(() => {
-        let nextCard = document.querySelector('#pendingView .task-card');
-        if (nextCard) setTaskFocus(nextCard.dataset.id);
-    }, 40);
 }
 
 document.addEventListener('keydown', (e) => {
