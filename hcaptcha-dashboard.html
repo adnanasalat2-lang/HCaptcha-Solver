@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — 100x GPU Batch Solver</title>
+    <title>hCaptcha Master Pro — Visual Batch Stream</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -51,7 +51,7 @@
         .task-prompt { color: #fff; font-size: 11px; font-weight: bold; line-height: 1.2; }
 
         .img-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; width: 100%; max-width: 480px; margin: 0 auto; }
-        .img-grid img { width: 100%; height: 95px; object-fit: cover; cursor: pointer; border: 3px solid transparent; background: #222; border-radius: 3px; display: block; }
+        .img-grid img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; cursor: pointer; border: 3px solid transparent; background: #222; border-radius: 3px; display: block; }
         .img-grid img.selected { border-color: #00ff88; opacity: 0.85; }
         .img-grid img.ai-pick { border-color: #ff00ff !important; opacity: 0.9; }
         .img-grid img.retrain-pick { border-color: #ff8800 !important; opacity: 0.95; }
@@ -82,7 +82,7 @@
 
 <div class="header">
     <div class="header-left">
-        <h1>⚡ hCaptcha Master Pro (Instant Batch Engine)</h1>
+        <h1>⚡ hCaptcha Master Pro (Visual Stream)</h1>
         <div class="tabs">
             <button class="tab-btn active" id="btn-pending" onclick="setTab('pending')">Pending <span class="count-badge" id="c-pending">0</span></button>
             <button class="tab-btn" id="btn-trained" onclick="setTab('trained')">Trained <span class="count-badge" id="c-trained">0</span></button>
@@ -143,16 +143,16 @@ let isFetching = false;
 
 let isAIReady = false, aiModel = null, knn = null;
 let autoTrainEnabled = true, autoSaveEnabled = true;
-let isEvaluatingAI = false;
+let isEvaluatingBatch = false;
 let brainSyncTimer = null;
 
-// High-Speed Web Worker Loop
+// Background Timer Worker
 const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 250);`], { type: 'text/javascript' });
 const bgWorker = new Worker(URL.createObjectURL(timerBlob));
 bgWorker.onmessage = () => {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ action: 'ping' }));
-    if (isAIReady && autoTrainEnabled && !isEvaluatingAI) {
-        megaBatchGPUExecutor();
+    if (isAIReady && autoTrainEnabled && !isEvaluatingBatch) {
+        evaluateAllVisiblePendingCards();
     }
 };
 
@@ -176,20 +176,22 @@ function initWS() {
                 }
                 if (msg.type === 'new_task' && currentTab === 'pending') {
                     let td = msg.data;
-                    if (!ghostBlocker.has(td.id) && !activeTasksStore[td.id]) {
-                        serverData.pending[td.id] = td;
-                        let isGrid = (td.media || []).length > 1;
-                        let taskObj = { id: td.id, clicks: [], type: isGrid ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '' };
-                        activeTasksStore[td.id] = taskObj;
+                    if (ghostBlocker.has(td.id) || activeTasksStore[td.id]) return;
 
-                        let card = buildCard(taskObj);
-                        if (isGrid) {
-                            gridArea.prepend(card);
-                        } else {
-                            manualArea.prepend(card);
-                        }
-                        updateCountsDisplay();
+                    serverData.pending[td.id] = td;
+                    let isGrid = (td.media || []).length > 1;
+                    let taskObj = { id: td.id, clicks: [], type: isGrid ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '' };
+                    activeTasksStore[td.id] = taskObj;
+
+                    // Hamesha Card render hoga taake operator ke samne visual rahe
+                    let card = buildCard(taskObj);
+                    if (isGrid) {
+                        gridArea.prepend(card);
+                        if (isAIReady && autoTrainEnabled) predictSingleCard(taskObj, card);
+                    } else {
+                        manualArea.prepend(card);
                     }
+                    updateCountsDisplay();
                 }
                 if (msg.type === 'task_solved' || msg.type === 'task_deleted') {
                     let tid = msg.data.taskId;
@@ -217,7 +219,7 @@ function updateCountsDisplay() {
     document.getElementById('c-manual').innerText = `${manualArea.children.length} Tasks`;
 }
 
-// AI Engine Storage
+// AI Storage
 async function loadServerBrain() {
     try {
         let r = await fetch(`${SERVER_URL}/api/ai-brain?t=${Date.now()}`);
@@ -265,7 +267,7 @@ async function initAI() {
         await loadServerBrain();
         isAIReady = true;
         updateAIStatus();
-        megaBatchGPUExecutor();
+        evaluateAllVisiblePendingCards();
     } catch(e) {
         syncStatus.innerHTML = "⚠️ AI Fallback";
     }
@@ -310,7 +312,7 @@ function toggleAutoTrain() {
     let btn = document.getElementById('btnAutoTrain');
     btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
     btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
-    if (autoTrainEnabled && isAIReady) megaBatchGPUExecutor();
+    if (autoTrainEnabled && isAIReady) evaluateAllVisiblePendingCards();
 }
 
 function toggleAutoSave() {
@@ -318,16 +320,78 @@ function toggleAutoSave() {
     let btn = document.getElementById('btnAutoSave');
     btn.className = 'btn-toggle' + (autoSaveEnabled ? ' on' : '');
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
+    if (autoSaveEnabled && isAIReady) evaluateAllVisiblePendingCards();
 }
 
 function getConceptKey(prompt) {
-    return (prompt || '').split('|||')[0].trim().toLowerCase().replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ');
+    return (prompt || '').split('|||')[0].toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-// ── FAST GPU BATCH INFERENCE (All 200+ Tasks Simultaneously) ──
-async function megaBatchGPUExecutor() {
-    if (isEvaluatingAI || !isAIReady || !autoTrainEnabled) return;
-    isEvaluatingAI = true;
+function safeInferElement(imgEl) {
+    try {
+        if (!imgEl || imgEl.naturalWidth < 10) return null;
+        return tf.tidy(() => {
+            let tensor = tf.browser.fromPixels(imgEl);
+            return aiModel.infer(tensor, true);
+        });
+    } catch(e) {
+        return null;
+    }
+}
+
+// ── Single Card Predictor (Visual pink highlights & Auto-Save) ──
+async function predictSingleCard(task, card) {
+    if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
+    let pKey = getConceptKey(task.prompt);
+    let dataset = knn.getClassExampleCount();
+    if (!dataset[pKey] || dataset[pKey] < 1) return;
+
+    if (!card) card = document.querySelector(`.task-card[data-id="${task.id}"]`);
+    if (!card) return;
+
+    let imgElements = card.querySelectorAll('.g-img');
+    if (imgElements.length < 9) return;
+
+    let predictedClicks = [];
+
+    for (let idx = 0; idx < imgElements.length; idx++) {
+        let imgEl = imgElements[idx];
+        let features = safeInferElement(imgEl);
+        if (features) {
+            let res = knn.predictClass(features);
+            features.dispose();
+
+            let conf = res.confidences[pKey] || 0;
+            let negConf = res.confidences['neg_' + pKey] || 0;
+
+            if (res.label === pKey && conf >= 0.55 && negConf <= 0.45) {
+                predictedClicks.push(idx);
+            }
+        }
+    }
+
+    if (predictedClicks.length >= 1 && predictedClicks.length <= 6) {
+        task.clicks = predictedClicks;
+        card.classList.add('ai-processing');
+        predictedClicks.forEach(idx => {
+            let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
+            if (imgEl) imgEl.classList.add('ai-pick');
+        });
+
+        if (autoSaveEnabled) {
+            let btn = card.querySelector('.btn-save');
+            if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Instant Solved'; }
+            setTimeout(() => {
+                sendToServer(task.id, btn, card);
+            }, 300);
+        }
+    }
+}
+
+// ── Batch Parallel Predictor across All Visible Cards ──
+async function evaluateAllVisiblePendingCards() {
+    if (isEvaluatingBatch || !isAIReady || !autoTrainEnabled) return;
+    isEvaluatingBatch = true;
 
     try {
         let dataset = knn.getClassExampleCount();
@@ -335,92 +399,46 @@ async function megaBatchGPUExecutor() {
             t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0) && !ghostBlocker.has(t.id)
         );
 
-        if (!pendingGrids.length) { isEvaluatingAI = false; return; }
-
-        // Filter tasks that have at least 1 training example in KNN
-        let trainableTasks = pendingGrids.filter(t => {
-            let k = getConceptKey(t.prompt);
-            return dataset[k] && dataset[k] > 0;
-        });
-
-        if (!trainableTasks.length) { isEvaluatingAI = false; return; }
-
-        // Parallel Image Loader using DOM elements directly (Zero Image Loading Delay)
-        for (let task of trainableTasks) {
+        for (let task of pendingGrids) {
             let pKey = getConceptKey(task.prompt);
-            let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
-            if (!card) continue;
-
-            let imgElements = card.querySelectorAll('.g-img');
-            if (imgElements.length < 9) continue;
-
-            let predictedClicks = [];
-
-            tf.tidy(() => {
-                imgElements.forEach((imgEl, idx) => {
-                    if (imgEl.naturalWidth > 0) {
-                        let tensor = tf.browser.fromPixels(imgEl);
-                        let features = aiModel.infer(tensor, true);
-                        let res = knn.predictClass(features);
-                        
-                        let conf = res.confidences[pKey] || 0;
-                        let negConf = res.confidences['neg_' + pKey] || 0;
-
-                        if (res.label === pKey && conf >= 0.60 && negConf <= 0.40) {
-                            predictedClicks.push(idx);
-                        }
-                    }
-                });
-            });
-
-            if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
-                task.clicks = predictedClicks;
-                card.classList.add('ai-processing');
-                predictedClicks.forEach(idx => {
-                    let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
-                    if (imgEl) imgEl.classList.add('ai-pick');
-                });
-
-                if (autoSaveEnabled) {
-                    sendToServer(task.id, null, card);
-                }
+            if (dataset[pKey] && dataset[pKey] > 0) {
+                let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
+                if (card) predictSingleCard(task, card);
             }
         }
     } catch(e) {}
 
-    isEvaluatingAI = false;
+    isEvaluatingBatch = false;
 }
 
-// Train logic
+// ── Fast Learning on Manual Save / Retrain ──
 async function trainAIBrainAsync(task, wrongIndices = []) {
     if (!isAIReady || task.type !== 'grid' || !task.media) return;
     let pKey = getConceptKey(task.prompt);
     let negLabel = 'neg_' + pKey;
     let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
 
-    tf.tidy(() => {
-        task.media.forEach(m => {
-            let imgEl = card ? card.querySelector(`.g-img[data-index="${m.index}"]`) : null;
-            if (imgEl && imgEl.naturalWidth > 0) {
-                let tensor = tf.browser.fromPixels(imgEl);
-                let features = aiModel.infer(tensor, true);
+    task.media.forEach(m => {
+        let imgEl = card ? card.querySelector(`.g-img[data-index="${m.index}"]`) : null;
+        let features = safeInferElement(imgEl);
+        if (features) {
+            let isSelected = (task.clicks || []).includes(m.index);
+            let wasWrong = wrongIndices.includes(m.index);
 
-                let isSelected = (task.clicks || []).includes(m.index);
-                let wasWrong = wrongIndices.includes(m.index);
-
-                if (isSelected) {
-                    for (let i = 0; i < 5; i++) knn.addExample(features, pKey);
-                } else if (wasWrong) {
-                    for (let i = 0; i < 8; i++) knn.addExample(features, negLabel);
-                } else {
-                    knn.addExample(features, negLabel);
-                }
+            if (isSelected) {
+                for (let i = 0; i < 5; i++) knn.addExample(features, pKey);
+            } else if (wasWrong) {
+                for (let i = 0; i < 8; i++) knn.addExample(features, negLabel);
+            } else {
+                knn.addExample(features, negLabel);
             }
-        });
+            features.dispose();
+        }
     });
 
     scheduleServerBrainSave();
-    megaBatchGPUExecutor();
+    // Re-evaluate and solve remaining pending cards of this concept immediately
+    setTimeout(evaluateAllVisiblePendingCards, 50);
 }
 
 async function fetchTasks() {
@@ -463,12 +481,12 @@ function renderPendingStreams() {
 
         if (isGrid) {
             gridArea.prepend(card);
+            if (isAIReady && autoTrainEnabled) predictSingleCard(activeTasksStore[id], card);
         } else {
             manualArea.prepend(card);
         }
     }
     updateCountsDisplay();
-    if (isAIReady && autoTrainEnabled) megaBatchGPUExecutor();
 }
 
 function renderTrainedStream() {
@@ -498,21 +516,21 @@ function buildCard(t, isTrained = false) {
     card.style.minWidth = isTrained ? '320px' : 'auto';
 
     let parts = t.prompt.split('|||');
-    let exHtml = parts[1] ? `<img src="${parts[1]}" class="example-img">` : `<div class="example-img-placeholder">🖼️</div>`;
+    let exHtml = parts[1] ? `<img src="${parts[1]}" class="example-img" crossorigin="anonymous">` : `<div class="example-img-placeholder">🖼️</div>`;
     let mediaHTML = '';
 
     if (t.type === 'grid') {
         mediaHTML = '<div class="img-grid">';
         t.media.forEach(m => {
             let isSelected = t.clicks.includes(m.index);
-            mediaHTML += `<img src="${m.thumb || m.src || ''}" class="g-img ${isSelected?'selected':''}" data-index="${m.index}" draggable="false" loading="lazy"/>`;
+            mediaHTML += `<img src="${m.thumb || m.src || ''}" class="g-img ${isSelected?'selected':''}" data-index="${m.index}" draggable="false" crossorigin="anonymous"/>`;
         });
         mediaHTML += '</div>';
     } else {
         let m = t.media[0] || {};
         let isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
         let src = isVid ? m.frames[0] : (m.src || '');
-        mediaHTML = `<div class="single-box"><img src="${src}" class="s-img ${isVid?'vid-player':''}" data-id="${t.id}" draggable="false"/>`;
+        mediaHTML = `<div class="single-box"><img src="${src}" class="s-img ${isVid?'vid-player':''}" data-id="${t.id}" draggable="false" crossorigin="anonymous"/>`;
         t.clicks.forEach(pt => {
             mediaHTML += `<div class="dot" style="left:${pt.px}%;top:${pt.py}%;"></div>`;
         });
