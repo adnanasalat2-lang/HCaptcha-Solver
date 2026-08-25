@@ -400,14 +400,15 @@ async function megaBatchGPUExecutor() {
 
                     let conf = res.confidences[pKey] || 0;
                     let negConf = res.confidences['neg_' + pKey] || 0;
-                    if (res.label === pKey && conf >= 0.65 && negConf <= 0.35) {
+                    // v1 CPU model: 0.50 threshold — 0.65 bohot strict tha
+                    if (res.label === pKey && conf >= 0.50 && negConf <= 0.50) {
                         predictedClicks.push(idx);
                     }
                     await tf.nextFrame();
                 } catch(e) {}
             }
 
-            if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
+            if (predictedClicks.length >= 1 && predictedClicks.length <= 6) {
                 task.clicks = predictedClicks;
                 card.classList.add('ai-processing');
                 predictedClicks.forEach(idx => {
