@@ -1,5 +1,5 @@
 // ============================================================
-// server.js — Instant Fast-Lane Relay & Video Safe Matching
+// server.js — Strict Exact-Match Auto-Solver & AI Storage
 // ============================================================
 'use strict';
 
@@ -27,15 +27,15 @@ let pending   = {};
 let trained   = {};
 let aiBrainDS = {};
 
-const bMap = new Map(); // taskId -> Set of extension websockets
-const dSet = new Set(); // Dashboard websockets
+const bMap = new Map(); // taskId -> Extension WS
+const dSet = new Set(); // Dashboard WS
 
 function initDB() {
     if (fs.existsSync(DB_FILE)) {
         try {
             let d = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
             trained = d.trained || {};
-            console.log(`[DB] Loaded: ${Object.keys(trained).length} trained records.`);
+            console.log(`[DB] Trained tasks in memory: ${Object.keys(trained).length}`);
         } catch(e) {}
     }
     if (fs.existsSync(AI_FILE)) {
@@ -88,19 +88,21 @@ wss.on('connection', (ws) => {
         try {
             let msg = JSON.parse(raw);
             
-            // Fast-Lane instant submission directly from Dashboard over WS
+            // Operator dashboard se save dabaye to instant browser ko solve bhej do
             if (msg.action === 'submit' && msg.taskId && msg.clicks) {
                 pushBrowserInstant(msg.taskId, msg.clicks);
                 return;
             }
 
+            // Extension register hone par check karo kya ye EXACT task pehle trained hai
             if (msg.action === 'register' && msg.taskId) {
                 ws.type = 'browser';
                 ws.taskId = msg.taskId;
                 if (!bMap.has(msg.taskId)) bMap.set(msg.taskId, new Set());
                 bMap.get(msg.taskId).add(ws);
 
-                if (trained[msg.taskId]) {
+                // SAME TASK RE-APPEAR: Auto-solve immediately
+                if (trained[msg.taskId] && trained[msg.taskId].clicks?.length) {
                     ws.send(JSON.stringify({ 
                         action: 'solve', 
                         taskId: msg.taskId, 
@@ -139,16 +141,19 @@ setInterval(() => {
     });
 }, 25000);
 
+// Naya Task aane par sirf EXACT pehle se trained task solve hoga
 app.post('/api/new-hcaptcha', (req, res) => {
     let task = req.body;
     if (!task?.taskId) return res.json({ success: false });
 
-    // Exact ID match only
+    // EXACT MATCH ONLY: Agar ye same task pehle save ho chuka hai
     if (trained[task.taskId] && trained[task.taskId].clicks?.length) {
-        pushBrowserInstant(task.taskId, trained[task.taskId].clicks);
-        return res.json({ success: true, autoSolved: true, clicks: trained[task.taskId].clicks });
+        let savedClicks = trained[task.taskId].clicks;
+        pushBrowserInstant(task.taskId, savedClicks);
+        return res.json({ success: true, autoSolved: true, clicks: savedClicks });
     }
 
+    // Naya task hai — Auto-solve nahi hoga, Dashboard ko bhej do
     let pKeys = Object.keys(pending);
     if (pKeys.length >= MAX_PENDING) {
         pKeys.slice(0, 15).forEach(k => delete pending[k]);
@@ -166,6 +171,7 @@ app.post('/api/new-hcaptcha', (req, res) => {
     res.json({ success: true, autoSolved: false });
 });
 
+// Task Submit (Dashboard se train hone par DB save)
 app.post('/api/submit-hcaptcha', (req, res) => {
     let { taskId, clicks } = req.body;
     if (!taskId || !clicks || !Array.isArray(clicks) || clicks.length === 0) {
@@ -186,6 +192,7 @@ app.post('/api/submit-hcaptcha', (req, res) => {
             thumb: m.thumb || m.src || ''
         }));
 
+        // Trained DB mein save karo taake agli baar same task aane par auto solve ho sake
         trained[taskId] = {
             id: taskId,
             prompt: src.prompt,
@@ -249,4 +256,4 @@ app.get('/', (req, res) => {
 
 initDB();
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 Master Server 3.0 Live on Port ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 Master Server Live on Port ${PORT}`));
