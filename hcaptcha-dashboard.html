@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="referrer" content="no-referrer">
-    <title>hCaptcha Master Pro — Ultra Fast Learner</title>
+    <title>hCaptcha Master Pro — Parallel AI Engine</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
@@ -144,15 +144,16 @@ let trainedPage = 0;
 let isAIReady = false, aiModel = null, knn = null;
 let autoTrainEnabled = true, autoSaveEnabled = true;
 let isEvaluatingAI = false;
+let brainSyncTimer = null;
 
-const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 1000);`], { type: 'text/javascript' });
+const timerBlob = new Blob([`setInterval(() => postMessage('tick'), 600);`], { type: 'text/javascript' });
 const bgWorker = new Worker(URL.createObjectURL(timerBlob));
 bgWorker.onmessage = () => {
     if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ action: 'ping' }));
     }
     if (isAIReady && autoTrainEnabled && !isEvaluatingAI) {
-        reEvaluatePending();
+        reEvaluatePendingParallel();
     }
 };
 
@@ -216,16 +217,55 @@ function updateCountsDisplay() {
     document.getElementById('c-manual').innerText = `${manualArea.children.length} Tasks`;
 }
 
+// ── RAILWAY VOLUME CENTRAL STORAGE SYNC ──
+async function loadServerBrain() {
+    try {
+        let r = await fetch(`${SERVER_URL}/api/ai-brain?t=${Date.now()}`);
+        if (!r.ok) return;
+        let ser = await r.json();
+        if (ser && Object.keys(ser).length > 0) {
+            let ds = {};
+            for (let k in ser) {
+                if (ser[k]?.data && ser[k]?.shape) {
+                    ds[k] = tf.tensor(ser[k].data, ser[k].shape);
+                }
+            }
+            knn.setClassifierDataset(ds);
+            updateAIStatus();
+        }
+    } catch(e) {}
+}
+
+function scheduleServerBrainSave() {
+    if (brainSyncTimer) clearTimeout(brainSyncTimer);
+    brainSyncTimer = setTimeout(async () => {
+        if (!knn) return;
+        try {
+            let ds = knn.getClassifierDataset();
+            let ser = {};
+            for (let k in ds) {
+                ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape };
+            }
+            await fetch(`${SERVER_URL}/api/ai-brain`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(ser)
+            });
+            updateAIStatus();
+        } catch(e) {}
+    }, 1000);
+}
+
 async function initAI() {
     try {
         try { await tf.setBackend('webgl'); } catch(e) { await tf.setBackend('cpu'); }
         await tf.ready();
         aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
         knn = knnClassifier.create();
-        await loadKNN();
+        await loadServerBrain();
         isAIReady = true;
         updateAIStatus();
-        reEvaluatePending();
+        reEvaluatePendingParallel();
     } catch(e) {
         syncStatus.innerHTML = "⚠️ AI Fallback";
     }
@@ -241,55 +281,9 @@ function updateAIStatus() {
     } catch(e) {}
 }
 
-const IDB = { name:'hcm_knn_master', store:'knn', key:'model_v10' };
-function idbOpen() {
-    return new Promise((res,rej)=>{
-        let r = indexedDB.open(IDB.name,1);
-        r.onupgradeneeded = e => e.target.result.createObjectStore(IDB.store);
-        r.onsuccess = e => res(e.target.result);
-        r.onerror = () => rej(r.error);
-    });
-}
-async function idbSet(val) {
-    let db = await idbOpen();
-    return new Promise((res,rej)=>{
-        let tx = db.transaction(IDB.store,'readwrite');
-        tx.objectStore(IDB.store).put(val, IDB.key);
-        tx.oncomplete = res; tx.onerror = ()=>rej(tx.error);
-    });
-}
-async function idbGet() {
-    let db = await idbOpen();
-    return new Promise((res,rej)=>{
-        let tx = db.transaction(IDB.store,'readonly');
-        let req = tx.objectStore(IDB.store).get(IDB.key);
-        req.onsuccess = () => res(req.result||null);
-        req.onerror = () => rej(req.error);
-    });
-}
-async function saveKNN() {
-    if (!knn) return;
-    try {
-        let ds = knn.getClassifierDataset();
-        let ser = {};
-        for (let k in ds) { ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape }; }
-        await idbSet(ser);
-        updateAIStatus();
-    } catch(e) {}
-}
-async function loadKNN() {
-    try {
-        let ser = await idbGet();
-        if (!ser) return;
-        let ds = {};
-        for (let k in ser) { ds[k] = tf.tensor(ser[k].data, ser[k].shape); }
-        knn.setClassifierDataset(ds);
-    } catch(e) {}
-}
-
 async function resetAIBrain() {
-    if (confirm("Kya aap AI Brain ki sari memory reset karna chahte hain?")) {
-        indexedDB.deleteDatabase(IDB.name);
+    if (confirm("Kya aap Railway volume par saved AI memory reset karna chahte hain?")) {
+        await fetch(`${SERVER_URL}/api/ai-brain`, { method: 'DELETE' });
         if (knn) knn.clearAllClasses();
         location.reload();
     }
@@ -316,7 +310,7 @@ function toggleAutoTrain() {
     let btn = document.getElementById('btnAutoTrain');
     btn.className = 'btn-toggle' + (autoTrainEnabled ? ' on' : '');
     btn.textContent = '🧠 Auto Train: ' + (autoTrainEnabled ? 'ON' : 'OFF');
-    if (autoTrainEnabled && isAIReady) reEvaluatePending();
+    if (autoTrainEnabled && isAIReady) reEvaluatePendingParallel();
 }
 
 function toggleAutoSave() {
@@ -327,11 +321,10 @@ function toggleAutoSave() {
 }
 
 function getConceptKey(prompt) {
-    let p = (prompt || '').split('|||')[0].trim().toLowerCase().replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ');
-    return p;
+    return (prompt || '').split('|||')[0].trim().toLowerCase().replace(/[\n\r\t]+/g, ' ').replace(/\s+/g, ' ');
 }
 
-// ── 5x Fast-Learning Multi-Weight Trainer ──
+// ── 5x Multi-Weight Fast Learner ──
 async function trainAIBrainAsync(task, wrongIndices = []) {
     if (!isAIReady || task.type !== 'grid' || !task.media) return;
     let pKey = getConceptKey(task.prompt);
@@ -365,11 +358,11 @@ async function trainAIBrainAsync(task, wrongIndices = []) {
             await tf.nextFrame();
         } catch(e) {}
     }
-    await saveKNN();
-    reEvaluatePending();
+    scheduleServerBrainSave();
+    reEvaluatePendingParallel();
 }
 
-// ── Balanced Fast Predictor (Auto-Selects & Auto-Saves) ──
+// ── Single Fast Predictor ──
 async function predictWithAI(task) {
     if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media || (task.clicks && task.clicks.length > 0)) return;
     let pKey = getConceptKey(task.prompt);
@@ -397,7 +390,6 @@ async function predictWithAI(task) {
             let conf = resolvedRes.confidences[pKey] || 0;
             let negConf = resolvedRes.confidences['neg_' + pKey] || 0;
             
-            // Balanced Accuracy Threshold
             if (resolvedRes.label === pKey && conf >= 0.65 && negConf <= 0.35) {
                 predictedClicks.push(m.index);
             }
@@ -423,15 +415,21 @@ async function predictWithAI(task) {
     }
 }
 
-async function reEvaluatePending() {
-    if (isEvaluatingAI) return;
+// ── CONCURRENT PARALLEL BULK EVALUATION (Processes all tasks in parallel) ──
+async function reEvaluatePendingParallel() {
+    if (isEvaluatingAI || !isAIReady || !autoTrainEnabled) return;
     isEvaluatingAI = true;
-    for (let id in activeTasksStore) {
-        let t = activeTasksStore[id];
-        if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
-            await predictWithAI(t);
-        }
+
+    let pendingList = Object.values(activeTasksStore).filter(t => t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0));
+    
+    // Process in chunks of 8 parallel tasks
+    const CHUNK_SIZE = 8;
+    for (let i = 0; i < pendingList.length; i += CHUNK_SIZE) {
+        let chunk = pendingList.slice(i, i + CHUNK_SIZE);
+        await Promise.all(chunk.map(task => predictWithAI(task)));
+        await tf.nextFrame();
     }
+
     isEvaluatingAI = false;
 }
 
@@ -445,7 +443,7 @@ async function fetchTasks() {
             if (currentTab === 'pending') {
                 serverData.pending = data.tasks || {};
                 renderPendingStreams();
-                if (isAIReady && autoTrainEnabled) reEvaluatePending();
+                if (isAIReady && autoTrainEnabled) reEvaluatePendingParallel();
             } else {
                 serverData.trained = data.tasks || {};
                 renderTrainedStream();
@@ -475,12 +473,12 @@ function renderPendingStreams() {
 
         if (isGrid) {
             gridArea.prepend(card);
-            if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[id]);
         } else {
             manualArea.prepend(card);
         }
     }
     updateCountsDisplay();
+    if (isAIReady && autoTrainEnabled) reEvaluatePendingParallel();
 }
 
 function renderTrainedStream() {
