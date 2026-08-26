@@ -66,7 +66,7 @@
         .grid-view-mode .task-list { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
         .manual-view-mode .task-list { grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); }
 
-        .task-card { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; padding: 10px; transition: none; }
+        /* task-card styles merged into .btn block above */
         .task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 8px rgba(255,0,255,0.3); }
         .task-card.in-retrain { border: 2px solid #ff8800 !important; background: #221405 !important; }
 
@@ -108,25 +108,26 @@
             color: #fff; font-size: 12px; border-radius: 4px;
             user-select: none; -webkit-user-select: none;
             transition: none !important;
-            -webkit-tap-highlight-color: transparent;
             touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
         }
-        .btn:active { filter: brightness(0.75); transform: scale(0.97); }
-        .btn-save { background: #00ff88; color: #000; }
+        .btn:active { filter: brightness(0.72); transform: scale(0.96); }
+        .btn-save   { background: #00ff88; color: #000; }
         .btn-save:active { background: #00cc6a; }
-        .btn-reset { background: #444; }
+        .btn-reset  { background: #444; }
         .btn-reset:active { background: #2a2a2a; }
-        .btn-del { background: #ff4444; flex: 0.3; }
-        .btn-del:active { background: #cc0000; }
+        .btn-del    { background: #ff4444; flex: 0.3; }
+        .btn-del:active { background: #bb0000; }
         .btn-retrain { background: #ff8800; color: #000; }
         .btn-retrain:active { background: #cc6600; }
         .btn-confirm { background: #00ff88; color: #000; }
         .btn-confirm:active { background: #00cc6a; }
         .btn-cancel { background: #555; }
         .btn-cancel:active { background: #333; }
-        .btn-warn { background: #ff2222 !important; color: #fff !important; }
+        .btn-warn   { background: #ff2222 !important; color: #fff !important; }
+        .task-card  { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; padding: 10px; transition: none; }
         .img-grid img { transition: none !important; }
-        .img-grid img:active { transform: scale(0.95) !important; }
+        .img-grid img:active { transform: scale(0.94) !important; opacity: 0.8 !important; }
 
         #trainedView { display: none; flex: 1; flex-direction: column; background: #141414; border: 1px solid #262626; border-radius: 6px; overflow: hidden; margin-top: 10px; }
         .trained-container { flex: 1; overflow-y: auto; padding: 15px; display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; align-content: start; }
@@ -372,17 +373,18 @@ function connectDashboardWS() {
                     }
                 }
 
-                // ✅ FIX: task_media_ready — pehle empty tha, ab media aa gayi — card banao
+                // task_media_ready — pehle empty tha, ab media aa gayi
                 if (msg.action === 'task_media_ready' && msg.task) {
-                    let id = msg.taskId;
-                    if (!ghostBlocker.has(id)) {
+                    let id = msg.taskId || msg.task.id;
+                    if (id && !ghostBlocker.has(id)) {
                         serverData.pending[id] = msg.task;
-                        // Purana 'unknown' entry update karo
+                        let mLen = (msg.task.media || []).length;
+                        let newType = mLen > 1 ? 'grid' : (mLen === 1 ? 'coord' : 'unknown');
                         if (activeTasksStore[id]) {
-                            activeTasksStore[id].media = msg.task.media || [];
-                            activeTasksStore[id].type = (msg.task.media && msg.task.media.length > 1) ? 'grid' : 'coord';
+                            activeTasksStore[id].media  = msg.task.media || [];
+                            activeTasksStore[id].type   = newType;
+                            activeTasksStore[id].prompt = msg.task.prompt || activeTasksStore[id].prompt;
                         }
-                        // Ab card banana hai — renderPendingStreams will handle it
                         renderPendingStreams();
                         if (isAIReady && autoTrainEnabled && selectedAppMode === 'grid') {
                             let t = activeTasksStore[id];
@@ -427,17 +429,13 @@ function connectDashboardWS() {
 
 function updateCounts(c) {
     if (!c) return;
-    document.getElementById('c-pending').innerText = c.pending || 0;
-    document.getElementById('c-trained').innerText = c.trained || 0;
+    document.getElementById('c-pending').innerText      = c.pending || 0;
+    document.getElementById('c-trained').innerText      = c.trained || 0;
     document.getElementById('c-trained-total').innerText = `${c.trained || 0} Solved`;
-
-    let gridOnline   = c.gridWorkersOnline   || 0;
-    let manualOnline = c.manualWorkersOnline || 0;
-    let myOnline = selectedAppMode === 'grid' ? gridOnline : manualOnline;
-    // Self count karo agar 0 aaya
-    if (myOnline < 1) myOnline = 1;
+    let gO = c.gridWorkersOnline   || 0;
+    let mO = c.manualWorkersOnline || 0;
     document.getElementById('teamCountText').innerText =
-        `${selectedAppMode.toUpperCase()} Online: ${myOnline} | G:${gridOnline} M:${manualOnline}`;
+        `G:${gO} M:${mO} | ${selectedAppMode.toUpperCase()} Active`;
 }
 
 async function initAI() {
@@ -520,7 +518,6 @@ async function idbGet() {
 let _saveKnnTimer = null;
 async function saveKNN(immediate = false) {
     if (!knn) return;
-    if (_saveKnnTimer) clearTimeout(_saveKnnTimer);
     const doSave = async () => {
         try {
             let ds = knn.getClassifierDataset();
@@ -530,8 +527,9 @@ async function saveKNN(immediate = false) {
             updateAIStatus();
         } catch(e) {}
     };
-    if (immediate) { await doSave(); }
-    else { _saveKnnTimer = setTimeout(doSave, 2500); }
+    if (immediate) { await doSave(); return; }
+    if (_saveKnnTimer) clearTimeout(_saveKnnTimer);
+    _saveKnnTimer = setTimeout(doSave, 2500);
 }
 async function loadKNN() {
     try {
@@ -600,10 +598,8 @@ async function trainAIBrainAsync(task) {
                 let features = aiModel.infer(tfImg, true);
                 tfImg.dispose();
                 if (task.clicks.includes(idx)) {
-                    // Positive: 5 baar add karo — stronger positive signal
                     for (let i = 0; i < 5; i++) knn.addExample(features, pText);
                 } else {
-                    // Negative: 2 baar add karo — thoda weight
                     for (let i = 0; i < 2; i++) knn.addExample(features, negLabel);
                 }
                 features.dispose();
@@ -693,7 +689,6 @@ async function predictWithAI(task) {
             features.dispose();
             let conf    = resolvedRes.confidences[pText] || 0;
             let negConf = resolvedRes.confidences['negative_' + pText] || 0;
-            // Lower threshold — AI zyada seekhne ke baad zyada confident hoga
             if (resolvedRes.label === pText && conf >= 0.50 && negConf < 0.50) {
                 predictedClicks.push(item.index);
             }
@@ -720,14 +715,9 @@ async function predictWithAI(task) {
 
 let _reEvalQueued = false;
 async function reEvaluatePending() {
-    if (isEvaluatingAI) {
-        // Evaluation chal rahi hai — queue mein rakh do
-        _reEvalQueued = true;
-        return;
-    }
+    if (isEvaluatingAI) { _reEvalQueued = true; return; }
     isEvaluatingAI = true;
     _reEvalQueued = false;
-
     let ids = Object.keys(activeTasksStore);
     for (let id of ids) {
         let t = activeTasksStore[id];
@@ -736,7 +726,6 @@ async function reEvaluatePending() {
         }
     }
     isEvaluatingAI = false;
-    // Queue mein tha — dobara run karo
     if (_reEvalQueued) reEvaluatePending();
 }
 
@@ -744,7 +733,7 @@ function renderPendingStreams() {
     let pending = serverData.pending;
     let gridCount = 0, manualCount = 0;
 
-    // Stale cards hatao
+    // Stale / ghost cards hatao
     document.querySelectorAll('#pendingView .task-card').forEach(card => {
         let id = card.dataset.id;
         if (!pending[id] || ghostBlocker.has(id)) {
@@ -753,41 +742,42 @@ function renderPendingStreams() {
         }
     });
 
-    let gridFrag = document.createDocumentFragment();
+    let gridFrag   = document.createDocumentFragment();
     let manualFrag = document.createDocumentFragment();
 
     for (let id of Object.keys(pending)) {
         if (ghostBlocker.has(id)) continue;
-        let td = pending[id], media = td.media || [];
-        let mediaLen = media.length;
-        let isGrid   = mediaLen > 1;   // 9-tile grid
-        let isEmpty  = mediaLen === 0;  // media abhi nahi aayi
 
-        // Empty media — count karo, store karo, card baad mein bnega
+        let td    = pending[id];
+        let media = td.media || [];
+        let mLen  = media.length;
+        let isGrid   = mLen > 1;   // 9-tile grid task
+        let isEmpty  = mLen === 0; // media abhi nahi aayi
+
+        // Empty media — count karo, store karo, card baad mein banay ga
         if (isEmpty) {
-            gridCount++;
-            manualCount++;
+            gridCount++; manualCount++;
             if (!activeTasksStore[id]) {
                 activeTasksStore[id] = { id, clicks: [], type: 'unknown', media: [], prompt: td.prompt || '' };
             }
             continue;
         }
 
-        // Count update
+        // Count
         if (isGrid) gridCount++; else manualCount++;
 
-        // Dono modes mein saari tasks show karo — worker apna kaam karega
-        // (Grid worker: grid + coord dono; Manual worker: coord only)
-        let shouldRender = isGrid
-            ? (selectedAppMode === 'grid')
-            : true; // coord/canvas tasks dono modes mein dikhao
+        // DONO modes mein saari tasks card banao
+        // Grid worker → grid tasks + canvas/coord tasks bhi (kyunki server dono ko bhejta hai)
+        // Manual worker → sirf canvas/coord tasks
+        let shouldRender = true;
+        if (selectedAppMode === 'manual' && isGrid) shouldRender = false; // manual ko grid tiles mat dikhao
 
         if (!shouldRender) continue;
 
         // Card already hai — skip
         if (document.querySelector(`.task-card[data-id="${id}"]`)) continue;
 
-        // Store entry update/create
+        // Store update/create
         if (activeTasksStore[id]) {
             activeTasksStore[id].media  = media;
             activeTasksStore[id].type   = isGrid ? 'grid' : 'coord';
@@ -803,17 +793,13 @@ function renderPendingStreams() {
 
         let card = buildCard(activeTasksStore[id]);
 
-        // Grid tasks → gridArea, Coord/canvas tasks → apne mode ke area
         if (isGrid) {
             gridFrag.appendChild(card);
             if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[id]);
         } else {
-            // Coord/canvas — selectedAppMode ke mutabiq sahi column
-            if (selectedAppMode === 'grid') {
-                gridFrag.appendChild(card);
-            } else {
-                manualFrag.appendChild(card);
-            }
+            // Canvas/coord/drag → current mode ka column
+            if (selectedAppMode === 'grid') gridFrag.appendChild(card);
+            else manualFrag.appendChild(card);
         }
     }
 
@@ -877,9 +863,8 @@ function buildCard(t, isTrained = false) {
 
     let parts = (t.prompt || '').split('|||');
     let safePromptText = sanitizeText(parts[0]);
-    // Example image — src validate karo
-    let exImgSrc = (parts[1] || '').startsWith('data:image/') || (parts[1] || '').startsWith('http') ? parts[1] : '';
-    let exHtml = exImgSrc ? `<img src="${exImgSrc}" class="example-img">` : `<div class="example-img-placeholder">🖼️</div>`;
+    let exSrc = (parts[1] || '');
+    let exHtml = exSrc ? `<img src="${exSrc}" class="example-img">` : `<div class="example-img-placeholder">🖼️</div>`;
     let mediaHTML = '';
 
     if (t.type === 'grid') {
