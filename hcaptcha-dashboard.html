@@ -205,9 +205,55 @@ async function initAI() {
         isAIReady = true;
         updateAIStatus();
         reEvaluatePending();
+        setupWebGLRecovery();
+        startMemoryMonitor();
     } catch(e) {
         syncStatus.innerHTML = "⚠️ AI Fallback";
     }
+}
+
+// ── FIX 3: WebGL Context Lost Recovery ──
+function setupWebGLRecovery() {
+    let canvas = document.querySelector('canvas');
+    if (!canvas) {
+        // TF.js internal canvas dhundo
+        try { canvas = tf.backend().getCanvas(); } catch(e) {}
+    }
+    if (canvas) {
+        canvas.addEventListener('webglcontextlost', async (e) => {
+            e.preventDefault();
+            isAIReady = false;
+            syncStatus.innerHTML = '⚠️ WebGL Crash — Recovering...';
+            try {
+                await new Promise(r => setTimeout(r, 2000));
+                await tf.setBackend('webgl');
+                await tf.ready();
+                aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
+                knn = knnClassifier.create();
+                await loadKNN();
+                isAIReady = true;
+                updateAIStatus();
+            } catch(err) {
+                syncStatus.innerHTML = '❌ WebGL Recovery Failed';
+            }
+        });
+    }
+}
+
+// ── FIX 4: Memory Monitor — har 20 sec GPU check ──
+function startMemoryMonitor() {
+    setInterval(() => {
+        try {
+            let mem = tf.memory();
+            if (mem.numTensors > 150) {
+                // Emergency cleanup
+                tf.engine().startScope();
+                tf.engine().endScope();
+                syncStatus.innerHTML = `🧹 Memory Cleaned (${mem.numTensors} tensors)`;
+                setTimeout(() => updateAIStatus(), 1500);
+            }
+        } catch(e) {}
+    }, 20000);
 }
 
 function updateAIStatus() {
@@ -317,9 +363,11 @@ async function trainAIBrainAsync(task) {
             img.src = imgSrc;
             await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 300); });
             if (!img.complete || img.naturalWidth === 0) continue;
-            tf.tidy(() => {
-                let tfImg = tf.browser.fromPixels(img);
-                let features = aiModel.infer(tfImg, true);
+            // ── FIX: tf.tidy async-safe nahi — manual dispose karo ──
+            let tfImg = null, features = null;
+            try {
+                tfImg = tf.browser.fromPixels(img);
+                features = aiModel.infer(tfImg, true);
                 if (task.clicks.includes(m.index)) {
                     knn.addExample(features, pText);
                     knn.addExample(features, pText);
@@ -327,7 +375,10 @@ async function trainAIBrainAsync(task) {
                 } else {
                     knn.addExample(features, negLabel);
                 }
-            });
+            } finally {
+                if (tfImg) tfImg.dispose();
+                if (features) features.dispose();
+            }
             await tf.nextFrame();
         } catch(e) {}
     }
@@ -350,13 +401,16 @@ async function predictWithAI(task) {
             img.src = imgSrc;
             await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 200); });
             if (!img.complete || img.naturalWidth === 0) continue;
-            let res = null;
-            tf.tidy(() => {
-                let tfImg = tf.browser.fromPixels(img);
-                let features = aiModel.infer(tfImg, true);
-                res = knn.predictClass(features);
-            });
-            let resolvedRes = await res;
+            // ── FIX: predictClass async hai — tf.tidy kaam nahi karta ──
+            let tfImg2 = null, features2 = null, resolvedRes = null;
+            try {
+                tfImg2 = tf.browser.fromPixels(img);
+                features2 = aiModel.infer(tfImg2, true);
+                resolvedRes = await knn.predictClass(features2);
+            } finally {
+                if (tfImg2) tfImg2.dispose();
+                if (features2) features2.dispose();
+            }
             let conf = resolvedRes.confidences[pText] || 0;
             let negConf = resolvedRes.confidences['negative_' + pText] || 0;
             if (resolvedRes.label === pText && conf >= 0.80 && negConf < 0.30) {
