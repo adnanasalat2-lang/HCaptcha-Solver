@@ -336,28 +336,42 @@ let knnCpuDataset = {}; // { label: { data: Float32Array, shape: [...] } }
 
 async function saveKNN() {
     if (!knn) return;
+    const payload = Object.fromEntries(
+        Object.entries(knnCpuDataset).map(([k, v]) => [k, { data: Array.from(v.data), shape: v.shape }])
+    );
+    // 1) Server pe save — sab PCs ko same model milega
     try {
-        // Seedha knnCpuDataset se save karo — knn se GPU tensors mat lo
-        await idbSet(
-            Object.fromEntries(
-                Object.entries(knnCpuDataset).map(([k, v]) => [k, { data: Array.from(v.data), shape: v.shape }])
-            )
-        );
-        updateAIStatus();
+        await fetch(`${SERVER_URL}/api/knn-model`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
     } catch(e) {}
+    // 2) Local IndexedDB backup — server down ho to kaam aaye
+    try { await idbSet(payload); } catch(e) {}
+    updateAIStatus();
 }
 
 async function loadKNN() {
+    let ser = null;
+    // 1) Pehle server se load karo — sab PCs ka same model
     try {
-        let ser = await idbGet();
-        if (!ser) return;
-        knnCpuDataset = {};
-        for (let k in ser) {
-            knnCpuDataset[k] = { data: new Float32Array(ser[k].data), shape: ser[k].shape };
+        const res = await fetch(`${SERVER_URL}/api/knn-model`, { cache: 'no-store' });
+        if (res.ok) {
+            const json = await res.json();
+            if (json && Object.keys(json).length > 0) ser = json;
         }
-        // KNN mein load karo — sirf is waqt GPU tensors banao
-        _refreshKnnFromCpu();
     } catch(e) {}
+    // 2) Server nahi mila to local IndexedDB
+    if (!ser) {
+        try { ser = await idbGet(); } catch(e) {}
+    }
+    if (!ser) return;
+    knnCpuDataset = {};
+    for (let k in ser) {
+        knnCpuDataset[k] = { data: new Float32Array(ser[k].data), shape: ser[k].shape };
+    }
+    _refreshKnnFromCpu();
 }
 
 function _refreshKnnFromCpu() {
@@ -600,7 +614,7 @@ async function predictWithAI(task) {
             if (resolvedRes) {
                 const conf = resolvedRes.confidences[pText] || 0;
                 const negConf = resolvedRes.confidences['negative_' + pText] || 0;
-                if (resolvedRes.label === pText && conf >= 0.60 && negConf < 0.55) {
+                if (resolvedRes.label === pText && conf >= 0.85 && negConf < 0.30) {
                     predictedClicks.push(m.index);
                 }
             }
