@@ -255,11 +255,14 @@ async function joinSession(mode) {
         aiControlGroup.style.display = 'flex';
 
         syncStatus.innerHTML = "⏳ Boosting AI Engine...";
+        // ✅ FIX: Pehle WS connect karo — tasks fauran aayein
+        // AI scripts background mein load hongi — ready hone par kaam karengi
+        connectDashboardWS();
         try {
             await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js");
             await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js");
             await loadScript("https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js");
-            initAI();
+            initAI(); // AI ready hone ke baad predict start hogi
         } catch(e) {
             syncStatus.innerHTML = "⚠️ AI CDN Failed";
         }
@@ -269,9 +272,8 @@ async function joinSession(mode) {
         aiControlGroup.style.display = 'none';
         syncStatus.innerHTML = "⚡ Worker Mode Active";
         syncStatus.classList.add('active');
+        connectDashboardWS(); // ✅ Manual mode: fauran connect
     }
-
-    connectDashboardWS();
 }
 
 function reopenModeModal() {
@@ -343,6 +345,25 @@ function connectDashboardWS() {
                     if (activeTasksStore[msg.taskId] && activeTasksStore[msg.taskId].media[msg.index]) {
                         activeTasksStore[msg.taskId].media[msg.index].thumb = msg.thumb;
                         activeTasksStore[msg.taskId].media[msg.index].dhash = msg.dhash;
+                    }
+                }
+
+                // ✅ FIX: task_media_ready — pehle empty tha, ab media aa gayi — card banao
+                if (msg.action === 'task_media_ready' && msg.task) {
+                    let id = msg.taskId;
+                    if (!ghostBlocker.has(id)) {
+                        serverData.pending[id] = msg.task;
+                        // Purana 'unknown' entry update karo
+                        if (activeTasksStore[id]) {
+                            activeTasksStore[id].media = msg.task.media || [];
+                            activeTasksStore[id].type = (msg.task.media && msg.task.media.length > 1) ? 'grid' : 'coord';
+                        }
+                        // Ab card banana hai — renderPendingStreams will handle it
+                        renderPendingStreams();
+                        if (isAIReady && autoTrainEnabled && selectedAppMode === 'grid') {
+                            let t = activeTasksStore[id];
+                            if (t && t.type === 'grid') predictWithAI(t);
+                        }
                     }
                 }
 
@@ -688,7 +709,20 @@ function renderPendingStreams() {
 
     for (let id of Object.keys(pending)) {
         if (ghostBlocker.has(id)) continue;
-        let td = pending[id], media = td.media || [], isGrid = media.length > 1;
+        let td = pending[id], media = td.media || [];
+        let isGrid = media.length > 1;
+        let isEmpty = media.length === 0;
+
+        // ✅ FIX: Empty media task — dono workers ke liye count karo
+        if (isEmpty) {
+            gridCount++;
+            manualCount++;
+            // Store karo lekin card mat banao abhi — media aane par banana
+            if (!activeTasksStore[id]) {
+                activeTasksStore[id] = { id, clicks: [], type: 'unknown', media: [], prompt: td.prompt || '' };
+            }
+            continue;
+        }
 
         if (isGrid) {
             gridCount++;
@@ -698,7 +732,9 @@ function renderPendingStreams() {
             if (selectedAppMode === 'grid') continue;
         }
 
-        if (activeTasksStore[id]) continue;
+        // ✅ FIX: Agar pehle 'unknown' type tha — ab card banana hai
+        let alreadyHasCard = document.querySelector(`.task-card[data-id="${id}"]`);
+        if (activeTasksStore[id] && alreadyHasCard) continue;
 
         activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
         let card = buildCard(activeTasksStore[id]);
