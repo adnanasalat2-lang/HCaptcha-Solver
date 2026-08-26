@@ -15,6 +15,7 @@ const wss = new WebSocket.Server({ server, perMessageDeflate: false });
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE = path.join(DATA_DIR, 'database.json');
+const AI_BRAIN_FILE = path.join(DATA_DIR, 'ai_brain.json'); // New Global AI Brain
 
 const MAX_PENDING = 60;
 const MAX_TRAINED = 50000;
@@ -23,9 +24,9 @@ const DASHBOARD_PAGE_SIZE = 40;
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
 let conceptBank = {};
+let globalAIBrain = {}; // AI Master Brain
 
 const browserSockets = new Map();
-// Dashboard workers map: ws -> { workerId, mode }
 const dashboardWorkers = new Map(); 
 
 let redis = null;
@@ -92,6 +93,14 @@ function initDB() {
             console.error("[DB] Error loading database:", e.message);
         }
     }
+    if (fs.existsSync(AI_BRAIN_FILE)) {
+        try {
+            globalAIBrain = JSON.parse(fs.readFileSync(AI_BRAIN_FILE, 'utf8'));
+            console.log(`[AI] Global Brain Loaded. Concepts: ${Object.keys(globalAIBrain).length}`);
+        } catch(e) {
+            console.error("[AI] Error loading AI Brain:", e.message);
+        }
+    }
 }
 initDB();
 
@@ -99,21 +108,24 @@ let saveTimeout = null;
 function persistDatabase() {
     if (saveTimeout) clearTimeout(saveTimeout);
     saveTimeout = setTimeout(() => {
-        fs.writeFile(DB_FILE, JSON.stringify({ trained: hcaptchaTrained }), 'utf8', (err) => {
-            if (err) console.error('[DB] PERSIST ERROR:', err.message);
-        });
+        fs.writeFile(DB_FILE, JSON.stringify({ trained: hcaptchaTrained }), 'utf8', () => {});
     }, 2000);
+}
+
+let aiSaveTimer = null;
+function persistAIBrain() {
+    if (aiSaveTimer) clearTimeout(aiSaveTimer);
+    aiSaveTimer = setTimeout(() => {
+        fs.writeFile(AI_BRAIN_FILE, JSON.stringify(globalAIBrain), 'utf8', () => {});
+    }, 5000);
 }
 
 function evaluateAutoSolve(task) {
     if (hcaptchaTrained[task.taskId]) {
         return { solved: true, clicks: hcaptchaTrained[task.taskId].clicks || [] };
     }
-
     const isVideoOrCoord = task.media && (task.media.length === 1 || task.media[0].type === 'video_frames' || task.media[0].frames);
-    if (isVideoOrCoord) {
-        return { solved: false };
-    }
+    if (isVideoOrCoord) return { solved: false };
 
     let cKey = getCleanKey(task);
     let targetDhashes = conceptBank[cKey];
@@ -129,7 +141,6 @@ function evaluateAutoSolve(task) {
                 }
             }
         });
-
         if (matchedClicks.length >= 2 && matchedClicks.length <= 5) {
             return { solved: true, clicks: matchedClicks };
         }
@@ -142,15 +153,12 @@ function notifyBrowsers(taskId, clicks) {
         const sockets = browserSockets.get(taskId);
         const payload = JSON.stringify({ action: 'solve', taskId, clicks });
         sockets.forEach(ws => {
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.send(payload);
-            }
+            if (ws.readyState === WebSocket.OPEN) ws.send(payload);
         });
         browserSockets.delete(taskId);
     }
 }
 
-// System-wide broadcast (For counts & deletions)
 function broadcastDashboard(type, data) {
     if (!dashboardWorkers.size) return;
     const msg = JSON.stringify({ type, data });
@@ -159,7 +167,6 @@ function broadcastDashboard(type, data) {
     });
 }
 
-// 🔥 Task Routing & Load Balancing Engine 🔥
 function assignTask(taskId) {
     let task = hcaptchaPending[taskId];
     if (!task || task.assignedTo) return;
@@ -168,7 +175,6 @@ function assignTask(taskId) {
     let minWs = null;
     let minCount = Infinity;
 
-    // Find the least loaded online worker for this mode
     dashboardWorkers.forEach((info, ws) => {
         if (info.mode === taskMode && ws.readyState === WebSocket.OPEN) {
             let count = 0;
@@ -192,8 +198,8 @@ function assignTask(taskId) {
 function reassignTasksFrom(workerId) {
     for (let taskId in hcaptchaPending) {
         if (hcaptchaPending[taskId].assignedTo === workerId) {
-            hcaptchaPending[taskId].assignedTo = null; // Unassign
-            assignTask(taskId); // Re-assign to someone else online
+            hcaptchaPending[taskId].assignedTo = null;
+            assignTask(taskId);
         }
     }
 }
@@ -236,7 +242,6 @@ wss.on('connection', (ws) => {
                 dashboardWorkers.set(ws, { workerId: data.workerId, mode: data.mode });
                 ws.send(JSON.stringify({ type: 'counts', data: getCountsData() }));
                 
-                // Naya worker aaya hai, uski mode ke unassigned tasks usko dedo
                 for (let taskId in hcaptchaPending) {
                     if (!hcaptchaPending[taskId].assignedTo) {
                         let taskMode = (hcaptchaPending[taskId].media && hcaptchaPending[taskId].media.length > 1) ? 'grid' : 'manual';
@@ -258,14 +263,12 @@ wss.on('connection', (ws) => {
             let info = dashboardWorkers.get(ws);
             dashboardWorkers.delete(ws);
             
-            // Check if this workerId has any other active tabs/websockets open
             let stillConnected = false;
             for (let [otherWs, otherInfo] of dashboardWorkers.entries()) {
                 if (otherInfo.workerId === info.workerId && otherWs.readyState === WebSocket.OPEN) {
                     stillConnected = true; break;
                 }
             }
-            // Agar totally disconnect ho gaya hai tou tasks divide kar do
             if (!stillConnected) reassignTasksFrom(info.workerId);
         }
     });
@@ -291,56 +294,39 @@ app.post('/api/new-hcaptcha', (req, res) => {
         prompt: task.prompt,
         media: task.media,
         timestamp: task.timestamp,
-        assignedTo: null // Initial state unassigned
+        assignedTo: null 
     };
 
-    assignTask(task.taskId); // Send to best worker
-    broadcastDashboard('counts', getCountsData()); // Update everyone's counters
+    assignTask(task.taskId); 
+    broadcastDashboard('counts', getCountsData()); 
 
     res.json({ success: true, autoSolved: false });
 });
 
 app.post('/api/submit-hcaptcha', (req, res) => {
     const { taskId, clicks } = req.body;
-    if (!taskId) return res.json({ success: false, error: 'Missing taskId' });
-
-    if (!clicks || !Array.isArray(clicks) || clicks.length === 0) {
-        return res.json({ success: false, error: 'Empty clicks blocked' });
-    }
+    if (!taskId || !clicks || clicks.length === 0) return res.json({ success: false });
 
     let source = hcaptchaPending[taskId] || hcaptchaTrained[taskId];
-
     if (source) {
         let lightMedia = (source.media || []).map(m => ({
-            dhash: m.dhash || "",
-            stableHash: m.stableHash || "",
-            type: m.type || "image",
-            index: m.index !== undefined ? m.index : 0,
-            thumb: m.thumb || (m.frames ? m.frames[0] : "")
+            dhash: m.dhash || "", stableHash: m.stableHash || "", type: m.type || "image",
+            index: m.index !== undefined ? m.index : 0, thumb: m.thumb || (m.frames ? m.frames[0] : "")
         }));
-
         let cKey = getCleanKey(source);
         if (!conceptBank[cKey]) conceptBank[cKey] = new Set();
-
         clicks.forEach(idx => {
             if (typeof idx === 'number' && lightMedia[idx] && lightMedia[idx].dhash && lightMedia[idx].dhash !== "0000000000000000") {
                 conceptBank[cKey].add(lightMedia[idx].dhash);
             }
         });
-
         hcaptchaTrained[taskId] = {
-            id: taskId,
-            prompt: source.prompt,
-            conceptKey: getCleanKey(source),
-            media: lightMedia,
-            clicks: clicks,
-            trainedAt: new Date().toISOString()
+            id: taskId, prompt: source.prompt, conceptKey: cKey, media: lightMedia, clicks: clicks, trainedAt: new Date().toISOString()
         };
 
         const trainedKeys = Object.keys(hcaptchaTrained);
         if (trainedKeys.length > MAX_TRAINED) {
-            const oldest = trainedKeys.slice(0, trainedKeys.length - MAX_TRAINED);
-            oldest.forEach(k => delete hcaptchaTrained[k]);
+            Object.keys(hcaptchaTrained).slice(0, trainedKeys.length - MAX_TRAINED).forEach(k => delete hcaptchaTrained[k]);
         }
 
         delete hcaptchaPending[taskId];
@@ -349,6 +335,47 @@ app.post('/api/submit-hcaptcha', (req, res) => {
         broadcastDashboard('task_solved', { taskId });
         broadcastDashboard('counts', getCountsData());
     }
+    res.json({ success: true });
+});
+
+// ── AI Brain Endpoints (Live Sync) ──
+app.get('/api/ai-brain', (req, res) => {
+    res.json(globalAIBrain);
+});
+
+app.post('/api/sync-ai-brain-batch', (req, res) => {
+    const { workerId, updates } = req.body;
+    if (updates && Array.isArray(updates)) {
+        let changed = false;
+        updates.forEach(u => {
+            let { label, featureArr } = u;
+            if (!globalAIBrain[label]) {
+                globalAIBrain[label] = { data: featureArr, shape: [1, 1280] };
+                changed = true;
+            } else {
+                const old = globalAIBrain[label];
+                const MAX_EXAMPLES = 150; // Cap to save memory
+                const currentN = old.shape[0];
+                if (currentN >= MAX_EXAMPLES) {
+                    old.data.splice(0, 1280);
+                    old.data.push(...featureArr);
+                } else {
+                    old.data.push(...featureArr);
+                    old.shape[0] += 1;
+                }
+                changed = true;
+            }
+        });
+        if (changed) persistAIBrain();
+        // Broadcast concepts to other online grid workers
+        broadcastDashboard('sync_ai_batch', { workerId, updates });
+    }
+    res.json({ success: true });
+});
+
+app.post('/api/reset-ai-brain', (req, res) => {
+    globalAIBrain = {};
+    persistAIBrain();
     res.json({ success: true });
 });
 
@@ -361,7 +388,6 @@ app.get('/api/tasks', (req, res) => {
     let source = tab === 'trained' ? hcaptchaTrained : hcaptchaPending;
     let ids = Object.keys(source);
 
-    // Sirf wahi pending tasks return karo jo is worker ko assign hue thay (taake refresh pe msla na ho)
     if (tab === 'pending' && workerId) {
         ids = ids.filter(id => hcaptchaPending[id].assignedTo === workerId);
     }
@@ -375,15 +401,11 @@ app.get('/api/tasks', (req, res) => {
     res.json({ tasks, total, page, pages: Math.ceil(total / size), tab });
 });
 
-app.get('/api/counts', (req, res) => {
-    res.json(getCountsData());
-});
-
+app.get('/api/counts', (req, res) => res.json(getCountsData()));
 app.delete('/api/delete-hcaptcha/:id', (req, res) => {
     delete hcaptchaPending[req.params.id];
     delete hcaptchaTrained[req.params.id];
-    rebuildConceptBank(); 
-    persistDatabase();
+    rebuildConceptBank(); persistDatabase();
     broadcastDashboard('task_deleted', { taskId: req.params.id });
     broadcastDashboard('counts', getCountsData());
     res.json({ success: true });
