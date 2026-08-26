@@ -640,7 +640,7 @@ async function predictWithAI(task) {
             if (resolvedRes) {
                 const conf = resolvedRes.confidences[pText] || 0;
                 const negConf = resolvedRes.confidences['negative_' + pText] || 0;
-                if (resolvedRes.label === pText && conf >= 0.60 && negConf < 0.55) {
+                if (resolvedRes.label === pText && conf >= 0.73 && negConf < 0.55) {
                     predictedClicks.push(m.index);
                 }
             }
