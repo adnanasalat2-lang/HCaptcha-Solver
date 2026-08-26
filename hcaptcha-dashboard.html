@@ -439,7 +439,6 @@ async function trainAIBrainAsync(task) {
 
 async function myPredict(featureTensor, pText) {
     // featureTensor: shape [1, 1280]
-    // Returns: { label, confidences }
     const negLabel = 'negative_' + pText;
     const labels = Object.keys(knnCpuDataset).filter(
         k => k === pText || k === negLabel
@@ -447,31 +446,34 @@ async function myPredict(featureTensor, pText) {
     if (labels.length === 0) return null;
 
     const scores = {};
+    const featArr = await featureTensor.data(); // Float32Array [1280]
+    const D = 1280;
+
+    // 🔥 SPEED FIX: Calculate normA sirf 1 dafa loop se bahar! (CPU load khatam)
+    let normA = 0;
+    for (let j = 0; j < D; j++) {
+        normA += featArr[j] * featArr[j];
+    }
+    const sqrtNormA = Math.sqrt(normA);
 
     for (let lbl of labels) {
         const entry = knnCpuDataset[lbl];
-        // entry.shape = [N, 1280]
         const N = entry.shape[0];
-        const D = entry.shape[1]; // 1280
 
-        // CPU pe cosine similarity nikalo — koi GPU tensor nahi
-        const featArr = await featureTensor.data(); // Float32Array [1280]
-
-        let totalSim = 0;
+        let maxSim = -1; // 🔥 ACCURACY FIX: Average ki bajaye Best Match (Nearest Neighbor)
+        
         for (let i = 0; i < N; i++) {
             const offset = i * D;
-            let dot = 0, normA = 0, normB = 0;
+            let dot = 0, normB = 0;
             for (let j = 0; j < D; j++) {
-                const a = featArr[j];
                 const b = entry.data[offset + j];
-                dot += a * b;
-                normA += a * a;
+                dot += featArr[j] * b;
                 normB += b * b;
             }
-            const sim = dot / (Math.sqrt(normA) * Math.sqrt(normB) + 1e-8);
-            totalSim += sim;
+            const sim = dot / (sqrtNormA * Math.sqrt(normB) + 1e-8);
+            if (sim > maxSim) maxSim = sim; // Sab se high matching score save karo
         }
-        scores[lbl] = totalSim / N; // average cosine similarity
+        scores[lbl] = maxSim; 
     }
 
     // Softmax-style confidence
@@ -483,7 +485,6 @@ async function myPredict(featureTensor, pText) {
         confidences[k] = (scores[k] - minV) / range;
     }
 
-    // Sabse zyada score wala label
     let bestLabel = labels[0];
     for (let k of labels) {
         if (scores[k] > scores[bestLabel]) bestLabel = k;
@@ -510,9 +511,7 @@ async function predictWithAI(task) {
             let tfImg = null, features = null, resolvedRes = null;
             try {
                 tfImg = tf.browser.fromPixels(img);
-                // GPU sirf features extract karne ke liye — koi KNN nahi
-                features = aiModel.infer(tfImg, true); // shape [1, 1280]
-                // ── CPU pe predict — koi GPU concat nahi ──
+                features = aiModel.infer(tfImg, true); 
                 resolvedRes = await myPredict(features, pText);
             } finally {
                 if (tfImg) { tfImg.dispose(); tfImg = null; }
@@ -523,11 +522,13 @@ async function predictWithAI(task) {
             if (resolvedRes) {
                 const conf = resolvedRes.confidences[pText] || 0;
                 const negConf = resolvedRes.confidences['negative_' + pText] || 0;
+                // Accuracy threshold wahi rakha hai, but maxSim ki wajah se result behtar aayega
                 if (resolvedRes.label === pText && conf >= 0.65 && negConf < 0.50) {
                     predictedClicks.push(m.index);
                 }
             }
-            await new Promise(r => setTimeout(r, 30));
+            // 🔥 SPEED FIX: 30ms ki bajaye 1ms ka delay (AI frame block nahi hogi)
+            await new Promise(r => setTimeout(r, 1));
         } catch(e) {}
     }
 
@@ -549,7 +550,6 @@ async function predictWithAI(task) {
     }
 }
 
-// ── FIXED reEvaluatePending: tasks ke beech delay — GPU crash nahi hoga ──
 async function reEvaluatePending() {
     if (isEvaluatingAI) return;
     isEvaluatingAI = true;
@@ -559,8 +559,8 @@ async function reEvaluatePending() {
             let t = activeTasksStore[id];
             if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
                 await predictWithAI(t);
-                // ── Har task ke baad 200ms ruko — GPU ko recover karne do ──
-                await new Promise(r => setTimeout(r, 200));
+                // 🔥 SPEED FIX: 200ms se hata kar 15ms kar diya (GPU/CPU bhi recover karega aur lag bhi nahi hoga)
+                await new Promise(r => setTimeout(r, 15));
             }
         }
     } finally {
