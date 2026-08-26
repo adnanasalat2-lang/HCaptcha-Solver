@@ -231,7 +231,8 @@ function setupWebGLRecovery() {
                 await tf.ready();
                 aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
                 knn = knnClassifier.create();
-                await loadKNN();
+                // ── Context recover ke baad CPU se fresh tensors banao ──
+                _refreshKnnFromCpu();
                 isAIReady = true;
                 updateAIStatus();
                 syncStatus.innerHTML = '✅ WebGL Recovered!';
@@ -268,10 +269,8 @@ function startMemoryMonitor() {
 }
 
 function updateAIStatus() {
-    if (!knn) return;
     try {
-        let ds = knn.getClassExampleCount();
-        let concepts = Object.keys(ds).filter(k => !k.startsWith('negative_')).length;
+        let concepts = Object.keys(knnCpuDataset).filter(k => !k.startsWith('negative_')).length;
         syncStatus.innerHTML = `🤖 AI Ready ✅ (${concepts} Concepts)`;
         syncStatus.classList.add('active');
     } catch(e) {}
@@ -303,24 +302,48 @@ async function idbGet() {
         req.onerror = () => rej(req.error);
     });
 }
+// ── PERMANENT FIX: KNN data CPU arrays mein rakho, kabhi GPU pe store mat karo ──
+// GPU context lost hone pe GPU tensors invalid ho jaate hain — isliye CPU storage
+let knnCpuDataset = {}; // { label: { data: Float32Array, shape: [...] } }
+
 async function saveKNN() {
     if (!knn) return;
     try {
-        let ds = knn.getClassifierDataset();
-        let ser = {};
-        for (let k in ds) { ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape }; }
-        await idbSet(ser);
+        // Seedha knnCpuDataset se save karo — knn se GPU tensors mat lo
+        await idbSet(
+            Object.fromEntries(
+                Object.entries(knnCpuDataset).map(([k, v]) => [k, { data: Array.from(v.data), shape: v.shape }])
+            )
+        );
         updateAIStatus();
     } catch(e) {}
 }
+
 async function loadKNN() {
     try {
         let ser = await idbGet();
         if (!ser) return;
-        let ds = {};
-        for (let k in ser) { ds[k] = tf.tensor(ser[k].data, ser[k].shape); }
-        knn.setClassifierDataset(ds);
+        knnCpuDataset = {};
+        for (let k in ser) {
+            knnCpuDataset[k] = { data: new Float32Array(ser[k].data), shape: ser[k].shape };
+        }
+        // KNN mein load karo — sirf is waqt GPU tensors banao
+        _refreshKnnFromCpu();
     } catch(e) {}
+}
+
+function _refreshKnnFromCpu() {
+    // Purane tensors pehle saaf karo
+    try {
+        let old = knn.getClassifierDataset();
+        for (let k in old) { try { old[k].dispose(); } catch(e) {} }
+    } catch(e) {}
+    // Nayi tensors banao current backend se
+    let ds = {};
+    for (let k in knnCpuDataset) {
+        ds[k] = tf.tensor(knnCpuDataset[k].data, knnCpuDataset[k].shape);
+    }
+    knn.setClassifierDataset(ds);
 }
 
 async function resetAIBrain() {
@@ -374,7 +397,6 @@ async function trainAIBrainAsync(task) {
             img.src = imgSrc;
             await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 300); });
             if (!img.complete || img.naturalWidth === 0) continue;
-            // ── FIX: tf.tidy async-safe nahi — manual dispose karo ──
             let tfImg = null, features = null;
             try {
                 tfImg = tf.browser.fromPixels(img);
@@ -393,6 +415,13 @@ async function trainAIBrainAsync(task) {
             await tf.nextFrame();
         } catch(e) {}
     }
+    // ── Training ke baad GPU→CPU sync karo taake context lost pe data safe rahe ──
+    try {
+        let gpuDs = knn.getClassifierDataset();
+        for (let k in gpuDs) {
+            knnCpuDataset[k] = { data: new Float32Array(gpuDs[k].dataSync()), shape: gpuDs[k].shape };
+        }
+    } catch(e) {}
     await saveKNN();
     reEvaluatePending();
 }
@@ -400,8 +429,7 @@ async function trainAIBrainAsync(task) {
 async function predictWithAI(task) {
     if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
-    let dataset = knn.getClassExampleCount();
-    if (!dataset[pText] || dataset[pText] < 1) return;
+    if (!knnCpuDataset[pText]) return; // CPU dataset mein nahi = skip
     let predictedClicks = [];
 
     for (let m of task.media) {
@@ -414,32 +442,25 @@ async function predictWithAI(task) {
             await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 200); });
             if (!img.complete || img.naturalWidth === 0) continue;
 
-            // ── ROOT FIX: KNN dataset CPU pe temporarily move karo prediction ke waqt ──
-            // KNN similarities() GPU tensors ko bar bar concat karta hai — yahi 3.5GB leak hai
-            // Solution: predict ke time dataset CPU arrays mein convert karo, baad wapis rakho
-            let savedDataset = null;
             let resolvedRes = null;
             let tfImg2 = null, features2 = null;
             try {
-                // Dataset CPU pe serialize karo (GPU tensors free honge)
-                const gpuDataset = knn.getClassifierDataset();
-                savedDataset = {};
-                const cpuDataset = {};
-                for (let k in gpuDataset) {
-                    savedDataset[k] = { data: Array.from(gpuDataset[k].dataSync()), shape: gpuDataset[k].shape };
-                    cpuDataset[k] = tf.tensor(savedDataset[k].data, savedDataset[k].shape);
-                    gpuDataset[k].dispose(); // purani GPU tensor saaf karo
-                }
-                knn.setClassifierDataset(cpuDataset);
+                // ── FINAL FIX: Predict karne se pehle KNN GPU tensors fresh banao CPU se ──
+                // Isse purane/dead GPU context ke tensors use nahi honge
+                _refreshKnnFromCpu();
 
-                // Ab predict karo — ab concat zyada tensors nahi banayega
                 tfImg2 = tf.browser.fromPixels(img);
                 features2 = aiModel.infer(tfImg2, true);
                 resolvedRes = await knn.predictClass(features2);
             } finally {
                 if (tfImg2) { tfImg2.dispose(); tfImg2 = null; }
                 if (features2) { features2.dispose(); features2 = null; }
-                // GPU clean karo — KNN ke internal prediction tensors bhi
+                // KNN ke prediction tensors bhi saaf karo
+                try {
+                    let cur = knn.getClassifierDataset();
+                    for (let k in cur) { try { cur[k].dispose(); } catch(e) {} }
+                    knn.clearAllClasses();
+                } catch(e) {}
                 await tf.nextFrame();
             }
 
@@ -450,8 +471,6 @@ async function predictWithAI(task) {
                     predictedClicks.push(m.index);
                 }
             }
-
-            // ── Har image ke baad GPU ko 50ms breathe karne do ──
             await new Promise(r => setTimeout(r, 50));
         } catch(e) {}
     }
