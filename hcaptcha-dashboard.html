@@ -11,7 +11,6 @@
     <style>
         * { box-sizing: border-box; }
         body { background-color: #0c0c0c; color: #ffffff; font-family: Arial, sans-serif; margin: 0; padding: 12px; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-        
         .header { background: #181818; padding: 10px 16px; border-bottom: 2px solid #00ff88; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-shrink: 0; border-radius: 4px; }
         .header-left { display: flex; align-items: center; gap: 15px; }
         .header h1 { margin: 0; font-size: 17px; color: #00ff88; }
@@ -19,7 +18,6 @@
         .tab-btn { background: #282828; color: #aaa; border: 1px solid #444; padding: 6px 14px; font-size: 13px; font-weight: bold; cursor: pointer; border-radius: 4px; }
         .tab-btn.active { background: #00ff88; color: #000; border-color: #00ff88; }
         .count-badge { background: #000; color: #fff; padding: 1px 6px; border-radius: 8px; font-size: 11px; margin-left: 4px; }
-
         .ai-bar { display: flex; align-items: center; gap: 8px; }
         .live-status { font-size: 11px; font-weight: bold; padding: 4px 8px; border-radius: 4px; background: #1a1a1a; border: 1px solid #ff4444; color: #ff4444; }
         .live-status.active { border-color: #00ff88; color: #00ff88; }
@@ -29,40 +27,32 @@
         .btn-toggle.on { background: #00ff88; color: #000; border-color: #00ff88; }
         .btn-clear-ai { background: #331111; color: #ff5555; border: 1px solid #772222; padding: 6px 10px; border-radius: 4px; font-size: 11px; font-weight: bold; cursor: pointer; }
         .search-box input { padding: 6px 10px; background: #222; border: 1px solid #444; color: #00ff88; border-radius: 4px; font-size: 12px; outline: none; width: 140px; }
-
         .workspace-split { display: flex; gap: 12px; flex: 1; min-height: 0; margin-top: 10px; }
-        
         .column { flex: 1; display: flex; flex-direction: column; background: #141414; border: 1px solid #262626; border-radius: 6px; overflow: hidden; }
         .column-header { padding: 8px 12px; background: #1c1c1c; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; font-weight: bold; }
         .col-title-ai { color: #00ff88; font-size: 14px; }
         .col-title-manual { color: #ff9900; font-size: 14px; }
         .stream-count { background: #000; padding: 2px 6px; border-radius: 8px; font-size: 11px; color: #fff; }
-        
         .task-list { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
-        
         .task-card { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; padding: 10px; }
         .task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 8px rgba(255,0,255,0.3); }
         .task-card.in-retrain { border: 2px solid #ff8800 !important; background: #221405 !important; }
         .task-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
         .task-id { color: #ff4444; font-family: monospace; font-size: 13px; font-weight: bold; }
-        
         .prompt-container { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; background: #222; padding: 5px; border-radius: 4px; border: 1px solid #333; }
         .example-wrap { flex-shrink: 0; width: 42px; height: 42px; }
         .example-img { width: 42px; height: 42px; object-fit: cover; border-radius: 3px; border: 1px solid #555; }
         .example-img-placeholder { width: 42px; height: 42px; border-radius: 3px; background: #2a2a2a; border: 1px dashed #555; display: flex; align-items: center; justify-content: center; font-size: 16px; }
         .task-prompt { color: #fff; font-size: 12px; font-weight: bold; line-height: 1.3; }
-
         .img-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
         .img-grid img { width: 100%; height: 105px; object-fit: cover; cursor: pointer; border: 3px solid transparent; background: #222; border-radius: 3px; }
         .img-grid img.selected { border-color: #00ff88; opacity: 0.85; }
         .img-grid img.ai-pick { border-color: #ff00ff; opacity: 0.9; }
         .img-grid img.retrain-pick { border-color: #ff8800 !important; opacity: 0.95; }
-        
         .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; align-items: center; background: #000; border-radius: 4px; border: 1px solid #444; overflow: hidden; }
         .single-box img { width: 100%; height: auto; min-height: 380px; max-height: 480px; object-fit: contain; display: block; user-select: none; }
         .dot { position: absolute; width: 16px; height: 16px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 10; }
         .dot.retrain-dot { background: #ff8800; }
-
         .actions { display: flex; gap: 6px; margin-top: 8px; }
         .btn { flex: 1; padding: 8px; border: none; font-weight: bold; cursor: pointer; color: #fff; font-size: 12px; border-radius: 4px; }
         .btn-save { background: #00ff88; color: #000; }
@@ -72,7 +62,6 @@
         .btn-confirm { background: #00ff88; color: #000; }
         .btn-cancel { background: #555; }
         .btn-warn { background: #ff2222 !important; color: #fff !important; }
-
         #trainedView { display: none; flex: 1; flex-direction: column; background: #141414; border: 1px solid #262626; border-radius: 6px; overflow: hidden; margin-top: 10px; }
         .trained-container { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-wrap: wrap; gap: 12px; }
         .retrain-banner { font-size: 11px; color: #ff8800; margin-bottom: 6px; padding: 5px; background: #331c00; border-radius: 3px; border: 1px dashed #ff8800; font-weight: bold; text-align: center; }
@@ -145,16 +134,13 @@ let isAIReady = false, aiModel, knn;
 let autoTrainEnabled = true, autoSaveEnabled = true;
 let isEvaluatingAI = false;
 
-// ── FIX 1: WebSocket — Smart Reconnect with retry counter ──
+// ── WEBSOCKET LIVE ENGINE ──
 let ws = null;
-let wsRetryCount = 0;
-
 function initWS() {
     if (ws && ws.readyState < 2) return;
     try {
         ws = new WebSocket(WS_URL);
         ws.onopen = () => {
-            wsRetryCount = 0; // reset on success
             wsStatus.className = 'live-status active';
             wsStatus.innerText = '🟢 Live';
             ws.send(JSON.stringify({ action: 'dashboard' }));
@@ -197,18 +183,10 @@ function initWS() {
         ws.onclose = () => {
             wsStatus.className = 'live-status';
             wsStatus.innerText = '🔴 Offline';
-            // FIX: exponential backoff — max 10 seconds
-            let delay = Math.min(1500 * Math.pow(1.5, wsRetryCount), 10000);
-            wsRetryCount++;
-            setTimeout(initWS, delay);
-        };
-        ws.onerror = () => {
-            ws.close();
+            setTimeout(initWS, 1500);
         };
     } catch(e) {
-        let delay = Math.min(1500 * Math.pow(1.5, wsRetryCount), 10000);
-        wsRetryCount++;
-        setTimeout(initWS, delay);
+        setTimeout(initWS, 1500);
     }
 }
 
@@ -300,7 +278,6 @@ function setTab(tab) {
     currentTab = tab;
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.getElementById('btn-' + tab).classList.add('active');
-    
     if (tab === 'pending') {
         document.getElementById('pendingView').style.display = 'flex';
         document.getElementById('trainedView').style.display = 'none';
@@ -327,12 +304,10 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
-// ── FIX 2 + 3: BEST TRAINING — Balanced + Error-Resistant ──
 async function trainAIBrainAsync(task) {
     if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let negLabel = 'negative_' + pText;
-
     for (let m of task.media) {
         let imgSrc = m.thumb || m.src;
         if (!imgSrc) continue;
@@ -342,16 +317,15 @@ async function trainAIBrainAsync(task) {
             img.src = imgSrc;
             await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 300); });
             if (!img.complete || img.naturalWidth === 0) continue;
-            
             tf.tidy(() => {
                 let tfImg = tf.browser.fromPixels(img);
                 let features = aiModel.infer(tfImg, true);
                 if (task.clicks.includes(m.index)) {
-                    // FIX: Positive 5x zyada weight — sahi cheez zyada seekhe
-                    for (let i = 0; i < 5; i++) knn.addExample(features, pText);
+                    knn.addExample(features, pText);
+                    knn.addExample(features, pText);
+                    knn.addExample(features, pText);
                 } else {
-                    // FIX: Negative bhi 3x — "na" kehna bhi seekhe properly
-                    for (let i = 0; i < 3; i++) knn.addExample(features, negLabel);
+                    knn.addExample(features, negLabel);
                 }
             });
             await tf.nextFrame();
@@ -361,17 +335,11 @@ async function trainAIBrainAsync(task) {
     reEvaluatePending();
 }
 
-// ── FIX 4: SMART PREDICTION — Pehle se hi chale, accuracy bhi best ──
 async function predictWithAI(task) {
     if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let dataset = knn.getClassExampleCount();
-
-    // Sirf check karo ke is concept ka koi example hai ya nahi
     if (!dataset[pText] || dataset[pText] < 1) return;
-
-    let negativeExists = (dataset['negative_' + pText] || 0) > 0;
-
     let predictedClicks = [];
     for (let m of task.media) {
         let imgSrc = m.thumb || m.src;
@@ -382,7 +350,6 @@ async function predictWithAI(task) {
             img.src = imgSrc;
             await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 200); });
             if (!img.complete || img.naturalWidth === 0) continue;
-            
             let res = null;
             tf.tidy(() => {
                 let tfImg = tf.browser.fromPixels(img);
@@ -392,24 +359,13 @@ async function predictWithAI(task) {
             let resolvedRes = await res;
             let conf = resolvedRes.confidences[pText] || 0;
             let negConf = resolvedRes.confidences['negative_' + pText] || 0;
-
-            // Negative data hai toh smart check, nahi hai toh sirf conf check
-            let pass = false;
-            if (negativeExists) {
-                // Dono hain — proper comparison karo
-                pass = (resolvedRes.label === pText && conf >= 0.72 && negConf < 0.28 && (conf - negConf) > 0.35);
-            } else {
-                // Sirf positive data hai — confidence high ho toh select karo
-                pass = (resolvedRes.label === pText && conf >= 0.80);
+            if (resolvedRes.label === pText && conf >= 0.80 && negConf < 0.30) {
+                predictedClicks.push(m.index);
             }
-
-            if (pass) predictedClicks.push(m.index);
             await tf.nextFrame();
         } catch(e) {}
     }
-
-    // Safe range — 1 se 6 tak (0 ya 7+ galat hoga)
-    if (predictedClicks.length >= 1 && predictedClicks.length <= 6) {
+    if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
         task.clicks = predictedClicks;
         let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
         if (card) {
@@ -427,7 +383,7 @@ async function predictWithAI(task) {
     }
 }
 
-// ── FIX 5: reEvaluatePending — try/finally se kabhi stuck nahi hoga ──
+// ── BUG FIX 1: isEvaluatingAI try/finally — kabhi stuck nahi hoga ──
 async function reEvaluatePending() {
     if (isEvaluatingAI) return;
     isEvaluatingAI = true;
@@ -439,17 +395,15 @@ async function reEvaluatePending() {
             }
         }
     } finally {
-        // FIX: Error aaye ya na aaye — hamesha reset hoga, freeze nahi hoga
         isEvaluatingAI = false;
     }
 }
 
-// ── FIX 6: fetchTasks — timeout + finally se hamesha chalta rahega ──
+// ── BUG FIX 2: isFetching try/finally — fetch hang hone pe reset hoga ──
 async function fetchTasks() {
     if (isFetching) return;
     isFetching = true;
     try {
-        // FIX: 8 second timeout — server hang ho toh wait mat karo
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 8000);
         const res = await fetch(
@@ -469,16 +423,13 @@ async function fetchTasks() {
             }
         }
     } catch(e) {
-        // AbortError aaye (timeout) ya network error — dono handle
     } finally {
-        // FIX: Har haal mein reset — dobara fetch ho sake
         isFetching = false;
     }
 }
 
 function renderPendingStreams() {
     let pending = serverData.pending;
-
     document.querySelectorAll('#pendingView .task-card').forEach(card => {
         let id = card.dataset.id;
         if (!pending[id] || ghostBlocker.has(id)) {
@@ -486,14 +437,11 @@ function renderPendingStreams() {
             delete activeTasksStore[id];
         }
     });
-
     for (let id of Object.keys(pending)) {
         if (ghostBlocker.has(id) || activeTasksStore[id]) continue;
         let td = pending[id], media = td.media || [], isGrid = media.length > 1;
-
         activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
         let card = buildCard(activeTasksStore[id]);
-
         if (isGrid) {
             gridArea.prepend(card);
             if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[id]);
@@ -507,13 +455,11 @@ function renderPendingStreams() {
 function renderTrainedStream() {
     let frag = document.createDocumentFragment();
     let existingIds = new Set();
-    
     document.querySelectorAll('#trainedView .task-card').forEach(card => {
         let id = card.dataset.id;
         if (!serverData.trained[id]) card.remove();
         else existingIds.add(id);
     });
-
     for (let id of Object.keys(serverData.trained)) {
         if (existingIds.has(id) || retrainEditingTasks.has(id)) continue;
         let td = serverData.trained[id];
@@ -529,11 +475,9 @@ function buildCard(t, isTrained = false) {
     card.className = 'task-card';
     card.dataset.id = t.id;
     card.style.minWidth = isTrained ? '320px' : 'auto';
-
     let parts = t.prompt.split('|||');
     let exHtml = parts[1] ? `<img src="${parts[1]}" class="example-img">` : `<div class="example-img-placeholder">🖼️</div>`;
     let mediaHTML = '';
-
     if (t.type === 'grid') {
         mediaHTML = '<div class="img-grid">';
         t.media.forEach(m => {
@@ -551,7 +495,6 @@ function buildCard(t, isTrained = false) {
         mediaHTML += '</div>';
         if (isVid && !isTrained) videoTasks.push({ id: t.id, frames: m.frames, current: 0 });
     }
-
     let actions = !isTrained ? `
         <div class="actions">
             <button class="btn btn-save" data-action="save">Save & Train</button>
@@ -562,7 +505,6 @@ function buildCard(t, isTrained = false) {
             <button class="btn btn-retrain" data-action="retrain">🔧 Retrain</button>
             <button class="btn btn-del" data-action="del-trained">❌</button>
         </div>`;
-
     card.innerHTML = `
         <div class="task-head">
             <span class="task-id">#${t.id.substring(0,6)}</span>
@@ -580,13 +522,10 @@ document.body.addEventListener('click', (e) => {
     if (!card) return;
     let tid = card.dataset.id, t = activeTasksStore[tid];
     if (!t) return;
-
     let isTrainedCard = card.closest('#trainedView') !== null;
     let isInRetrain = retrainEditingTasks.has(tid);
-
     if (actionBtn) {
         let act = actionBtn.dataset.action;
-        
         if (act === 'retrain') {
             retrainEditingTasks.add(tid);
             card.classList.add('in-retrain');
@@ -594,7 +533,6 @@ document.body.addEventListener('click', (e) => {
             banner.className = 'retrain-banner'; banner.id = `banner-${tid}`;
             banner.textContent = '🟠 RETRAIN MODE: Click images to modify, then Update';
             card.querySelector('.prompt-container').after(banner);
-
             let actBox = card.querySelector(`#act-${tid}`);
             actBox.innerHTML = `
                 <button class="btn btn-confirm" data-action="confirm-retrain">✅ Update & Train</button>
@@ -602,7 +540,6 @@ document.body.addEventListener('click', (e) => {
                 <button class="btn btn-cancel" data-action="cancel-retrain">Cancel</button>`;
             return;
         }
-
         if (act === 'confirm-retrain') {
             if (!t.clicks || t.clicks.length === 0) {
                 actionBtn.classList.add('btn-warn');
@@ -626,14 +563,12 @@ document.body.addEventListener('click', (e) => {
             });
             return;
         }
-
         if (act === 'clear-retrain') {
             t.clicks = [];
             card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick', 'retrain-pick'));
             card.querySelectorAll('.dot').forEach(d => d.remove());
             return;
         }
-
         if (act === 'cancel-retrain') {
             retrainEditingTasks.delete(tid);
             card.classList.remove('in-retrain');
@@ -645,7 +580,6 @@ document.body.addEventListener('click', (e) => {
             fetchTasks();
             return;
         }
-
         if (act === 'save') {
             if (!t.clicks || t.clicks.length === 0) {
                 actionBtn.classList.add('btn-warn');
@@ -656,7 +590,6 @@ document.body.addEventListener('click', (e) => {
             sendToServer(tid, actionBtn, card);
             return;
         }
-
         if (act === 'reset') {
             t.clicks = [];
             card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick'));
@@ -664,22 +597,18 @@ document.body.addEventListener('click', (e) => {
             card.classList.remove('ai-processing');
             return;
         }
-
         if (act === 'del') {
             ghostBlocker.add(tid); card.remove(); delete activeTasksStore[tid];
             updateCountsDisplay();
             fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).catch(()=>{});
             return;
         }
-
         if (act === 'del-trained') {
             deleteTrained(tid);
             return;
         }
     }
-
     if (isTrainedCard && !isInRetrain) return;
-
     if (e.target.classList.contains('g-img')) {
         let idx = parseInt(e.target.dataset.index);
         if (e.target.classList.contains('selected') || e.target.classList.contains('retrain-pick') || e.target.classList.contains('ai-pick')) {
@@ -696,20 +625,16 @@ document.body.addEventListener('click', (e) => {
         let nw = img.naturalWidth || 400, nh = img.naturalHeight || 300;
         let containerRatio = rect.width / rect.height, imageRatio = nw / nh;
         let actualW = rect.width, actualH = rect.height, offsetX = 0, offsetY = 0;
-
         if (containerRatio > imageRatio) {
             actualW = rect.height * imageRatio; offsetX = (rect.width - actualW) / 2;
         } else {
             actualH = rect.width / imageRatio; offsetY = (rect.height - actualH) / 2;
         }
-
         let clickX = e.clientX - rect.left - offsetX, clickY = e.clientY - rect.top - offsetY;
         if (clickX < 0 || clickX > actualW || clickY < 0 || clickY > actualH) return;
-
         let px = Math.max(0, Math.min(100, (clickX / actualW) * 100));
         let py = Math.max(0, Math.min(100, (clickY / actualH) * 100));
         t.clicks.push({ px, py });
-
         let dot = document.createElement('div');
         dot.className = 'dot' + (isInRetrain ? ' retrain-dot' : '');
         dot.style.left = `${((e.clientX - rect.left) / rect.width) * 100}%`;
@@ -728,18 +653,15 @@ function sendToServer(taskId, btnEl, card) {
         if (card) card.classList.remove('ai-processing');
         return;
     }
-
     fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ taskId, clicks: t.clicks })
     }).catch(()=>{});
-
     ghostBlocker.add(taskId);
     if (card) card.remove();
     delete activeTasksStore[taskId];
     updateCountsDisplay();
-
     if (isAIReady && t.type === 'grid' && t.clicks.length > 0) {
         trainAIBrainAsync(t);
     }
