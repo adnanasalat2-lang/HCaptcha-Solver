@@ -45,6 +45,20 @@
         .example-img-placeholder { width: 42px; height: 42px; border-radius: 3px; background: #2a2a2a; border: 1px dashed #555; display: flex; align-items: center; justify-content: center; font-size: 16px; }
         .task-prompt { color: #fff; font-size: 12px; font-weight: bold; line-height: 1.3; }
         .img-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
+        .img-grid-cell { position: relative; width: 100%; height: 105px; }
+        .img-grid-cell img { width: 100%; height: 105px; object-fit: cover; cursor: pointer; border: 3px solid transparent; background: #222; border-radius: 3px; display: block; }
+        .img-grid-cell img.selected { border-color: #00ff88; opacity: 0.85; }
+        .img-grid-cell img.ai-pick { border-color: #ff00ff; opacity: 0.9; }
+        .img-grid-cell img.retrain-pick { border-color: #ff8800 !important; opacity: 0.95; }
+        .img-grid-cell img.img-broken { opacity: 0.15; cursor: not-allowed; }
+        .img-broken-badge {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: #1a0a0a; border: 1px dashed #552222; border-radius: 3px;
+            font-size: 10px; color: #884444; pointer-events: none; gap: 3px;
+            text-align: center; padding: 4px;
+        }
+        .img-broken-badge span { font-size: 16px; }
         .img-grid img { width: 100%; height: 105px; object-fit: cover; cursor: pointer; border: 3px solid transparent; background: #222; border-radius: 3px; }
         .img-grid img.selected { border-color: #00ff88; opacity: 0.85; }
         .img-grid img.ai-pick { border-color: #ff00ff; opacity: 0.9; }
@@ -53,6 +67,10 @@
         .single-box img { width: 100%; height: auto; min-height: 380px; max-height: 480px; object-fit: contain; display: block; user-select: none; }
         .dot { position: absolute; width: 16px; height: 16px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 10; }
         .dot.retrain-dot { background: #ff8800; }
+        .trained-error-notice { font-size: 11px; color: #886633; background: #221a00; border: 1px dashed #554400; border-radius: 4px; padding: 4px 8px; margin-bottom: 6px; display: none; text-align: center; }
+        .trained-error-notice.visible { display: block; }
+        .img-load-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #111; display: flex; align-items: center; justify-content: center; font-size: 18px; border-radius: 3px; pointer-events: none; }
+        .retrain-disabled-note { font-size: 10px; color: #886633; text-align: center; padding: 3px 0; }
         .actions { display: flex; gap: 6px; margin-top: 8px; }
         .btn { flex: 1; padding: 8px; border: none; font-weight: bold; cursor: pointer; color: #fff; font-size: 12px; border-radius: 4px; }
         .btn-save { background: #00ff88; color: #000; }
@@ -109,7 +127,10 @@
 <div id="trainedView">
     <div class="column-header">
         <span style="color:#00ff88;font-size:14px;">🗂️ Trained Database Archive</span>
-        <span class="stream-count" id="c-trained-total">0 Solved</span>
+        <div style="display:flex;align-items:center;gap:10px;">
+            <span id="expiredNotice" class="trained-error-notice">⚠️ Kuch images expire ho gayi hain (server 403). Retrain ke liye naya task ka intezaar karo.</span>
+            <span class="stream-count" id="c-trained-total">0 Solved</span>
+        </div>
     </div>
     <div class="trained-container" id="trainedArea"></div>
 </div>
@@ -365,6 +386,9 @@ function setTab(tab) {
         document.getElementById('pendingView').style.display = 'none';
         document.getElementById('trainedView').style.display = 'flex';
         trainedArea.innerHTML = '';
+        // Notice reset karo jab tak check na ho
+        let notice = document.getElementById('expiredNotice');
+        if (notice) notice.classList.remove('visible');
     }
     fetchTasks();
 }
@@ -388,6 +412,7 @@ async function trainAIBrainAsync(task) {
     if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let negLabel = 'negative_' + pText;
+    let trained = 0, skipped = 0;
 
     for (let m of task.media) {
         let imgSrc = m.thumb || m.src;
@@ -396,8 +421,13 @@ async function trainAIBrainAsync(task) {
             let img = new Image();
             if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
             img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 300); });
-            if (!img.complete || img.naturalWidth === 0) continue;
+            let loaded = await new Promise((res) => {
+                img.onload = () => res(true);
+                img.onerror = () => res(false);
+                setTimeout(() => res(false), 400);
+            });
+            // Image load na ho (403/expired) to skip karo — silently
+            if (!loaded || !img.complete || img.naturalWidth === 0) { skipped++; continue; }
 
             let tfImg = null, features = null;
             try {
@@ -417,14 +447,23 @@ async function trainAIBrainAsync(task) {
                     newData.set(featureArr, old.data.length);
                     knnCpuDataset[label] = { data: newData, shape: [old.shape[0] + 1, featureArr.length] };
                 }
+                trained++;
             } finally {
                 if (tfImg) tfImg.dispose();
                 if (features) features.dispose();
             }
             await tf.nextFrame();
-        } catch(e) {}
+        } catch(e) { skipped++; }
     }
     await saveKNN();
+    // Status update — skipped images ka bhi pata chalega
+    if (skipped > 0 && trained === 0) {
+        syncStatus.innerHTML = `⚠️ Training skip (${skipped} images load nahi hui)`;
+        setTimeout(() => updateAIStatus(), 3000);
+    } else if (skipped > 0) {
+        syncStatus.innerHTML = `✅ Trained ${trained}, skipped ${skipped} expired`;
+        setTimeout(() => updateAIStatus(), 2000);
+    }
     reEvaluatePending();
 }
 
@@ -637,6 +676,49 @@ function renderTrainedStream() {
         frag.appendChild(card);
     }
     trainedArea.appendChild(frag);
+    // Thodi der baad broken images check karo
+    setTimeout(checkTrainedImageErrors, 800);
+}
+
+function checkTrainedImageErrors() {
+    let brokenCount = document.querySelectorAll('#trainedView .img-broken').length;
+    let notice = document.getElementById('expiredNotice');
+    if (notice) {
+        if (brokenCount > 0) {
+            notice.textContent = `⚠️ ${brokenCount} image(s) expire ho gayi hain (server 403). In cards ko retrain nahi kar sakte.`;
+            notice.classList.add('visible');
+        } else {
+            notice.classList.remove('visible');
+        }
+    }
+    // Cards jahan sari images broken hain unpe retrain button disable karo
+    document.querySelectorAll('#trainedView .task-card').forEach(card => {
+        let allImgs = card.querySelectorAll('.g-img');
+        if (allImgs.length === 0) return;
+        let brokenImgs = card.querySelectorAll('.img-broken');
+        let retrainBtn = card.querySelector('[data-action="retrain"]');
+        if (!retrainBtn) return;
+        if (brokenImgs.length === allImgs.length) {
+            // Sari images broken — retrain completely disable
+            retrainBtn.disabled = true;
+            retrainBtn.style.background = '#333';
+            retrainBtn.style.color = '#666';
+            retrainBtn.style.cursor = 'not-allowed';
+            retrainBtn.title = 'Images expire ho gayi hain — retrain nahi ho sakta';
+            // Note add karo agar pehle se nahi hai
+            if (!card.querySelector('.retrain-disabled-note')) {
+                let note = document.createElement('div');
+                note.className = 'retrain-disabled-note';
+                note.textContent = '🚫 Images expired — retrain unavailable';
+                card.querySelector(`#act-${card.dataset.id}`)?.appendChild(note);
+            }
+        } else if (brokenImgs.length > 0) {
+            // Kuch images broken — partial warning
+            retrainBtn.title = `${brokenImgs.length}/${allImgs.length} images expire ho gayi — partial retrain possible`;
+            retrainBtn.style.background = '#664400';
+            retrainBtn.style.color = '#ffaa44';
+        }
+    });
 }
 
 function buildCard(t, isTrained = false) {
@@ -651,7 +733,12 @@ function buildCard(t, isTrained = false) {
         mediaHTML = '<div class="img-grid">';
         t.media.forEach(m => {
             let isSelected = t.clicks.includes(m.index);
-            mediaHTML += `<img src="${m.thumb || m.src || ''}" class="g-img ${isSelected?'selected':''}" data-index="${m.index}" draggable="false" loading="lazy"/>`;
+            let src = m.thumb || m.src || '';
+            mediaHTML += `<div class="img-grid-cell">
+                <img src="${src}" class="g-img ${isSelected?'selected':''}" data-index="${m.index}" draggable="false" loading="lazy"
+                     onerror="this.classList.add('img-broken');this.nextElementSibling.style.display='flex';this.style.pointerEvents='none';" />
+                <div class="img-broken-badge" style="display:none"><span>🚫</span>Expired</div>
+            </div>`;
         });
         mediaHTML += '</div>';
     } else {
@@ -710,10 +797,14 @@ document.body.addEventListener('click', (e) => {
             return;
         }
         if (act === 'confirm-retrain') {
-            if (!t.clicks || t.clicks.length === 0) {
+            // Check karo ke koi valid (non-broken) image select hui hai
+            let selectedImgs = card.querySelectorAll('.g-img.selected:not(.img-broken), .g-img.retrain-pick:not(.img-broken)');
+            if (!t.clicks || t.clicks.length === 0 || selectedImgs.length === 0) {
                 actionBtn.classList.add('btn-warn');
-                actionBtn.textContent = '⚠️ Pehle Select Karo!';
-                setTimeout(() => { actionBtn.classList.remove('btn-warn'); actionBtn.textContent = '✅ Update & Train'; }, 1000);
+                // Better error message — broken vs not selected
+                let hasBroken = card.querySelectorAll('.img-broken').length > 0;
+                actionBtn.textContent = hasBroken ? '⚠️ Valid image select karo!' : '⚠️ Pehle Select Karo!';
+                setTimeout(() => { actionBtn.classList.remove('btn-warn'); actionBtn.textContent = '✅ Update & Train'; }, 1500);
                 return;
             }
             fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
@@ -779,6 +870,8 @@ document.body.addEventListener('click', (e) => {
     }
     if (isTrainedCard && !isInRetrain) return;
     if (e.target.classList.contains('g-img')) {
+        // Broken/expired images ko ignore karo — click na lena
+        if (e.target.classList.contains('img-broken')) return;
         let idx = parseInt(e.target.dataset.index);
         if (e.target.classList.contains('selected') || e.target.classList.contains('retrain-pick') || e.target.classList.contains('ai-pick')) {
             e.target.classList.remove('selected', 'ai-pick', 'retrain-pick');
