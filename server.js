@@ -201,9 +201,20 @@ function notifyBrowsers(taskId, clicks) {
 
 function dispatchTaskToWorker(taskData) {
     let isGrid = taskData.media && taskData.media.length > 1;
+    let typeUnknown = !taskData.media || taskData.media.length === 0;
+
+    if (typeUnknown) {
+        // Media abhi empty hai — dono mode workers ko bhejo
+        let allWorkers = [...getOnlineWorkers('grid'), ...getOnlineWorkers('manual')];
+        allWorkers.forEach(w => {
+            w.meta.assignedTasks.add(taskData.id);
+            w.ws.send(JSON.stringify({ action: 'new_task', task: taskData }));
+        });
+        return;
+    }
+
     let mode = isGrid ? 'grid' : 'manual';
     let workers = getOnlineWorkers(mode);
-
     if (workers.length === 0) return;
 
     let targetWorker = null;
@@ -329,7 +340,10 @@ wss.on('connection', (ws) => {
                 
                 Object.values(hcaptchaPending).forEach(task => {
                     let taskIsGrid = task.media && task.media.length > 1;
-                    if ((isGrid && taskIsGrid) || (!isGrid && !taskIsGrid)) {
+                    let taskIsManual = task.media && task.media.length === 1;
+                    let taskTypeUnknown = !task.media || task.media.length === 0;
+                    // Unknown type (tiles pending) — dono workers ko do
+                    if (taskTypeUnknown || (isGrid && taskIsGrid) || (!isGrid && taskIsManual)) {
                         workerMeta.assignedTasks.add(task.id);
                         availablePending[task.id] = task;
                     }
@@ -449,19 +463,16 @@ app.get('/api/counts', (req, res) => {
 app.delete('/api/delete-hcaptcha/:id', (req, res) => {
     const delId = req.params.id;
     delete hcaptchaPending[delId];
-    // Full rebuild mat karo — sirf is entry ka concept bank se data hatao
     if (hcaptchaTrained[delId]) {
         let cKey = getCleanKey(hcaptchaTrained[delId]);
         delete hcaptchaTrained[delId];
-        // Sirf agar us concept ki koi aur entry nahi to bank se hatao
         let stillExists = Object.values(hcaptchaTrained).some(t => getCleanKey(t) === cKey);
         if (!stillExists) delete conceptBank[cKey];
         else {
-            // Us concept ko sirf remaining entries se rebuild karo
             conceptBank[cKey] = new Set();
             Object.values(hcaptchaTrained).filter(t => getCleanKey(t) === cKey).forEach(t => _addToConceptBank(t));
         }
-    }
+    } else { delete hcaptchaTrained[delId]; }
     persistDatabase();
     
     const delMsg = JSON.stringify({ action: 'task_deleted', taskId: req.params.id });
