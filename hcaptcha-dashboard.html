@@ -34,7 +34,9 @@
         .col-title-manual { color: #ff9900; font-size: 14px; }
         .stream-count { background: #000; padding: 2px 6px; border-radius: 8px; font-size: 11px; color: #fff; }
         .task-list { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
-        .task-card { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; padding: 10px; }
+        .task-card { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; padding: 10px; transition: transform 0.2s, border 0.2s; }
+        /* Focus Mode Styling */
+        .focused-task { border: 2px solid #00ff88 !important; background: #1c261f !important; box-shadow: 0 0 15px rgba(0, 255, 136, 0.2); transform: scale(1.01); z-index: 10; }
         .task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 8px rgba(255,0,255,0.3); }
         .task-card.in-retrain { border: 2px solid #ff8800 !important; background: #221405 !important; }
         .task-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
@@ -51,25 +53,14 @@
         .img-grid-cell img.ai-pick { border-color: #ff00ff; opacity: 0.9; }
         .img-grid-cell img.retrain-pick { border-color: #ff8800 !important; opacity: 0.95; }
         .img-grid-cell img.img-broken { opacity: 0.15; cursor: not-allowed; }
-        .img-broken-badge {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            display: flex; flex-direction: column; align-items: center; justify-content: center;
-            background: #1a0a0a; border: 1px dashed #552222; border-radius: 3px;
-            font-size: 10px; color: #884444; pointer-events: none; gap: 3px;
-            text-align: center; padding: 4px;
-        }
+        .img-broken-badge { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #1a0a0a; border: 1px dashed #552222; border-radius: 3px; font-size: 10px; color: #884444; pointer-events: none; gap: 3px; text-align: center; padding: 4px; }
         .img-broken-badge span { font-size: 16px; }
-        .img-grid img { width: 100%; height: 105px; object-fit: cover; cursor: pointer; border: 3px solid transparent; background: #222; border-radius: 3px; }
-        .img-grid img.selected { border-color: #00ff88; opacity: 0.85; }
-        .img-grid img.ai-pick { border-color: #ff00ff; opacity: 0.9; }
-        .img-grid img.retrain-pick { border-color: #ff8800 !important; opacity: 0.95; }
         .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; align-items: center; background: #000; border-radius: 4px; border: 1px solid #444; overflow: hidden; }
         .single-box img { width: 100%; height: auto; min-height: 380px; max-height: 480px; object-fit: contain; display: block; user-select: none; }
         .dot { position: absolute; width: 16px; height: 16px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 10; }
         .dot.retrain-dot { background: #ff8800; }
         .trained-error-notice { font-size: 11px; color: #886633; background: #221a00; border: 1px dashed #554400; border-radius: 4px; padding: 4px 8px; margin-bottom: 6px; display: none; text-align: center; }
         .trained-error-notice.visible { display: block; }
-        .img-load-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #111; display: flex; align-items: center; justify-content: center; font-size: 18px; border-radius: 3px; pointer-events: none; }
         .retrain-disabled-note { font-size: 10px; color: #886633; text-align: center; padding: 3px 0; }
         .actions { display: flex; gap: 6px; margin-top: 8px; }
         .btn { flex: 1; padding: 8px; border: none; font-weight: bold; cursor: pointer; color: #fff; font-size: 12px; border-radius: 4px; }
@@ -83,9 +74,30 @@
         #trainedView { display: none; flex: 1; flex-direction: column; background: #141414; border: 1px solid #262626; border-radius: 6px; overflow: hidden; margin-top: 10px; }
         .trained-container { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-wrap: wrap; gap: 12px; }
         .retrain-banner { font-size: 11px; color: #ff8800; margin-bottom: 6px; padding: 5px; background: #331c00; border-radius: 3px; border: 1px dashed #ff8800; font-weight: bold; text-align: center; }
+        
+        /* 🔵 Login Overlay CSS */
+        #loginOverlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); z-index: 9999; display: flex; align-items: center; justify-content: center; }
+        .login-box { background: #141414; padding: 25px; border-radius: 8px; border: 1px solid #333; text-align: center; width: 320px; box-shadow: 0 10px 30px rgba(0,0,0,0.8); }
+        .login-box h2 { color: #00ff88; margin-top: 0; font-size: 20px; }
+        .login-box input { width: 100%; padding: 12px; margin-bottom: 20px; background: #000; border: 1px solid #444; color: #fff; border-radius: 4px; font-size: 14px; outline: none; text-align: center; }
+        .login-box input:focus { border-color: #00ff88; }
+        .btn-mode { width: 100%; padding: 12px; margin-bottom: 12px; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; font-size: 14px; transition: 0.2s; }
+        .btn-mode:hover { transform: scale(1.02); }
+        .btn-grid { background: #00ff88; color: #000; }
+        .btn-manual { background: #ff9900; color: #000; }
     </style>
 </head>
 <body>
+
+<!-- Worker Login Overlay -->
+<div id="loginOverlay">
+    <div class="login-box">
+        <h2>Worker Login</h2>
+        <input type="text" id="wName" placeholder="Enter Name/ID (e.g. Worker-1)" required autocomplete="off">
+        <button class="btn-mode btn-grid" onclick="startApp('grid')">🤖 Grid Mode (AI Auto)</button>
+        <button class="btn-mode btn-manual" onclick="startApp('manual')">👷 Manual Mode (Lightweight)</button>
+    </div>
+</div>
 
 <div class="header">
     <div class="header-left">
@@ -109,14 +121,14 @@
 </div>
 
 <div class="workspace-split" id="pendingView">
-    <div class="column">
+    <div class="column" id="colGrid">
         <div class="column-header">
             <span class="col-title-ai">🤖 AI Fast-Train Stream (Grids)</span>
             <span class="stream-count" id="c-grid">0 Tasks</span>
         </div>
         <div class="task-list" id="gridArea"></div>
     </div>
-    <div class="column">
+    <div class="column" id="colManual">
         <div class="column-header">
             <span class="col-title-manual">👷 Manual Worker Stream (Videos / Coordinates)</span>
             <span class="stream-count" id="c-manual">0 Tasks</span>
@@ -158,6 +170,34 @@ let autoSaveEnabled = true;
 let isEvaluatingAI = false;
 let totalTrainedExamples = 0;
 
+// Global Worker Credentials
+let workerName = '';
+let workerMode = '';
+
+// ── APP START & LOGIN ──
+function startApp(mode) {
+    let w = document.getElementById('wName').value.trim();
+    if (!w) return alert('Bhai, pehle apna Name ya ID likhein!');
+    
+    workerName = w;
+    workerMode = mode;
+    document.getElementById('loginOverlay').style.display = 'none';
+
+    // Disable un-selected mode UI & Engine completely
+    if (mode === 'manual') {
+        document.getElementById('colGrid').style.display = 'none';
+        document.getElementById('btnAutoTrain').style.display = 'none';
+        isAIReady = false; // TFJS/MobileNet won't load
+        syncStatus.innerHTML = '⚡ Lightweight Mode (No AI)';
+    } else {
+        document.getElementById('colManual').style.display = 'none';
+        setTimeout(initAI, 100);
+    }
+
+    initWS();
+    fetchTasks();
+}
+
 // ── WEBSOCKET LIVE ENGINE ──
 let ws = null;
 function initWS() {
@@ -167,7 +207,8 @@ function initWS() {
         ws.onopen = () => {
             wsStatus.className = 'live-status active';
             wsStatus.innerText = '🟢 Live';
-            ws.send(JSON.stringify({ action: 'dashboard' }));
+            // Send Registration to Backend Load Balancer
+            ws.send(JSON.stringify({ action: 'dashboard', workerId: workerName, mode: workerMode }));
         };
         ws.onmessage = (ev) => {
             try {
@@ -184,11 +225,13 @@ function initWS() {
                         let isGrid = (td.media || []).length > 1;
                         activeTasksStore[td.id] = { id: td.id, clicks: [], type: isGrid ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '' };
                         let card = buildCard(activeTasksStore[td.id]);
+                        
+                        // 🔥 FIX: Prepend ki jagah Append (Bottom me add) taake Focus Mode disturb na ho
                         if (isGrid) {
-                            gridArea.prepend(card);
+                            gridArea.appendChild(card); 
                             if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[td.id]);
                         } else {
-                            manualArea.prepend(card);
+                            manualArea.appendChild(card);
                         }
                         updateCountsDisplay();
                     }
@@ -224,23 +267,19 @@ async function initAI() {
         await tf.setBackend('webgl');
         await tf.ready();
         aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
-        // knn object sirf training ke liye rakhte hain (optional)
         knn = knnClassifier.create();
         await loadKNN();
         isAIReady = true;
         updateAIStatus();
         setupWebGLRecovery();
         startMemoryMonitor();
-        // 1.5 sec baad start karo — GPU settle ho
         setTimeout(() => reEvaluatePending(), 1500);
     } catch(e) {
         syncStatus.innerHTML = "⚠️ AI Fallback";
     }
 }
 
-// ── FIX 3: WebGL Context Lost Recovery ──
 function setupWebGLRecovery() {
-    // TF.js apna canvas internally banata hai — sab canvases pe listener lagao
     function attachToCanvas(canvas) {
         if (!canvas || canvas._hcmListenerAttached) return;
         canvas._hcmListenerAttached = true;
@@ -255,7 +294,6 @@ function setupWebGLRecovery() {
                 await tf.ready();
                 aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
                 knn = knnClassifier.create();
-                // ── Context recover ke baad CPU se fresh tensors banao ──
                 _refreshKnnFromCpu();
                 isAIReady = true;
                 updateAIStatus();
@@ -266,25 +304,18 @@ function setupWebGLRecovery() {
             }
         });
     }
-    // Abhi jo canvases hain unpe lagao
     document.querySelectorAll('canvas').forEach(attachToCanvas);
-    // Nayi canvases bhi track karo (TF.js baad mein bana sakta hai)
-    const observer = new MutationObserver(() => {
-        document.querySelectorAll('canvas').forEach(attachToCanvas);
-    });
+    const observer = new MutationObserver(() => { document.querySelectorAll('canvas').forEach(attachToCanvas); });
     observer.observe(document.body, { childList: true, subtree: true });
 }
 
-// ── FIX 4: Aggressive Memory Monitor — har 5 sec GPU check ──
 function startMemoryMonitor() {
     setInterval(() => {
         try {
             let mem = tf.memory();
-            // 80 tensors se zyada = KNN leak ho raha — foran saaf karo
             if (mem.numTensors > 80) {
                 tf.engine().startScope();
                 tf.engine().endScope();
-                // KNN dataset tensors bhi re-sync karo taake wo na hate
                 syncStatus.innerHTML = `🧹 Auto-Clean (${mem.numTensors}→${tf.memory().numTensors} tensors)`;
                 setTimeout(() => updateAIStatus(), 1000);
             }
@@ -293,6 +324,7 @@ function startMemoryMonitor() {
 }
 
 function updateAIStatus() {
+    if (!isAIReady) return;
     try {
         let concepts = Object.keys(knnCpuDataset).filter(k => !k.startsWith('negative_')).length;
         let totalEx = 0;
@@ -330,14 +362,11 @@ async function idbGet() {
         req.onerror = () => rej(req.error);
     });
 }
-// ── PERMANENT FIX: KNN data CPU arrays mein rakho, kabhi GPU pe store mat karo ──
-// GPU context lost hone pe GPU tensors invalid ho jaate hain — isliye CPU storage
-let knnCpuDataset = {}; // { label: { data: Float32Array, shape: [...] } }
 
+let knnCpuDataset = {}; 
 async function saveKNN() {
     if (!knn) return;
     try {
-        // Seedha knnCpuDataset se save karo — knn se GPU tensors mat lo
         await idbSet(
             Object.fromEntries(
                 Object.entries(knnCpuDataset).map(([k, v]) => [k, { data: Array.from(v.data), shape: v.shape }])
@@ -355,18 +384,15 @@ async function loadKNN() {
         for (let k in ser) {
             knnCpuDataset[k] = { data: new Float32Array(ser[k].data), shape: ser[k].shape };
         }
-        // KNN mein load karo — sirf is waqt GPU tensors banao
         _refreshKnnFromCpu();
     } catch(e) {}
 }
 
 function _refreshKnnFromCpu() {
-    // Purane tensors pehle saaf karo
     try {
         let old = knn.getClassifierDataset();
         for (let k in old) { try { old[k].dispose(); } catch(e) {} }
     } catch(e) {}
-    // Nayi tensors banao current backend se
     let ds = {};
     for (let k in knnCpuDataset) {
         ds[k] = tf.tensor(knnCpuDataset[k].data, knnCpuDataset[k].shape);
@@ -393,7 +419,6 @@ function setTab(tab) {
         document.getElementById('pendingView').style.display = 'none';
         document.getElementById('trainedView').style.display = 'flex';
         trainedArea.innerHTML = '';
-        // Notice reset karo jab tak check na ho
         let notice = document.getElementById('expiredNotice');
         if (notice) notice.classList.remove('visible');
     }
@@ -415,11 +440,8 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
-// ── 10X TRAINING ENGINE ──
-// Positive examples ko 3x repeat karo — zyada weight milega correct answers ko
-// Negative examples 1x — balanced lekin kam dominant
-const POSITIVE_REPEAT = 3; // Positive label 3 dafa store hoga
-const NEGATIVE_REPEAT = 1; // Negative 1 dafa
+const POSITIVE_REPEAT = 3;
+const NEGATIVE_REPEAT = 1;
 
 function addToDataset(label, featureArr) {
     const D = featureArr.length;
@@ -427,13 +449,11 @@ function addToDataset(label, featureArr) {
         knnCpuDataset[label] = { data: new Float32Array(featureArr), shape: [1, D] };
     } else {
         const old = knnCpuDataset[label];
-        // Size cap: ek label ke liye max 500 examples — memory overflow nahi hoga
         const MAX_EXAMPLES = 500;
         const currentN = old.shape[0];
         if (currentN >= MAX_EXAMPLES) {
-            // FIFO: purana pehla example hata do, naya add karo (sliding window)
             const newData = new Float32Array(old.data.length);
-            newData.set(old.data.subarray(D), 0); // pehla example chod do
+            newData.set(old.data.subarray(D), 0); 
             newData.set(featureArr, old.data.length - D);
             knnCpuDataset[label] = { data: newData, shape: [currentN, D] };
         } else {
@@ -475,7 +495,6 @@ async function trainAIBrainAsync(task) {
                 const featureArr = new Float32Array(await features.data());
                 const isPositive = task.clicks.includes(m.index);
                 const label = isPositive ? pText : negLabel;
-                // 10X POWER: Positive = 3 dafa store, Negative = 1 dafa
                 const repeat = isPositive ? POSITIVE_REPEAT : NEGATIVE_REPEAT;
                 for (let r = 0; r < repeat; r++) addToDataset(label, featureArr);
                 trained++;
@@ -486,54 +505,27 @@ async function trainAIBrainAsync(task) {
             await tf.nextFrame();
         } catch(e) { skipped++; }
     }
-
     await saveKNN();
     updateAIStatus();
-
-    if (trained === 0) {
-        syncStatus.innerHTML = `⚠️ Koi image load nahi hui — training skip`;
-        setTimeout(() => updateAIStatus(), 2500);
-    } else {
-        syncStatus.innerHTML = `✅ +${trained} trained (${skipped > 0 ? skipped + ' skip' : 'sab load'})`;
-        setTimeout(() => updateAIStatus(), 1500);
-    }
-    // Auto-save hata diya — reEvaluatePending bhi nahi chalega (hang fix)
 }
 
-// ════════════════════════════════════════════════════════════
-// ── FINAL FIX: KNN library BYPASS — Custom Cosine Similarity ──
-// KNN.predictClass() → concatWithNulls → 3.5GB GPU leak
-// Ab khud cosine similarity calculate karo — koi concat nahi
-// ════════════════════════════════════════════════════════════
-
-// knnCpuDataset: { label: { data: Float32Array, shape:[N,1280] } }
-// Ek label ke liye N examples hain (rows), har ek 1280 features
-
 async function myPredict(featureTensor, pText) {
-    // featureTensor: shape [1, 1280]
     const negLabel = 'negative_' + pText;
-    const labels = Object.keys(knnCpuDataset).filter(
-        k => k === pText || k === negLabel
-    );
+    const labels = Object.keys(knnCpuDataset).filter(k => k === pText || k === negLabel);
     if (labels.length === 0) return null;
 
     const scores = {};
-    const featArr = await featureTensor.data(); // Float32Array [1280]
+    const featArr = await featureTensor.data(); 
     const D = 1280;
 
-    // 🔥 SPEED FIX: Calculate normA sirf 1 dafa loop se bahar! (CPU load khatam)
     let normA = 0;
-    for (let j = 0; j < D; j++) {
-        normA += featArr[j] * featArr[j];
-    }
+    for (let j = 0; j < D; j++) { normA += featArr[j] * featArr[j]; }
     const sqrtNormA = Math.sqrt(normA);
 
     for (let lbl of labels) {
         const entry = knnCpuDataset[lbl];
         const N = entry.shape[0];
-
-        let maxSim = -1; // 🔥 ACCURACY FIX: Average ki bajaye Best Match (Nearest Neighbor)
-        
+        let maxSim = -1; 
         for (let i = 0; i < N; i++) {
             const offset = i * D;
             let dot = 0, normB = 0;
@@ -543,33 +535,26 @@ async function myPredict(featureTensor, pText) {
                 normB += b * b;
             }
             const sim = dot / (sqrtNormA * Math.sqrt(normB) + 1e-8);
-            if (sim > maxSim) maxSim = sim; // Sab se high matching score save karo
+            if (sim > maxSim) maxSim = sim; 
         }
         scores[lbl] = maxSim; 
     }
 
-    // Softmax-style confidence
     const vals = Object.values(scores);
     const minV = Math.min(...vals), maxV = Math.max(...vals);
     const range = maxV - minV + 1e-8;
     const confidences = {};
-    for (let k in scores) {
-        confidences[k] = (scores[k] - minV) / range;
-    }
+    for (let k in scores) { confidences[k] = (scores[k] - minV) / range; }
 
     let bestLabel = labels[0];
-    for (let k of labels) {
-        if (scores[k] > scores[bestLabel]) bestLabel = k;
-    }
+    for (let k of labels) { if (scores[k] > scores[bestLabel]) bestLabel = k; }
     return { label: bestLabel, confidences };
 }
 
-// predictWithAI — sirf PREVIEW: AI picks purple border se dikhata hai
-// Auto-save nahi hota — aap khud Save & Train karo
 async function predictWithAI(task) {
     if (!isAIReady || task.type !== 'grid' || !task.media) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
-    if (!knnCpuDataset[pText]) return; // Is concept ki training nahi — skip
+    if (!knnCpuDataset[pText]) return; 
     let predictedClicks = [];
 
     for (let m of task.media) {
@@ -618,31 +603,26 @@ async function predictWithAI(task) {
                 if (imgEl) imgEl.classList.add('ai-pick');
             });
             if (autoSaveEnabled) {
-                // Auto Save: server ko submit karo — lekin TRAIN NAHI — sirf aapke manual save se training hogi
                 let btn = card.querySelector('.btn-save');
                 if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Auto Solved'; }
                 sendToServerNoTrain(task.id, card);
             } else {
-                // Auto Save OFF: sirf suggest karo — user khud save kare
                 let btn = card.querySelector('.btn-save');
-                if (btn) { btn.style.background = '#7700cc'; btn.textContent = '🤖 AI Suggestion — Save karo?'; }
+                if (btn) { btn.style.background = '#7700cc'; btn.textContent = '🤖 AI Suggestion'; }
             }
         }
     }
 }
 
-// reEvaluatePending — hang-proof version
-// isEvaluatingAI lock 30sec ke baad force-release hoga
 let _reEvalTimer = null;
 async function reEvaluatePending() {
-    if (isEvaluatingAI) return;
+    if (isEvaluatingAI || !isAIReady) return;
     isEvaluatingAI = true;
-    // Hang safety: 30 sec ke baad automatically unlock
     _reEvalTimer = setTimeout(() => { isEvaluatingAI = false; }, 30000);
     try {
         const ids = Object.keys(serverData.pending);
         for (let id of ids) {
-            if (!isEvaluatingAI) break; // Agar force-released ho gaya to stop
+            if (!isEvaluatingAI) break; 
             let t = activeTasksStore[id];
             if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
                 await predictWithAI(t);
@@ -650,22 +630,21 @@ async function reEvaluatePending() {
             }
         }
     } catch(e) {
-        // Koi bhi error ho — lock release karo
     } finally {
         clearTimeout(_reEvalTimer);
         isEvaluatingAI = false;
     }
 }
 
-// ── BUG FIX 2: isFetching try/finally — fetch hang hone pe reset hoga ──
 async function fetchTasks() {
-    if (isFetching) return;
+    if (isFetching || !workerName) return;
     isFetching = true;
     try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 8000);
+        // Sirf apnay assigned pending tasks fetch hongay
         const res = await fetch(
-            `${SERVER_URL}/api/tasks?tab=${currentTab}&page=${trainedPage}&size=40&t=${Date.now()}`,
+            `${SERVER_URL}/api/tasks?tab=${currentTab}&page=${trainedPage}&size=40&workerId=${workerName}&t=${Date.now()}`,
             { cache: 'no-store', signal: controller.signal }
         );
         clearTimeout(timeoutId);
@@ -700,11 +679,13 @@ function renderPendingStreams() {
         let td = pending[id], media = td.media || [], isGrid = media.length > 1;
         activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
         let card = buildCard(activeTasksStore[id]);
+        
+        // Append bottom to save scrolling issues
         if (isGrid) {
-            gridArea.prepend(card);
+            gridArea.appendChild(card);
             if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[id]);
         } else {
-            manualArea.prepend(card);
+            manualArea.appendChild(card);
         }
     }
     updateCountsDisplay();
@@ -726,7 +707,6 @@ function renderTrainedStream() {
         frag.appendChild(card);
     }
     trainedArea.appendChild(frag);
-    // Thodi der baad broken images check karo
     setTimeout(checkTrainedImageErrors, 800);
 }
 
@@ -741,7 +721,6 @@ function checkTrainedImageErrors() {
             notice.classList.remove('visible');
         }
     }
-    // Cards jahan sari images broken hain unpe retrain button disable karo
     document.querySelectorAll('#trainedView .task-card').forEach(card => {
         let allImgs = card.querySelectorAll('.g-img');
         if (allImgs.length === 0) return;
@@ -749,13 +728,10 @@ function checkTrainedImageErrors() {
         let retrainBtn = card.querySelector('[data-action="retrain"]');
         if (!retrainBtn) return;
         if (brokenImgs.length === allImgs.length) {
-            // Sari images broken — retrain completely disable
             retrainBtn.disabled = true;
             retrainBtn.style.background = '#333';
             retrainBtn.style.color = '#666';
             retrainBtn.style.cursor = 'not-allowed';
-            retrainBtn.title = 'Images expire ho gayi hain — retrain nahi ho sakta';
-            // Note add karo agar pehle se nahi hai
             if (!card.querySelector('.retrain-disabled-note')) {
                 let note = document.createElement('div');
                 note.className = 'retrain-disabled-note';
@@ -763,8 +739,7 @@ function checkTrainedImageErrors() {
                 card.querySelector(`#act-${card.dataset.id}`)?.appendChild(note);
             }
         } else if (brokenImgs.length > 0) {
-            // Kuch images broken — partial warning
-            retrainBtn.title = `${brokenImgs.length}/${allImgs.length} images expire ho gayi — partial retrain possible`;
+            retrainBtn.title = `${brokenImgs.length}/${allImgs.length} images expire ho gayi`;
             retrainBtn.style.background = '#664400';
             retrainBtn.style.color = '#ffaa44';
         }
@@ -823,13 +798,21 @@ function buildCard(t, isTrained = false) {
 }
 
 document.body.addEventListener('click', (e) => {
-    let actionBtn = e.target.closest('[data-action]');
+    // 🔥 FOCUS MODE ENGINE: Jab bhi kisi card pe click ho wo highlight ho jaye
     let card = e.target.closest('.task-card');
+    if (card && currentTab === 'pending') {
+        document.querySelectorAll('.task-card').forEach(c => c.classList.remove('focused-task'));
+        card.classList.add('focused-task');
+    }
+    
     if (!card) return;
     let tid = card.dataset.id, t = activeTasksStore[tid];
     if (!t) return;
+    
     let isTrainedCard = card.closest('#trainedView') !== null;
     let isInRetrain = retrainEditingTasks.has(tid);
+    let actionBtn = e.target.closest('[data-action]');
+    
     if (actionBtn) {
         let act = actionBtn.dataset.action;
         if (act === 'retrain') {
@@ -847,11 +830,9 @@ document.body.addEventListener('click', (e) => {
             return;
         }
         if (act === 'confirm-retrain') {
-            // Check karo ke koi valid (non-broken) image select hui hai
             let selectedImgs = card.querySelectorAll('.g-img.selected:not(.img-broken), .g-img.retrain-pick:not(.img-broken)');
             if (!t.clicks || t.clicks.length === 0 || selectedImgs.length === 0) {
                 actionBtn.classList.add('btn-warn');
-                // Better error message — broken vs not selected
                 let hasBroken = card.querySelectorAll('.img-broken').length > 0;
                 actionBtn.textContent = hasBroken ? '⚠️ Valid image select karo!' : '⚠️ Pehle Select Karo!';
                 setTimeout(() => { actionBtn.classList.remove('btn-warn'); actionBtn.textContent = '✅ Update & Train'; }, 1500);
@@ -905,7 +886,6 @@ document.body.addEventListener('click', (e) => {
             card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick', 'retrain-pick'));
             card.querySelectorAll('.dot').forEach(d => d.remove());
             card.classList.remove('ai-processing');
-            // AI suggestion button style bhi reset karo
             let saveBtn = card.querySelector('.btn-save');
             if (saveBtn) { saveBtn.style.background = ''; saveBtn.textContent = 'Save & Train'; saveBtn.disabled = false; }
             return;
@@ -921,9 +901,10 @@ document.body.addEventListener('click', (e) => {
             return;
         }
     }
+    
     if (isTrainedCard && !isInRetrain) return;
+    
     if (e.target.classList.contains('g-img')) {
-        // Broken/expired images ko ignore karo — click na lena
         if (e.target.classList.contains('img-broken')) return;
         let idx = parseInt(e.target.dataset.index);
         if (e.target.classList.contains('selected') || e.target.classList.contains('retrain-pick') || e.target.classList.contains('ai-pick')) {
@@ -962,7 +943,6 @@ function deleteTrained(taskId) {
     fetch(`${SERVER_URL}/api/delete-hcaptcha/${taskId}`, { method: 'DELETE' }).then(() => fetchTasks());
 }
 
-// Auto Save ke liye — submit karta hai server ko, TRAIN NAHI KARTA
 function sendToServerNoTrain(taskId, card) {
     let t = activeTasksStore[taskId];
     if (!t || !t.clicks || t.clicks.length === 0) return;
@@ -975,17 +955,14 @@ function sendToServerNoTrain(taskId, card) {
     if (card) card.remove();
     delete activeTasksStore[taskId];
     updateCountsDisplay();
-    // trainAIBrainAsync nahi — seedha return
 }
 
-// Manual Save ke liye — submit bhi karta hai, TRAIN BHI KARTA HAI
 function sendToServer(taskId, btnEl, card) {
     let t = activeTasksStore[taskId];
     if (!t || !t.clicks || t.clicks.length === 0) {
         if (card) card.classList.remove('ai-processing');
         return;
     }
-    // Button reset karo agar AI suggestion wala style tha
     if (btnEl) {
         btnEl.style.background = '';
         btnEl.textContent = '✅ Saving...';
@@ -997,7 +974,6 @@ function sendToServer(taskId, btnEl, card) {
         body: JSON.stringify({ taskId, clicks: t.clicks })
     }).catch(()=>{});
     ghostBlocker.add(taskId);
-    // Training pehle, phir card remove — task ka data rakho
     if (isAIReady && t.type === 'grid' && t.clicks.length > 0) {
         trainAIBrainAsync(t);
     }
@@ -1023,9 +999,6 @@ setInterval(() => {
     });
 }, 150);
 
-initWS();
-fetchTasks();
-setTimeout(initAI, 100);
 </script>
 </body>
 </html>
