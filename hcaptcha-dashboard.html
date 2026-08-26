@@ -134,8 +134,6 @@ let isAIReady = false, aiModel, knn;
 let autoTrainEnabled = true, autoSaveEnabled = true;
 let isEvaluatingAI = false;
 
-// ── WEBSOCKET LIVE ENGINE ──
-let ws = null;
 function initWS() {
     if (ws && ws.readyState < 2) return;
     try {
@@ -200,23 +198,19 @@ async function initAI() {
         await tf.setBackend('webgl');
         await tf.ready();
         aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
-        // knn object sirf training ke liye rakhte hain (optional)
         knn = knnClassifier.create();
         await loadKNN();
         isAIReady = true;
         updateAIStatus();
         setupWebGLRecovery();
         startMemoryMonitor();
-        // 1.5 sec baad start karo — GPU settle ho
         setTimeout(() => reEvaluatePending(), 1500);
     } catch(e) {
         syncStatus.innerHTML = "⚠️ AI Fallback";
     }
 }
 
-// ── FIX 3: WebGL Context Lost Recovery ──
 function setupWebGLRecovery() {
-    // TF.js apna canvas internally banata hai — sab canvases pe listener lagao
     function attachToCanvas(canvas) {
         if (!canvas || canvas._hcmListenerAttached) return;
         canvas._hcmListenerAttached = true;
@@ -231,7 +225,6 @@ function setupWebGLRecovery() {
                 await tf.ready();
                 aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
                 knn = knnClassifier.create();
-                // ── Context recover ke baad CPU se fresh tensors banao ──
                 _refreshKnnFromCpu();
                 isAIReady = true;
                 updateAIStatus();
@@ -242,25 +235,20 @@ function setupWebGLRecovery() {
             }
         });
     }
-    // Abhi jo canvases hain unpe lagao
     document.querySelectorAll('canvas').forEach(attachToCanvas);
-    // Nayi canvases bhi track karo (TF.js baad mein bana sakta hai)
     const observer = new MutationObserver(() => {
         document.querySelectorAll('canvas').forEach(attachToCanvas);
     });
     observer.observe(document.body, { childList: true, subtree: true });
 }
 
-// ── FIX 4: Aggressive Memory Monitor — har 5 sec GPU check ──
 function startMemoryMonitor() {
     setInterval(() => {
         try {
             let mem = tf.memory();
-            // 80 tensors se zyada = KNN leak ho raha — foran saaf karo
             if (mem.numTensors > 80) {
                 tf.engine().startScope();
                 tf.engine().endScope();
-                // KNN dataset tensors bhi re-sync karo taake wo na hate
                 syncStatus.innerHTML = `🧹 Auto-Clean (${mem.numTensors}→${tf.memory().numTensors} tensors)`;
                 setTimeout(() => updateAIStatus(), 1000);
             }
@@ -302,14 +290,12 @@ async function idbGet() {
         req.onerror = () => rej(req.error);
     });
 }
-// ── PERMANENT FIX: KNN data CPU arrays mein rakho, kabhi GPU pe store mat karo ──
-// GPU context lost hone pe GPU tensors invalid ho jaate hain — isliye CPU storage
-let knnCpuDataset = {}; // { label: { data: Float32Array, shape: [...] } }
+
+let knnCpuDataset = {}; 
 
 async function saveKNN() {
     if (!knn) return;
     try {
-        // Seedha knnCpuDataset se save karo — knn se GPU tensors mat lo
         await idbSet(
             Object.fromEntries(
                 Object.entries(knnCpuDataset).map(([k, v]) => [k, { data: Array.from(v.data), shape: v.shape }])
@@ -327,18 +313,15 @@ async function loadKNN() {
         for (let k in ser) {
             knnCpuDataset[k] = { data: new Float32Array(ser[k].data), shape: ser[k].shape };
         }
-        // KNN mein load karo — sirf is waqt GPU tensors banao
         _refreshKnnFromCpu();
     } catch(e) {}
 }
 
 function _refreshKnnFromCpu() {
-    // Purane tensors pehle saaf karo
     try {
         let old = knn.getClassifierDataset();
         for (let k in old) { try { old[k].dispose(); } catch(e) {} }
     } catch(e) {}
-    // Nayi tensors banao current backend se
     let ds = {};
     for (let k in knnCpuDataset) {
         ds[k] = tf.tensor(knnCpuDataset[k].data, knnCpuDataset[k].shape);
@@ -384,33 +367,33 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
+// ── FAST PERFORMANCE FIX: AI Training with Screen Loaded DOM Images ──
 async function trainAIBrainAsync(task) {
     if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let negLabel = 'negative_' + pText;
 
     for (let m of task.media) {
-        let imgSrc = m.thumb || m.src;
-        if (!imgSrc) continue;
         try {
-            let img = new Image();
-            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
-            img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 300); });
-            if (!img.complete || img.naturalWidth === 0) continue;
+            // Seedha DOM element use kar rahe hain taake network spam aur 403 errors na ayen
+            let img = document.querySelector(`.task-card[data-id="${task.id}"] .g-img[data-index="${m.index}"]`);
+            if (!img) continue;
+
+            if (!img.complete) {
+                await new Promise((res) => { img.onload = res; img.onerror = res; setTimeout(res, 300); });
+            }
+            if (img.naturalWidth === 0) continue;
 
             let tfImg = null, features = null;
             try {
                 tfImg = tf.browser.fromPixels(img);
-                features = aiModel.infer(tfImg, true); // [1, 1280]
-                const featureArr = new Float32Array(await features.data()); // CPU pe lo
+                features = aiModel.infer(tfImg, true); 
+                const featureArr = new Float32Array(await features.data());
                 const label = task.clicks.includes(m.index) ? pText : negLabel;
 
-                // ── Seedha CPU dataset mein store karo — KNN library nahi ──
                 if (!knnCpuDataset[label]) {
                     knnCpuDataset[label] = { data: featureArr, shape: [1, featureArr.length] };
                 } else {
-                    // Existing data ke saath concatenate karo (CPU pe)
                     const old = knnCpuDataset[label];
                     const newData = new Float32Array(old.data.length + featureArr.length);
                     newData.set(old.data, 0);
@@ -425,20 +408,13 @@ async function trainAIBrainAsync(task) {
         } catch(e) {}
     }
     await saveKNN();
-    reEvaluatePending();
+    // ── FIX: Hang se bachne ke liye background evaluation sirf pending tab mein hogi ──
+    if (currentTab === 'pending') {
+        reEvaluatePending();
+    }
 }
 
-// ════════════════════════════════════════════════════════════
-// ── FINAL FIX: KNN library BYPASS — Custom Cosine Similarity ──
-// KNN.predictClass() → concatWithNulls → 3.5GB GPU leak
-// Ab khud cosine similarity calculate karo — koi concat nahi
-// ════════════════════════════════════════════════════════════
-
-// knnCpuDataset: { label: { data: Float32Array, shape:[N,1280] } }
-// Ek label ke liye N examples hain (rows), har ek 1280 features
-
 async function myPredict(featureTensor, pText) {
-    // featureTensor: shape [1, 1280]
     const negLabel = 'negative_' + pText;
     const labels = Object.keys(knnCpuDataset).filter(
         k => k === pText || k === negLabel
@@ -446,10 +422,9 @@ async function myPredict(featureTensor, pText) {
     if (labels.length === 0) return null;
 
     const scores = {};
-    const featArr = await featureTensor.data(); // Float32Array [1280]
+    const featArr = await featureTensor.data(); 
     const D = 1280;
 
-    // 🔥 SPEED FIX: Calculate normA sirf 1 dafa loop se bahar! (CPU load khatam)
     let normA = 0;
     for (let j = 0; j < D; j++) {
         normA += featArr[j] * featArr[j];
@@ -460,7 +435,7 @@ async function myPredict(featureTensor, pText) {
         const entry = knnCpuDataset[lbl];
         const N = entry.shape[0];
 
-        let maxSim = -1; // 🔥 ACCURACY FIX: Average ki bajaye Best Match (Nearest Neighbor)
+        let maxSim = -1; 
         
         for (let i = 0; i < N; i++) {
             const offset = i * D;
@@ -471,12 +446,11 @@ async function myPredict(featureTensor, pText) {
                 normB += b * b;
             }
             const sim = dot / (sqrtNormA * Math.sqrt(normB) + 1e-8);
-            if (sim > maxSim) maxSim = sim; // Sab se high matching score save karo
+            if (sim > maxSim) maxSim = sim; 
         }
         scores[lbl] = maxSim; 
     }
 
-    // Softmax-style confidence
     const vals = Object.values(scores);
     const minV = Math.min(...vals), maxV = Math.max(...vals);
     const range = maxV - minV + 1e-8;
@@ -492,6 +466,7 @@ async function myPredict(featureTensor, pText) {
     return { label: bestLabel, confidences };
 }
 
+// ── FAST PERFORMANCE FIX: No New Image downloads for Predictions ──
 async function predictWithAI(task) {
     if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
@@ -499,14 +474,15 @@ async function predictWithAI(task) {
     let predictedClicks = [];
 
     for (let m of task.media) {
-        let imgSrc = m.thumb || m.src;
-        if (!imgSrc) continue;
         try {
-            let img = new Image();
-            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
-            img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 200); });
-            if (!img.complete || img.naturalWidth === 0) continue;
+            // Nayi network request nahi bhej rahe, existing screen HTML element use kar rahe hain
+            let img = document.querySelector(`.task-card[data-id="${task.id}"] .g-img[data-index="${m.index}"]`);
+            if (!img) continue;
+
+            if (!img.complete) {
+                await new Promise((res) => { img.onload = res; img.onerror = res; setTimeout(res, 300); });
+            }
+            if (img.naturalWidth === 0) continue;
 
             let tfImg = null, features = null, resolvedRes = null;
             try {
@@ -522,12 +498,10 @@ async function predictWithAI(task) {
             if (resolvedRes) {
                 const conf = resolvedRes.confidences[pText] || 0;
                 const negConf = resolvedRes.confidences['negative_' + pText] || 0;
-                // Accuracy threshold wahi rakha hai, but maxSim ki wajah se result behtar aayega
                 if (resolvedRes.label === pText && conf >= 0.65 && negConf < 0.50) {
                     predictedClicks.push(m.index);
                 }
             }
-            // 🔥 SPEED FIX: 30ms ki bajaye 1ms ka delay (AI frame block nahi hogi)
             await new Promise(r => setTimeout(r, 1));
         } catch(e) {}
     }
@@ -559,7 +533,6 @@ async function reEvaluatePending() {
             let t = activeTasksStore[id];
             if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
                 await predictWithAI(t);
-                // 🔥 SPEED FIX: 200ms se hata kar 15ms kar diya (GPU/CPU bhi recover karega aur lag bhi nahi hoga)
                 await new Promise(r => setTimeout(r, 15));
             }
         }
@@ -568,7 +541,6 @@ async function reEvaluatePending() {
     }
 }
 
-// ── BUG FIX 2: isFetching try/finally — fetch hang hone pe reset hoga ──
 async function fetchTasks() {
     if (isFetching) return;
     isFetching = true;
@@ -639,6 +611,7 @@ function renderTrainedStream() {
     trainedArea.appendChild(frag);
 }
 
+// ── CORS/NETWORK FIX: Add crossorigin attributes directly to HTML generation ──
 function buildCard(t, isTrained = false) {
     let card = document.createElement('div');
     card.className = 'task-card';
@@ -651,13 +624,16 @@ function buildCard(t, isTrained = false) {
         mediaHTML = '<div class="img-grid">';
         t.media.forEach(m => {
             let isSelected = t.clicks.includes(m.index);
-            mediaHTML += `<img src="${m.thumb || m.src || ''}" class="g-img ${isSelected?'selected':''}" data-index="${m.index}" draggable="false" loading="lazy"/>`;
+            let src = m.thumb || m.src || '';
+            let crossAttr = src.startsWith('data:') ? '' : 'crossorigin="anonymous"';
+            mediaHTML += `<img src="${src}" ${crossAttr} class="g-img ${isSelected?'selected':''}" data-index="${m.index}" draggable="false" loading="lazy"/>`;
         });
         mediaHTML += '</div>';
     } else {
         let m = t.media[0], isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
         let src = isVid ? m.frames[0] : (m.src || '');
-        mediaHTML = `<div class="single-box"><img src="${src}" class="s-img ${isVid?'vid-player':''}" data-id="${t.id}" draggable="false"/>`;
+        let crossAttr = src.startsWith('data:') ? '' : 'crossorigin="anonymous"';
+        mediaHTML = `<div class="single-box"><img src="${src}" ${crossAttr} class="s-img ${isVid?'vid-player':''}" data-id="${t.id}" draggable="false"/>`;
         t.clicks.forEach(pt => {
             mediaHTML += `<div class="dot" style="left:${pt.px}%;top:${pt.py}%;"></div>`;
         });
