@@ -531,13 +531,12 @@ async function trainAIBrainAsync(task) {
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let negLabel = 'negative_' + pText;
 
-    // Seedha DOM card se images lo — already loaded hain, CORS issue nahi
-    let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
-    let domImages = card ? Array.from(card.querySelectorAll('.g-img')) : [];
+    // DOM card se images lo — already loaded, CORS issue nahi
+    let trainCard = document.querySelector(`.task-card[data-id="${task.id}"]`);
+    let domTrainImgs = trainCard ? Array.from(trainCard.querySelectorAll('.g-img')) : [];
 
-    if (domImages.length > 0) {
-        // DOM images available hain — fast path
-        domImages.forEach(imgEl => {
+    if (domTrainImgs.length > 0) {
+        domTrainImgs.forEach(imgEl => {
             if (!imgEl.complete || imgEl.naturalWidth === 0) return;
             let idx = parseInt(imgEl.dataset.index);
             try {
@@ -553,7 +552,7 @@ async function trainAIBrainAsync(task) {
             } catch(e) {}
         });
     } else {
-        // DOM card nahi — network se load karo (fallback)
+        // Fallback — network se load karo
         await Promise.all(task.media.map(async m => {
             let imgSrc = m.thumb || m.src;
             if (!imgSrc) return;
@@ -598,18 +597,18 @@ async function predictWithAI(task) {
     let dataset = knn.getClassExampleCount();
     if (!dataset[pText] || dataset[pText] < 1) return;
 
-    // DOM card se images lo — already loaded, fast, no CORS
+    // DOM card se images lo — already loaded, CORS issue nahi
     let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
-    let domImages = card ? Array.from(card.querySelectorAll('.g-img')) : [];
+    let domImgs = card ? Array.from(card.querySelectorAll('.g-img')) : [];
 
-    // Fallback: network se load karo agar DOM card nahi
     let itemsToPredict = [];
-    if (domImages.length > 0) {
-        domImages.forEach(imgEl => {
-            if (imgEl.complete && imgEl.naturalWidth > 0)
-                itemsToPredict.push({ img: imgEl, index: parseInt(imgEl.dataset.index) });
+    if (domImgs.length > 0) {
+        domImgs.forEach(el => {
+            if (el.complete && el.naturalWidth > 0)
+                itemsToPredict.push({ img: el, index: parseInt(el.dataset.index) });
         });
     } else {
+        // Fallback — network se load karo
         let loaded = await Promise.all(task.media.map(m => new Promise(resolve => {
             let imgSrc = m.thumb || m.src;
             if (!imgSrc) return resolve(null);
@@ -628,7 +627,7 @@ async function predictWithAI(task) {
     let predictedClicks = [];
     for (let item of itemsToPredict) {
         try {
-            // FIX: tf.tidy hataya — predictClass async Promise hai, tidy tensor dispose karta tha
+            // FIX: tf.tidy ke bahar — predictClass async hai, tidy tensor dispose karta tha
             let tfImg = tf.browser.fromPixels(item.img);
             let features = aiModel.infer(tfImg, true);
             tfImg.dispose();
