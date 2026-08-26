@@ -179,10 +179,13 @@ function broadcastCounts() {
             trained: Object.keys(hcaptchaTrained).length,
             concepts: Object.keys(conceptBank).length,
             gridWorkersOnline: gridWorkers.length,
-            manualWorkersOnline: manualWorkers.length
+            manualWorkersOnline: manualWorkers.length,
+            gridWorkerNames: gridWorkers,
+            manualWorkerNames: manualWorkers
         }
     });
 
+    // FIX: Sirf active workers ko bhejo, browser sockets ko nahi
     activeWorkers.forEach((_, ws) => {
         if (ws.readyState === WebSocket.OPEN) ws.send(payload);
     });
@@ -375,10 +378,16 @@ wss.on('connection', (ws) => {
                     let taskIsGrid = task.media && task.media.length > 1;
                     let taskIsManual = task.media && task.media.length === 1;
                     let taskTypeUnknown = !task.media || task.media.length === 0;
-                    // Unknown type (tiles pending) — dono workers ko do
+                    // FIX: Unknown type — dono workers ko do
+                    // Grid tasks — sirf grid workers ko
+                    // Manual tasks — sirf manual workers ko
                     if (taskTypeUnknown || (isGrid && taskIsGrid) || (!isGrid && taskIsManual)) {
                         workerMeta.assignedTasks.add(task.id);
                         availablePending[task.id] = task;
+                    } else if (taskIsGrid && !isGrid) {
+                        // FIX: Grid task hai lekin manual worker connect hua — skip (sahi hai)
+                    } else if (taskIsManual && isGrid) {
+                        // FIX: Manual task hai lekin grid worker connect hua — skip (sahi hai)
                     }
                 });
 
