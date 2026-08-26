@@ -222,11 +222,11 @@ function dispatchTaskToWorker(taskData) {
 
     let targetWorker = null;
     if (mode === 'grid') {
+        targetWorker = workers[gridWorkerIndex % workers.length];
         gridWorkerIndex = (gridWorkerIndex + 1) % workers.length;
-        targetWorker = workers[gridWorkerIndex];
     } else {
+        targetWorker = workers[manualWorkerIndex % workers.length];
         manualWorkerIndex = (manualWorkerIndex + 1) % workers.length;
-        targetWorker = workers[manualWorkerIndex];
     }
 
     if (targetWorker && targetWorker.ws.readyState === WebSocket.OPEN) {
@@ -314,7 +314,8 @@ function handleSubmitTask(taskId, clicks) {
             stableHash: m.stableHash || "",
             type: m.type || "image",
             index: m.index !== undefined ? m.index : 0,
-            thumb: m.thumb || (m.frames ? m.frames[0] : "")
+            thumb: m.thumb || (m.frames ? m.frames[0] : ""),
+            src: m.src || m.thumb || ""
         }));
 
         let cKey = getCleanKey(source);
@@ -375,19 +376,20 @@ wss.on('connection', (ws) => {
                 let availablePending = {};
                 
                 Object.values(hcaptchaPending).forEach(task => {
-                    let taskIsGrid = task.media && task.media.length > 1;
-                    let taskIsManual = task.media && task.media.length === 1;
-                    let taskTypeUnknown = !task.media || task.media.length === 0;
-                    // FIX: Unknown type — dono workers ko do
-                    // Grid tasks — sirf grid workers ko
-                    // Manual tasks — sirf manual workers ko
-                    if (taskTypeUnknown || (isGrid && taskIsGrid) || (!isGrid && taskIsManual)) {
+                    let taskMediaLen = (task.media || []).length;
+                    let taskIsGrid   = taskMediaLen > 1;
+                    let taskIsManual = taskMediaLen === 1;
+                    let taskIsEmpty  = taskMediaLen === 0;
+
+                    // Empty media wale tasks dono workers ko dikhao
+                    // Grid tasks sirf grid worker ko, manual tasks sirf manual worker ko
+                    let shouldSend = taskIsEmpty
+                        || (isGrid && taskIsGrid)
+                        || (!isGrid && taskIsManual);
+
+                    if (shouldSend) {
                         workerMeta.assignedTasks.add(task.id);
                         availablePending[task.id] = task;
-                    } else if (taskIsGrid && !isGrid) {
-                        // FIX: Grid task hai lekin manual worker connect hua — skip (sahi hai)
-                    } else if (taskIsManual && isGrid) {
-                        // FIX: Manual task hai lekin grid worker connect hua — skip (sahi hai)
                     }
                 });
 
@@ -559,7 +561,7 @@ app.delete('/api/delete-hcaptcha/:id', (req, res) => {
             conceptBank[cKey] = new Set();
             Object.values(hcaptchaTrained).filter(t => getCleanKey(t) === cKey).forEach(t => _addToConceptBank(t));
         }
-    } else { delete hcaptchaTrained[delId]; }
+    }
     persistDatabase();
     
     const delMsg = JSON.stringify({ action: 'task_deleted', taskId: req.params.id });
