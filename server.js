@@ -235,6 +235,38 @@ function dispatchTaskToWorker(taskData) {
 function handleNewTask(task, wsSource) {
     if (!task || !task.taskId) return { success: false };
 
+    // ✅ FIX: Agar task already pending mein hai aur ab media aa gayi — update karo
+    if (hcaptchaPending[task.taskId] && task.media && task.media.length > 0) {
+        let existingTask = hcaptchaPending[task.taskId];
+        let wasEmpty = !existingTask.media || existingTask.media.length === 0;
+        existingTask.media = task.media;
+        existingTask.prompt = task.prompt || existingTask.prompt;
+
+        if (wasEmpty) {
+            // Ab media aa gayi — dashboard workers ko updated task bhejo
+            const updatePayload = JSON.stringify({
+                action: 'task_media_ready',
+                taskId: task.taskId,
+                task: existingTask
+            });
+            activeWorkers.forEach((meta, clientWs) => {
+                if (clientWs.readyState === WebSocket.OPEN && meta.assignedTasks.has(task.taskId)) {
+                    clientWs.send(updatePayload);
+                }
+            });
+        }
+
+        let autoRes = evaluateAutoSolve(existingTask);
+        if (autoRes.solved) {
+            if (wsSource && wsSource.readyState === WebSocket.OPEN) {
+                wsSource.send(JSON.stringify({ action: 'solve', taskId: task.taskId, clicks: autoRes.clicks }));
+            }
+            notifyBrowsers(task.taskId, autoRes.clicks);
+            return { success: true, autoSolved: true, clicks: autoRes.clicks };
+        }
+        return { success: true, autoSolved: false };
+    }
+
     let autoRes = evaluateAutoSolve(task);
     if (autoRes.solved) {
         if (wsSource && wsSource.readyState === WebSocket.OPEN) {
@@ -258,11 +290,12 @@ function handleNewTask(task, wsSource) {
     const taskData = {
         id: task.taskId,
         prompt: task.prompt,
-        media: task.media,
+        media: task.media || [],
         timestamp: task.timestamp
     };
     hcaptchaPending[task.taskId] = taskData;
 
+    // ✅ FIX: Chahe media empty ho ya nahi — workers ko task bhejo taake count update ho
     dispatchTaskToWorker(taskData);
     broadcastCounts();
     return { success: true, autoSolved: false };
@@ -402,6 +435,51 @@ wss.on('connection', (ws) => {
 
             if (data.action === 'submit_task') {
                 handleSubmitTask(data.taskId, data.clicks);
+                return;
+            }
+
+            // ✅ FIX: tile_update — extension se aata hai, dashboard workers ko forward karo
+            if (data.action === 'tile_update' && data.taskId) {
+                // Pending task ki media bhi update karo server pe
+                if (hcaptchaPending[data.taskId] && hcaptchaPending[data.taskId].media) {
+                    let m = hcaptchaPending[data.taskId].media[data.index];
+                    if (m) {
+                        m.thumb = data.thumb || m.thumb;
+                        m.dhash = data.dhash || m.dhash;
+                        m.stableHash = data.stableHash || m.stableHash;
+                    }
+                }
+                // Assigned dashboard workers ko patch bhejo
+                const patchPayload = JSON.stringify({
+                    action: 'tile_patch',
+                    taskId: data.taskId,
+                    index: data.index,
+                    thumb: data.thumb,
+                    dhash: data.dhash,
+                    stableHash: data.stableHash
+                });
+                activeWorkers.forEach((meta, clientWs) => {
+                    if (clientWs.readyState === WebSocket.OPEN && meta.assignedTasks.has(data.taskId)) {
+                        clientWs.send(patchPayload);
+                    }
+                });
+                return;
+            }
+
+            // ✅ FIX: media_ready — jab extension tiles fully load ho jaaye, task ko re-dispatch karo
+            if (data.action === 'media_ready' && data.taskId) {
+                if (hcaptchaPending[data.taskId]) {
+                    const readyPayload = JSON.stringify({
+                        action: 'task_media_ready',
+                        taskId: data.taskId,
+                        task: hcaptchaPending[data.taskId]
+                    });
+                    activeWorkers.forEach((meta, clientWs) => {
+                        if (clientWs.readyState === WebSocket.OPEN && meta.assignedTasks.has(data.taskId)) {
+                            clientWs.send(readyPayload);
+                        }
+                    });
+                }
                 return;
             }
         } catch (e) {}
