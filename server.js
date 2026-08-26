@@ -330,5 +330,16 @@ app.get('/', (req, res) => {
     else res.status(404).send('hcaptcha-dashboard.html not found.');
 });
 
+// ── AI Brain Sync — Dashboard ke liye auto cross-PC sync ──
+let _brainData = null;
+app.post('/api/brain-sync', express.json({ limit: '50mb' }), (req, res) => {
+    _brainData = req.body;
+    res.json({ ok: true });
+});
+app.get('/api/brain-sync', (req, res) => {
+    if (!_brainData) return res.status(404).end();
+    res.json(_brainData);
+});
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`🚀 Master Server Live on Port ${PORT}`));
