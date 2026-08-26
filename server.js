@@ -15,7 +15,7 @@ const wss = new WebSocket.Server({ server, perMessageDeflate: false });
 
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 const DB_FILE = path.join(DATA_DIR, 'database.json');
-const AI_BRAIN_FILE = path.join(DATA_DIR, 'ai_brain.json'); // New Global AI Brain
+const AI_BRAIN_FILE = path.join(DATA_DIR, 'ai_brain.json'); 
 
 const MAX_PENDING = 60;
 const MAX_TRAINED = 50000;
@@ -24,7 +24,7 @@ const DASHBOARD_PAGE_SIZE = 40;
 let hcaptchaPending = {};
 let hcaptchaTrained = {};
 let conceptBank = {};
-let globalAIBrain = {}; // AI Master Brain
+let globalAIBrain = {}; 
 
 const browserSockets = new Map();
 const dashboardWorkers = new Map(); 
@@ -167,13 +167,15 @@ function broadcastDashboard(type, data) {
     });
 }
 
+// 🔥 FAIR LOAD BALANCING (Round-Robin fix)
 function assignTask(taskId) {
     let task = hcaptchaPending[taskId];
     if (!task || task.assignedTo) return;
 
     let taskMode = (task.media && task.media.length > 1) ? 'grid' : 'manual';
-    let minWs = null;
+    let bestWs = null;
     let minCount = Infinity;
+    let oldestAssignTime = Infinity;
 
     dashboardWorkers.forEach((info, ws) => {
         if (info.mode === taskMode && ws.readyState === WebSocket.OPEN) {
@@ -181,17 +183,23 @@ function assignTask(taskId) {
             for (let k in hcaptchaPending) {
                 if (hcaptchaPending[k].assignedTo === info.workerId) count++;
             }
-            if (count < minCount) {
+            
+            let lastTime = info.lastAssigned || 0;
+            
+            // Tie-breaker Logic: Agar kisi ke paas strictly task kam hain, ya tasks same hain lekin uski baari bohat dair se nahi aayi toh usko priority do.
+            if (count < minCount || (count === minCount && lastTime < oldestAssignTime)) {
                 minCount = count;
-                minWs = ws;
+                oldestAssignTime = lastTime;
+                bestWs = ws;
             }
         }
     });
 
-    if (minWs) {
-        let info = dashboardWorkers.get(minWs);
+    if (bestWs) {
+        let info = dashboardWorkers.get(bestWs);
         task.assignedTo = info.workerId;
-        minWs.send(JSON.stringify({ type: 'new_task', data: task }));
+        info.lastAssigned = Date.now(); // Jab isko task de dia toh iska timer refresh kardo
+        bestWs.send(JSON.stringify({ type: 'new_task', data: task }));
     }
 }
 
@@ -239,7 +247,8 @@ wss.on('connection', (ws) => {
 
             if (data.action === 'dashboard') {
                 isDashboard = true;
-                dashboardWorkers.set(ws, { workerId: data.workerId, mode: data.mode });
+                // Add lastAssigned tracker for round-robin setup
+                dashboardWorkers.set(ws, { workerId: data.workerId, mode: data.mode, lastAssigned: 0 });
                 ws.send(JSON.stringify({ type: 'counts', data: getCountsData() }));
                 
                 for (let taskId in hcaptchaPending) {
@@ -338,7 +347,6 @@ app.post('/api/submit-hcaptcha', (req, res) => {
     res.json({ success: true });
 });
 
-// ── AI Brain Endpoints (Live Sync) ──
 app.get('/api/ai-brain', (req, res) => {
     res.json(globalAIBrain);
 });
@@ -354,7 +362,7 @@ app.post('/api/sync-ai-brain-batch', (req, res) => {
                 changed = true;
             } else {
                 const old = globalAIBrain[label];
-                const MAX_EXAMPLES = 150; // Cap to save memory
+                const MAX_EXAMPLES = 150; 
                 const currentN = old.shape[0];
                 if (currentN >= MAX_EXAMPLES) {
                     old.data.splice(0, 1280);
@@ -367,7 +375,6 @@ app.post('/api/sync-ai-brain-batch', (req, res) => {
             }
         });
         if (changed) persistAIBrain();
-        // Broadcast concepts to other online grid workers
         broadcastDashboard('sync_ai_batch', { workerId, updates });
     }
     res.json({ success: true });
