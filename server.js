@@ -167,7 +167,6 @@ function broadcastDashboard(type, data) {
     });
 }
 
-// 🔥 FAIR LOAD BALANCING (Round-Robin fix)
 function assignTask(taskId) {
     let task = hcaptchaPending[taskId];
     if (!task || task.assignedTo) return;
@@ -186,7 +185,6 @@ function assignTask(taskId) {
             
             let lastTime = info.lastAssigned || 0;
             
-            // Tie-breaker Logic: Agar kisi ke paas strictly task kam hain, ya tasks same hain lekin uski baari bohat dair se nahi aayi toh usko priority do.
             if (count < minCount || (count === minCount && lastTime < oldestAssignTime)) {
                 minCount = count;
                 oldestAssignTime = lastTime;
@@ -198,7 +196,7 @@ function assignTask(taskId) {
     if (bestWs) {
         let info = dashboardWorkers.get(bestWs);
         task.assignedTo = info.workerId;
-        info.lastAssigned = Date.now(); // Jab isko task de dia toh iska timer refresh kardo
+        info.lastAssigned = Date.now();
         bestWs.send(JSON.stringify({ type: 'new_task', data: task }));
     }
 }
@@ -228,6 +226,9 @@ wss.on('connection', (ws) => {
         try {
             const data = JSON.parse(message);
             
+            // 🔥 NEW: Chrome Connection Alive Heartbeat
+            if (data.action === 'ping') return; 
+            
             if (data.action === 'register' && data.taskId) {
                 boundTaskId = data.taskId;
                 if (!browserSockets.has(boundTaskId)) {
@@ -247,7 +248,6 @@ wss.on('connection', (ws) => {
 
             if (data.action === 'dashboard') {
                 isDashboard = true;
-                // Add lastAssigned tracker for round-robin setup
                 dashboardWorkers.set(ws, { workerId: data.workerId, mode: data.mode, lastAssigned: 0 });
                 ws.send(JSON.stringify({ type: 'counts', data: getCountsData() }));
                 
