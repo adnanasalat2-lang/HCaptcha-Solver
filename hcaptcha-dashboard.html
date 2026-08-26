@@ -337,26 +337,101 @@ let knnCpuDataset = {}; // { label: { data: Float32Array, shape: [...] } }
 async function saveKNN() {
     if (!knn) return;
     try {
-        // Seedha knnCpuDataset se save karo — knn se GPU tensors mat lo
-        await idbSet(
-            Object.fromEntries(
-                Object.entries(knnCpuDataset).map(([k, v]) => [k, { data: Array.from(v.data), shape: v.shape }])
-            )
+        const serialized = Object.fromEntries(
+            Object.entries(knnCpuDataset).map(([k, v]) => [k, { data: Array.from(v.data), shape: v.shape }])
         );
+        // 1) Local IndexedDB mein save karo (fast, reliable)
+        await idbSet(serialized);
         updateAIStatus();
+        // 2) Server pe bhi silently push karo — background mein, koi error nahi dikhega
+        _pushBrainToServer(serialized);
+    } catch(e) {}
+}
+
+// Background mein server pe push — fire-and-forget, koi UI block nahi
+function _pushBrainToServer(serialized) {
+    try {
+        let concepts = Object.keys(serialized).filter(k => !k.startsWith('negative_'));
+        let totalEx = 0;
+        for (let k in serialized) { totalEx += serialized[k].shape[0]; }
+        fetch(`${SERVER_URL}/api/brain-sync`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                version: 'hcm_brain_v2',
+                saved_at: new Date().toISOString(),
+                concepts_count: concepts.length,
+                total_examples: totalEx,
+                dataset: serialized
+            })
+        }).catch(() => {}); // Silently ignore — server down ho to koi masla nahi
     } catch(e) {}
 }
 
 async function loadKNN() {
+    // ── AUTO SYNC: Startup pe server + local dono se load karo ──
+    // Jo bhi zyada examples ho uski preference, phir dono merge ho jayein
+    let localSer = null, serverSer = null;
+
+    // Local IndexedDB se lo
+    try { localSer = await idbGet(); } catch(e) {}
+
+    // Server se bhi lo (silently — agar server nahi mila to koi masla nahi)
     try {
-        let ser = await idbGet();
-        if (!ser) return;
-        knnCpuDataset = {};
-        for (let k in ser) {
-            knnCpuDataset[k] = { data: new Float32Array(ser[k].data), shape: ser[k].shape };
+        const res = await fetch(`${SERVER_URL}/api/brain-sync`, { cache: 'no-store' });
+        if (res.ok) { serverSer = await res.json(); serverSer = serverSer.dataset || null; }
+    } catch(e) {}
+
+    // Dono nahi — fresh start
+    if (!localSer && !serverSer) return;
+
+    // Merge: local + server dono ko ek saath lao
+    const merged = {};
+    const allKeys = new Set([
+        ...Object.keys(localSer || {}),
+        ...Object.keys(serverSer || {})
+    ]);
+
+    for (let k of allKeys) {
+        const loc = localSer?.[k];
+        const srv = serverSer?.[k];
+        if (loc && !srv) {
+            merged[k] = { data: new Float32Array(loc.data), shape: loc.shape };
+        } else if (srv && !loc) {
+            merged[k] = { data: new Float32Array(srv.data), shape: srv.shape };
+        } else if (loc && srv) {
+            // Dono hain — merge karo, max 500 examples
+            const D = loc.shape[1] || 1280;
+            const MAX = 500;
+            const locArr = new Float32Array(loc.data);
+            const srvArr = new Float32Array(srv.data);
+            const totalN = loc.shape[0] + srv.shape[0];
+            if (totalN <= MAX) {
+                const out = new Float32Array(locArr.length + srvArr.length);
+                out.set(locArr, 0); out.set(srvArr, locArr.length);
+                merged[k] = { data: out, shape: [totalN, D] };
+            } else {
+                // Cap lagao — dono se equally lo
+                const halfMax = Math.floor(MAX / 2);
+                const takeLocal = Math.min(loc.shape[0], halfMax);
+                const takeSrv   = Math.min(srv.shape[0], MAX - takeLocal);
+                const locSlice = locArr.subarray(locArr.length - takeLocal * D);
+                const srvSlice = srvArr.subarray(srvArr.length - takeSrv   * D);
+                const out = new Float32Array(locSlice.length + srvSlice.length);
+                out.set(locSlice, 0); out.set(srvSlice, locSlice.length);
+                merged[k] = { data: out, shape: [takeLocal + takeSrv, D] };
+            }
         }
-        // KNN mein load karo — sirf is waqt GPU tensors banao
-        _refreshKnnFromCpu();
+    }
+
+    knnCpuDataset = merged;
+    _refreshKnnFromCpu();
+
+    // Merged result local mein bhi save karo
+    try {
+        await idbSet(Object.fromEntries(
+            Object.entries(knnCpuDataset).map(([k, v]) => [k, { data: Array.from(v.data), shape: v.shape }])
+        ));
     } catch(e) {}
 }
 
@@ -381,6 +456,8 @@ async function resetAIBrain() {
         location.reload();
     }
 }
+
+
 
 function setTab(tab) {
     currentTab = tab;
@@ -416,10 +493,10 @@ function toggleAutoSave() {
 }
 
 // ── 10X TRAINING ENGINE ──
-// Positive examples ko 3x repeat karo — zyada weight milega correct answers ko
+// Positive examples ko 10x repeat karo — maximum weight milega correct answers ko
 // Negative examples 1x — balanced lekin kam dominant
-const POSITIVE_REPEAT = 3; // Positive label 3 dafa store hoga
-const NEGATIVE_REPEAT = 1; // Negative 1 dafa
+const POSITIVE_REPEAT = 10; // Positive label 10 dafa store hoga (10X POWER)
+const NEGATIVE_REPEAT = 1;  // Negative 1 dafa
 
 function addToDataset(label, featureArr) {
     const D = featureArr.length;
