@@ -203,11 +203,12 @@ function notifyBrowsers(taskId, clicks) {
 }
 
 function dispatchTaskToWorker(taskData) {
-    let isGrid = taskData.media && taskData.media.length > 1;
-    let typeUnknown = !taskData.media || taskData.media.length === 0;
+    let mLen = (taskData.media || []).length;
+    let isGrid    = mLen > 1;   // 9-tile grid
+    let isEmpty   = mLen === 0; // media abhi nahi aayi
 
-    if (typeUnknown) {
-        // Media abhi empty hai — dono mode workers ko bhejo
+    if (isEmpty) {
+        // Media abhi nahi — dono modes ko bhejo taake count update ho
         let allWorkers = [...getOnlineWorkers('grid'), ...getOnlineWorkers('manual')];
         allWorkers.forEach(w => {
             w.meta.assignedTasks.add(taskData.id);
@@ -216,22 +217,26 @@ function dispatchTaskToWorker(taskData) {
         return;
     }
 
-    let mode = isGrid ? 'grid' : 'manual';
-    let workers = getOnlineWorkers(mode);
-    if (workers.length === 0) return;
-
-    let targetWorker = null;
-    if (mode === 'grid') {
-        targetWorker = workers[gridWorkerIndex % workers.length];
+    if (isGrid) {
+        // Grid tile task — sirf grid workers ko
+        let workers = getOnlineWorkers('grid');
+        if (!workers.length) return;
+        let target = workers[gridWorkerIndex % workers.length];
         gridWorkerIndex = (gridWorkerIndex + 1) % workers.length;
+        if (target && target.ws.readyState === WebSocket.OPEN) {
+            target.meta.assignedTasks.add(taskData.id);
+            target.ws.send(JSON.stringify({ action: 'new_task', task: taskData }));
+        }
     } else {
-        targetWorker = workers[manualWorkerIndex % workers.length];
-        manualWorkerIndex = (manualWorkerIndex + 1) % workers.length;
-    }
-
-    if (targetWorker && targetWorker.ws.readyState === WebSocket.OPEN) {
-        targetWorker.meta.assignedTasks.add(taskData.id);
-        targetWorker.ws.send(JSON.stringify({ action: 'new_task', task: taskData }));
+        // Canvas / coord / drag task (media.length === 1) — DONO modes ko bhejo
+        // Kyunki grid worker dashboard mein bhi ye tasks solve kar sakta hai
+        let gridWs   = getOnlineWorkers('grid');
+        let manualWs = getOnlineWorkers('manual');
+        let allTarget = [...gridWs, ...manualWs];
+        allTarget.forEach(w => {
+            w.meta.assignedTasks.add(taskData.id);
+            w.ws.send(JSON.stringify({ action: 'new_task', task: taskData }));
+        });
     }
 }
 
@@ -314,8 +319,8 @@ function handleSubmitTask(taskId, clicks) {
             stableHash: m.stableHash || "",
             type: m.type || "image",
             index: m.index !== undefined ? m.index : 0,
-            thumb: m.thumb || (m.frames ? m.frames[0] : ""),
-            src: m.src || m.thumb || ""
+            thumb: m.thumb || (m.frames ? m.frames[0] : "") || m.src || "",
+            src: m.src || m.thumb || (m.frames ? m.frames[0] : "") || ""
         }));
 
         let cKey = getCleanKey(source);
@@ -376,17 +381,17 @@ wss.on('connection', (ws) => {
                 let availablePending = {};
                 
                 Object.values(hcaptchaPending).forEach(task => {
-                    let taskMediaLen = (task.media || []).length;
-                    let taskIsGrid   = taskMediaLen > 1;
-                    let taskIsManual = taskMediaLen === 1;
-                    let taskIsEmpty  = taskMediaLen === 0;
-
-                    // Empty media wale tasks dono workers ko dikhao
-                    // Grid tasks sirf grid worker ko, manual tasks sirf manual worker ko
+                    let mLen = (task.media || []).length;
+                    let taskIsGrid   = mLen > 1;
+                    let taskIsManual = mLen === 1;  // canvas/coord/drag = 1 media item
+                    let taskIsEmpty  = mLen === 0;
+                    // Empty tasks — dono workers ko dikhao
+                    // Grid tasks (9-tile) — sirf grid workers
+                    // Manual/canvas/drag tasks — sirf manual workers
+                    // Grid workers ko bhi manual tasks dikhao (dono modes handle kar saken)
                     let shouldSend = taskIsEmpty
-                        || (isGrid && taskIsGrid)
-                        || (!isGrid && taskIsManual);
-
+                        || (isGrid && (taskIsGrid || taskIsManual))
+                        || (!isGrid && (taskIsManual || taskIsEmpty));
                     if (shouldSend) {
                         workerMeta.assignedTasks.add(task.id);
                         availablePending[task.id] = task;
