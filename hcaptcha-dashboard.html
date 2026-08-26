@@ -200,14 +200,14 @@ async function initAI() {
         await tf.setBackend('webgl');
         await tf.ready();
         aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
+        // knn object sirf training ke liye rakhte hain (optional)
         knn = knnClassifier.create();
         await loadKNN();
         isAIReady = true;
         updateAIStatus();
         setupWebGLRecovery();
         startMemoryMonitor();
-        // ── CRITICAL FIX: AI ready hote hi foran predict mat karo ──
-        // GPU ko model load ke baad settle karne do, warna foran crash
+        // 1.5 sec baad start karo — GPU settle ho
         setTimeout(() => reEvaluatePending(), 1500);
     } catch(e) {
         syncStatus.innerHTML = "⚠️ AI Fallback";
@@ -388,6 +388,7 @@ async function trainAIBrainAsync(task) {
     if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let negLabel = 'negative_' + pText;
+
     for (let m of task.media) {
         let imgSrc = m.thumb || m.src;
         if (!imgSrc) continue;
@@ -397,16 +398,24 @@ async function trainAIBrainAsync(task) {
             img.src = imgSrc;
             await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 300); });
             if (!img.complete || img.naturalWidth === 0) continue;
+
             let tfImg = null, features = null;
             try {
                 tfImg = tf.browser.fromPixels(img);
-                features = aiModel.infer(tfImg, true);
-                if (task.clicks.includes(m.index)) {
-                    knn.addExample(features, pText);
-                    knn.addExample(features, pText);
-                    knn.addExample(features, pText);
+                features = aiModel.infer(tfImg, true); // [1, 1280]
+                const featureArr = new Float32Array(await features.data()); // CPU pe lo
+                const label = task.clicks.includes(m.index) ? pText : negLabel;
+
+                // ── Seedha CPU dataset mein store karo — KNN library nahi ──
+                if (!knnCpuDataset[label]) {
+                    knnCpuDataset[label] = { data: featureArr, shape: [1, featureArr.length] };
                 } else {
-                    knn.addExample(features, negLabel);
+                    // Existing data ke saath concatenate karo (CPU pe)
+                    const old = knnCpuDataset[label];
+                    const newData = new Float32Array(old.data.length + featureArr.length);
+                    newData.set(old.data, 0);
+                    newData.set(featureArr, old.data.length);
+                    knnCpuDataset[label] = { data: newData, shape: [old.shape[0] + 1, featureArr.length] };
                 }
             } finally {
                 if (tfImg) tfImg.dispose();
@@ -415,21 +424,77 @@ async function trainAIBrainAsync(task) {
             await tf.nextFrame();
         } catch(e) {}
     }
-    // ── Training ke baad GPU→CPU sync karo taake context lost pe data safe rahe ──
-    try {
-        let gpuDs = knn.getClassifierDataset();
-        for (let k in gpuDs) {
-            knnCpuDataset[k] = { data: new Float32Array(gpuDs[k].dataSync()), shape: gpuDs[k].shape };
-        }
-    } catch(e) {}
     await saveKNN();
     reEvaluatePending();
+}
+
+// ════════════════════════════════════════════════════════════
+// ── FINAL FIX: KNN library BYPASS — Custom Cosine Similarity ──
+// KNN.predictClass() → concatWithNulls → 3.5GB GPU leak
+// Ab khud cosine similarity calculate karo — koi concat nahi
+// ════════════════════════════════════════════════════════════
+
+// knnCpuDataset: { label: { data: Float32Array, shape:[N,1280] } }
+// Ek label ke liye N examples hain (rows), har ek 1280 features
+
+async function myPredict(featureTensor, pText) {
+    // featureTensor: shape [1, 1280]
+    // Returns: { label, confidences }
+    const negLabel = 'negative_' + pText;
+    const labels = Object.keys(knnCpuDataset).filter(
+        k => k === pText || k === negLabel
+    );
+    if (labels.length === 0) return null;
+
+    const scores = {};
+
+    for (let lbl of labels) {
+        const entry = knnCpuDataset[lbl];
+        // entry.shape = [N, 1280]
+        const N = entry.shape[0];
+        const D = entry.shape[1]; // 1280
+
+        // CPU pe cosine similarity nikalo — koi GPU tensor nahi
+        const featArr = await featureTensor.data(); // Float32Array [1280]
+
+        let totalSim = 0;
+        for (let i = 0; i < N; i++) {
+            const offset = i * D;
+            let dot = 0, normA = 0, normB = 0;
+            for (let j = 0; j < D; j++) {
+                const a = featArr[j];
+                const b = entry.data[offset + j];
+                dot += a * b;
+                normA += a * a;
+                normB += b * b;
+            }
+            const sim = dot / (Math.sqrt(normA) * Math.sqrt(normB) + 1e-8);
+            totalSim += sim;
+        }
+        scores[lbl] = totalSim / N; // average cosine similarity
+    }
+
+    // Softmax-style confidence
+    const vals = Object.values(scores);
+    const minV = Math.min(...vals), maxV = Math.max(...vals);
+    const range = maxV - minV + 1e-8;
+    const confidences = {};
+    for (let k in scores) {
+        confidences[k] = (scores[k] - minV) / range;
+    }
+
+    // Sabse zyada score wala label
+    let bestLabel = labels[0];
+    for (let k of labels) {
+        if (scores[k] > scores[bestLabel]) bestLabel = k;
+    }
+    return { label: bestLabel, confidences };
 }
 
 async function predictWithAI(task) {
     if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
-    if (!knnCpuDataset[pText]) return; // CPU dataset mein nahi = skip
+    if (!knnCpuDataset[pText]) return;
     let predictedClicks = [];
 
     for (let m of task.media) {
@@ -442,40 +507,31 @@ async function predictWithAI(task) {
             await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 200); });
             if (!img.complete || img.naturalWidth === 0) continue;
 
-            let resolvedRes = null;
-            let tfImg2 = null, features2 = null;
+            let tfImg = null, features = null, resolvedRes = null;
             try {
-                // ── FINAL FIX: Predict karne se pehle KNN GPU tensors fresh banao CPU se ──
-                // Isse purane/dead GPU context ke tensors use nahi honge
-                _refreshKnnFromCpu();
-
-                tfImg2 = tf.browser.fromPixels(img);
-                features2 = aiModel.infer(tfImg2, true);
-                resolvedRes = await knn.predictClass(features2);
+                tfImg = tf.browser.fromPixels(img);
+                // GPU sirf features extract karne ke liye — koi KNN nahi
+                features = aiModel.infer(tfImg, true); // shape [1, 1280]
+                // ── CPU pe predict — koi GPU concat nahi ──
+                resolvedRes = await myPredict(features, pText);
             } finally {
-                if (tfImg2) { tfImg2.dispose(); tfImg2 = null; }
-                if (features2) { features2.dispose(); features2 = null; }
-                // KNN ke prediction tensors bhi saaf karo
-                try {
-                    let cur = knn.getClassifierDataset();
-                    for (let k in cur) { try { cur[k].dispose(); } catch(e) {} }
-                    knn.clearAllClasses();
-                } catch(e) {}
+                if (tfImg) { tfImg.dispose(); tfImg = null; }
+                if (features) { features.dispose(); features = null; }
                 await tf.nextFrame();
             }
 
             if (resolvedRes) {
-                let conf = resolvedRes.confidences[pText] || 0;
-                let negConf = resolvedRes.confidences['negative_' + pText] || 0;
-                if (resolvedRes.label === pText && conf >= 0.80 && negConf < 0.30) {
+                const conf = resolvedRes.confidences[pText] || 0;
+                const negConf = resolvedRes.confidences['negative_' + pText] || 0;
+                if (resolvedRes.label === pText && conf >= 0.65 && negConf < 0.50) {
                     predictedClicks.push(m.index);
                 }
             }
-            await new Promise(r => setTimeout(r, 50));
+            await new Promise(r => setTimeout(r, 30));
         } catch(e) {}
     }
 
-    if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
+    if (predictedClicks.length >= 1 && predictedClicks.length <= 6) {
         task.clicks = predictedClicks;
         let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
         if (card) {
