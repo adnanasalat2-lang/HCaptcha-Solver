@@ -25,7 +25,8 @@ let hcaptchaTrained = {};
 let conceptBank = {};
 
 const browserSockets = new Map();
-const dashboardSockets = new Set();
+// Dashboard workers map: ws -> { workerId, mode }
+const dashboardWorkers = new Map(); 
 
 let redis = null;
 if (process.env.REDIS_URL) {
@@ -149,14 +150,52 @@ function notifyBrowsers(taskId, clicks) {
     }
 }
 
-function notifyDashboard(type, data) {
-    if (!dashboardSockets.size) return;
+// System-wide broadcast (For counts & deletions)
+function broadcastDashboard(type, data) {
+    if (!dashboardWorkers.size) return;
     const msg = JSON.stringify({ type, data });
-    dashboardSockets.forEach(ws => {
-        if (ws.readyState === WebSocket.OPEN) {
-            ws.send(msg);
+    dashboardWorkers.forEach((info, ws) => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+    });
+}
+
+// 🔥 Task Routing & Load Balancing Engine 🔥
+function assignTask(taskId) {
+    let task = hcaptchaPending[taskId];
+    if (!task || task.assignedTo) return;
+
+    let taskMode = (task.media && task.media.length > 1) ? 'grid' : 'manual';
+    let minWs = null;
+    let minCount = Infinity;
+
+    // Find the least loaded online worker for this mode
+    dashboardWorkers.forEach((info, ws) => {
+        if (info.mode === taskMode && ws.readyState === WebSocket.OPEN) {
+            let count = 0;
+            for (let k in hcaptchaPending) {
+                if (hcaptchaPending[k].assignedTo === info.workerId) count++;
+            }
+            if (count < minCount) {
+                minCount = count;
+                minWs = ws;
+            }
         }
     });
+
+    if (minWs) {
+        let info = dashboardWorkers.get(minWs);
+        task.assignedTo = info.workerId;
+        minWs.send(JSON.stringify({ type: 'new_task', data: task }));
+    }
+}
+
+function reassignTasksFrom(workerId) {
+    for (let taskId in hcaptchaPending) {
+        if (hcaptchaPending[taskId].assignedTo === workerId) {
+            hcaptchaPending[taskId].assignedTo = null; // Unassign
+            assignTask(taskId); // Re-assign to someone else online
+        }
+    }
 }
 
 function getCountsData() {
@@ -194,8 +233,16 @@ wss.on('connection', (ws) => {
 
             if (data.action === 'dashboard') {
                 isDashboard = true;
-                dashboardSockets.add(ws);
+                dashboardWorkers.set(ws, { workerId: data.workerId, mode: data.mode });
                 ws.send(JSON.stringify({ type: 'counts', data: getCountsData() }));
+                
+                // Naya worker aaya hai, uski mode ke unassigned tasks usko dedo
+                for (let taskId in hcaptchaPending) {
+                    if (!hcaptchaPending[taskId].assignedTo) {
+                        let taskMode = (hcaptchaPending[taskId].media && hcaptchaPending[taskId].media.length > 1) ? 'grid' : 'manual';
+                        if (taskMode === data.mode) assignTask(taskId);
+                    }
+                }
                 return;
             }
         } catch (e) {}
@@ -207,8 +254,19 @@ wss.on('connection', (ws) => {
             set.delete(ws);
             if (set.size === 0) browserSockets.delete(boundTaskId);
         }
-        if (isDashboard) {
-            dashboardSockets.delete(ws);
+        if (isDashboard && dashboardWorkers.has(ws)) {
+            let info = dashboardWorkers.get(ws);
+            dashboardWorkers.delete(ws);
+            
+            // Check if this workerId has any other active tabs/websockets open
+            let stillConnected = false;
+            for (let [otherWs, otherInfo] of dashboardWorkers.entries()) {
+                if (otherInfo.workerId === info.workerId && otherWs.readyState === WebSocket.OPEN) {
+                    stillConnected = true; break;
+                }
+            }
+            // Agar totally disconnect ho gaya hai tou tasks divide kar do
+            if (!stillConnected) reassignTasksFrom(info.workerId);
         }
     });
 });
@@ -232,11 +290,12 @@ app.post('/api/new-hcaptcha', (req, res) => {
         id: task.taskId,
         prompt: task.prompt,
         media: task.media,
-        timestamp: task.timestamp
+        timestamp: task.timestamp,
+        assignedTo: null // Initial state unassigned
     };
 
-    notifyDashboard('new_task', hcaptchaPending[task.taskId]);
-    notifyDashboard('counts', getCountsData());
+    assignTask(task.taskId); // Send to best worker
+    broadcastDashboard('counts', getCountsData()); // Update everyone's counters
 
     res.json({ success: true, autoSolved: false });
 });
@@ -287,19 +346,25 @@ app.post('/api/submit-hcaptcha', (req, res) => {
         delete hcaptchaPending[taskId];
         persistDatabase();
         notifyBrowsers(taskId, clicks);
-        notifyDashboard('task_solved', { taskId });
-        notifyDashboard('counts', getCountsData());
+        broadcastDashboard('task_solved', { taskId });
+        broadcastDashboard('counts', getCountsData());
     }
     res.json({ success: true });
 });
 
 app.get('/api/tasks', (req, res) => {
     const tab = req.query.tab === 'trained' ? 'trained' : 'pending';
+    const workerId = req.query.workerId;
     const page = Math.max(0, parseInt(req.query.page) || 0);
     const size = Math.min(40, Math.max(1, parseInt(req.query.size) || DASHBOARD_PAGE_SIZE));
 
     let source = tab === 'trained' ? hcaptchaTrained : hcaptchaPending;
     let ids = Object.keys(source);
+
+    // Sirf wahi pending tasks return karo jo is worker ko assign hue thay (taake refresh pe msla na ho)
+    if (tab === 'pending' && workerId) {
+        ids = ids.filter(id => hcaptchaPending[id].assignedTo === workerId);
+    }
 
     if (tab === 'trained') ids = ids.reverse();
     let total = ids.length;
@@ -319,8 +384,8 @@ app.delete('/api/delete-hcaptcha/:id', (req, res) => {
     delete hcaptchaTrained[req.params.id];
     rebuildConceptBank(); 
     persistDatabase();
-    notifyDashboard('task_deleted', { taskId: req.params.id });
-    notifyDashboard('counts', getCountsData());
+    broadcastDashboard('task_deleted', { taskId: req.params.id });
+    broadcastDashboard('counts', getCountsData());
     res.json({ success: true });
 });
 
