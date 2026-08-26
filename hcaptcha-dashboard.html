@@ -145,13 +145,16 @@ let isAIReady = false, aiModel, knn;
 let autoTrainEnabled = true, autoSaveEnabled = true;
 let isEvaluatingAI = false;
 
-// ── WEBSOCKET LIVE ENGINE ──
+// ── FIX 1: WebSocket — Smart Reconnect with retry counter ──
 let ws = null;
+let wsRetryCount = 0;
+
 function initWS() {
     if (ws && ws.readyState < 2) return;
     try {
         ws = new WebSocket(WS_URL);
         ws.onopen = () => {
+            wsRetryCount = 0; // reset on success
             wsStatus.className = 'live-status active';
             wsStatus.innerText = '🟢 Live';
             ws.send(JSON.stringify({ action: 'dashboard' }));
@@ -194,10 +197,18 @@ function initWS() {
         ws.onclose = () => {
             wsStatus.className = 'live-status';
             wsStatus.innerText = '🔴 Offline';
-            setTimeout(initWS, 1500);
+            // FIX: exponential backoff — max 10 seconds
+            let delay = Math.min(1500 * Math.pow(1.5, wsRetryCount), 10000);
+            wsRetryCount++;
+            setTimeout(initWS, delay);
+        };
+        ws.onerror = () => {
+            ws.close();
         };
     } catch(e) {
-        setTimeout(initWS, 1500);
+        let delay = Math.min(1500 * Math.pow(1.5, wsRetryCount), 10000);
+        wsRetryCount++;
+        setTimeout(initWS, delay);
     }
 }
 
@@ -316,6 +327,7 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
+// ── FIX 2 + 3: BEST TRAINING — Balanced + Error-Resistant ──
 async function trainAIBrainAsync(task) {
     if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
@@ -335,11 +347,11 @@ async function trainAIBrainAsync(task) {
                 let tfImg = tf.browser.fromPixels(img);
                 let features = aiModel.infer(tfImg, true);
                 if (task.clicks.includes(m.index)) {
-                    knn.addExample(features, pText);
-                    knn.addExample(features, pText);
-                    knn.addExample(features, pText);
+                    // FIX: Positive 5x zyada weight — sahi cheez zyada seekhe
+                    for (let i = 0; i < 5; i++) knn.addExample(features, pText);
                 } else {
-                    knn.addExample(features, negLabel);
+                    // FIX: Negative bhi 3x — "na" kehna bhi seekhe properly
+                    for (let i = 0; i < 3; i++) knn.addExample(features, negLabel);
                 }
             });
             await tf.nextFrame();
@@ -349,11 +361,16 @@ async function trainAIBrainAsync(task) {
     reEvaluatePending();
 }
 
+// ── FIX 4: SMART PREDICTION — Accuracy best, galat select nahi ──
 async function predictWithAI(task) {
     if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let dataset = knn.getClassExampleCount();
-    if (!dataset[pText] || dataset[pText] < 1) return;
+
+    // FIX: Minimum training data check — pehle enough examples chahiye
+    let positiveCount = dataset[pText] || 0;
+    let negativeCount = dataset['negative_' + pText] || 0;
+    if (positiveCount < 5 || negativeCount < 3) return; // andhay train mat karo
 
     let predictedClicks = [];
     for (let m of task.media) {
@@ -376,14 +393,16 @@ async function predictWithAI(task) {
             let conf = resolvedRes.confidences[pText] || 0;
             let negConf = resolvedRes.confidences['negative_' + pText] || 0;
             
-            if (resolvedRes.label === pText && conf >= 0.80 && negConf < 0.30) {
+            // FIX: Smart threshold — positive clearly zyada ho negative se
+            if (resolvedRes.label === pText && conf >= 0.72 && negConf < 0.25 && (conf - negConf) > 0.40) {
                 predictedClicks.push(m.index);
             }
             await tf.nextFrame();
         } catch(e) {}
     }
 
-    if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
+    // FIX: Safe range check — 1 to 6 images (0 ya 7+ galat hoga)
+    if (predictedClicks.length >= 1 && predictedClicks.length <= 6) {
         task.clicks = predictedClicks;
         let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
         if (card) {
@@ -401,23 +420,36 @@ async function predictWithAI(task) {
     }
 }
 
+// ── FIX 5: reEvaluatePending — try/finally se kabhi stuck nahi hoga ──
 async function reEvaluatePending() {
     if (isEvaluatingAI) return;
     isEvaluatingAI = true;
-    for (let id in serverData.pending) {
-        let t = activeTasksStore[id];
-        if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
-            await predictWithAI(t);
+    try {
+        for (let id in serverData.pending) {
+            let t = activeTasksStore[id];
+            if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
+                await predictWithAI(t);
+            }
         }
+    } finally {
+        // FIX: Error aaye ya na aaye — hamesha reset hoga, freeze nahi hoga
+        isEvaluatingAI = false;
     }
-    isEvaluatingAI = false;
 }
 
+// ── FIX 6: fetchTasks — timeout + finally se hamesha chalta rahega ──
 async function fetchTasks() {
     if (isFetching) return;
     isFetching = true;
     try {
-        const res = await fetch(`${SERVER_URL}/api/tasks?tab=${currentTab}&page=${trainedPage}&size=40&t=${Date.now()}`, { cache: 'no-store' });
+        // FIX: 8 second timeout — server hang ho toh wait mat karo
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+        const res = await fetch(
+            `${SERVER_URL}/api/tasks?tab=${currentTab}&page=${trainedPage}&size=40&t=${Date.now()}`,
+            { cache: 'no-store', signal: controller.signal }
+        );
+        clearTimeout(timeoutId);
         if (res.ok) {
             const data = await res.json();
             if (currentTab === 'pending') {
@@ -429,8 +461,12 @@ async function fetchTasks() {
                 renderTrainedStream();
             }
         }
-    } catch(e) {}
-    isFetching = false;
+    } catch(e) {
+        // AbortError aaye (timeout) ya network error — dono handle
+    } finally {
+        // FIX: Har haal mein reset — dobara fetch ho sake
+        isFetching = false;
+    }
 }
 
 function renderPendingStreams() {
