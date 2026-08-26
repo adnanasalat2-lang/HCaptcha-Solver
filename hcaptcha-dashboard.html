@@ -35,7 +35,6 @@
         .stream-count { background: #000; padding: 2px 6px; border-radius: 8px; font-size: 11px; color: #fff; }
         .task-list { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
         .task-card { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; padding: 10px; transition: transform 0.2s, border 0.2s; }
-        /* Focus Mode Styling */
         .focused-task { border: 2px solid #00ff88 !important; background: #1c261f !important; box-shadow: 0 0 15px rgba(0, 255, 136, 0.2); transform: scale(1.01); z-index: 10; }
         .task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 8px rgba(255,0,255,0.3); }
         .task-card.in-retrain { border: 2px solid #ff8800 !important; background: #221405 !important; }
@@ -75,7 +74,6 @@
         .trained-container { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-wrap: wrap; gap: 12px; }
         .retrain-banner { font-size: 11px; color: #ff8800; margin-bottom: 6px; padding: 5px; background: #331c00; border-radius: 3px; border: 1px dashed #ff8800; font-weight: bold; text-align: center; }
         
-        /* 🔵 Login Overlay CSS */
         #loginOverlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); z-index: 9999; display: flex; align-items: center; justify-content: center; }
         .login-box { background: #141414; padding: 25px; border-radius: 8px; border: 1px solid #333; text-align: center; width: 320px; box-shadow: 0 10px 30px rgba(0,0,0,0.8); }
         .login-box h2 { color: #00ff88; margin-top: 0; font-size: 20px; }
@@ -89,7 +87,6 @@
 </head>
 <body>
 
-<!-- Worker Login Overlay -->
 <div id="loginOverlay">
     <div class="login-box">
         <h2>Worker Login</h2>
@@ -141,7 +138,7 @@
     <div class="column-header">
         <span style="color:#00ff88;font-size:14px;">🗂️ Trained Database Archive</span>
         <div style="display:flex;align-items:center;gap:10px;">
-            <span id="expiredNotice" class="trained-error-notice">⚠️ Kuch images expire ho gayi hain (server 403). Retrain ke liye naya task ka intezaar karo.</span>
+            <span id="expiredNotice" class="trained-error-notice">⚠️ Kuch images expire ho gayi hain.</span>
             <span class="stream-count" id="c-trained-total">0 Solved</span>
         </div>
     </div>
@@ -169,12 +166,16 @@ let autoTrainEnabled = true;
 let autoSaveEnabled = true;
 let isEvaluatingAI = false;
 let totalTrainedExamples = 0;
+let knnCpuDataset = {}; 
 
-// Global Worker Credentials
 let workerName = '';
 let workerMode = '';
 
-// ── APP START & LOGIN ──
+// ── SYNC BATCH ENGINE ──
+let syncBatchQueue = [];
+let syncBatchTimer = null;
+const MAX_EXAMPLES = 150; // Memory safe limit
+
 function startApp(mode) {
     let w = document.getElementById('wName').value.trim();
     if (!w) return alert('Bhai, pehle apna Name ya ID likhein!');
@@ -183,22 +184,19 @@ function startApp(mode) {
     workerMode = mode;
     document.getElementById('loginOverlay').style.display = 'none';
 
-    // Disable un-selected mode UI & Engine completely
     if (mode === 'manual') {
         document.getElementById('colGrid').style.display = 'none';
         document.getElementById('btnAutoTrain').style.display = 'none';
-        isAIReady = false; // TFJS/MobileNet won't load
+        isAIReady = false; 
         syncStatus.innerHTML = '⚡ Lightweight Mode (No AI)';
     } else {
         document.getElementById('colManual').style.display = 'none';
         setTimeout(initAI, 100);
     }
-
     initWS();
     fetchTasks();
 }
 
-// ── WEBSOCKET LIVE ENGINE ──
 let ws = null;
 function initWS() {
     if (ws && ws.readyState < 2) return;
@@ -207,7 +205,6 @@ function initWS() {
         ws.onopen = () => {
             wsStatus.className = 'live-status active';
             wsStatus.innerText = '🟢 Live';
-            // Send Registration to Backend Load Balancer
             ws.send(JSON.stringify({ action: 'dashboard', workerId: workerName, mode: workerMode }));
         };
         ws.onmessage = (ev) => {
@@ -226,7 +223,6 @@ function initWS() {
                         activeTasksStore[td.id] = { id: td.id, clicks: [], type: isGrid ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '' };
                         let card = buildCard(activeTasksStore[td.id]);
                         
-                        // 🔥 FIX: Prepend ki jagah Append (Bottom me add) taake Focus Mode disturb na ho
                         if (isGrid) {
                             gridArea.appendChild(card); 
                             if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[td.id]);
@@ -245,6 +241,17 @@ function initWS() {
                     videoTasks = videoTasks.filter(v => v.id !== tid);
                     updateCountsDisplay();
                 }
+                // 🔥 NEW: Receive Live AI Concepts from other workers
+                if (msg.type === 'sync_ai_batch' && workerMode === 'grid') {
+                    if (msg.data.workerId !== workerName) { // Ignore apni bheji hui updates
+                        msg.data.updates.forEach(u => {
+                            addToDataset(u.label, u.featureArr, true);
+                        });
+                        saveKNN();
+                        _refreshKnnFromCpu();
+                        updateAIStatus();
+                    }
+                }
             } catch(e) {}
         };
         ws.onclose = () => {
@@ -262,13 +269,36 @@ function updateCountsDisplay() {
     document.getElementById('c-manual').innerText = `${manualArea.children.length} Tasks`;
 }
 
+// 🔥 GLOBAL MASTER BRAIN FETCH 
+async function fetchGlobalBrain() {
+    try {
+        syncStatus.innerHTML = `⏳ Downloading Master Brain...`;
+        let res = await fetch(SERVER_URL + '/api/ai-brain');
+        let serverBrain = await res.json();
+        if (Object.keys(serverBrain).length > 0) {
+            knnCpuDataset = {};
+            totalTrainedExamples = 0;
+            for (let label in serverBrain) {
+                knnCpuDataset[label] = {
+                    data: new Float32Array(serverBrain[label].data),
+                    shape: serverBrain[label].shape
+                };
+                totalTrainedExamples += serverBrain[label].shape[0];
+            }
+            await saveKNN(); 
+            _refreshKnnFromCpu();
+        }
+    } catch (e) {}
+}
+
 async function initAI() {
     try {
         await tf.setBackend('webgl');
         await tf.ready();
         aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
         knn = knnClassifier.create();
-        await loadKNN();
+        await loadKNN(); 
+        await fetchGlobalBrain(); // Perfect Sync on Startup
         isAIReady = true;
         updateAIStatus();
         setupWebGLRecovery();
@@ -316,7 +346,7 @@ function startMemoryMonitor() {
             if (mem.numTensors > 80) {
                 tf.engine().startScope();
                 tf.engine().endScope();
-                syncStatus.innerHTML = `🧹 Auto-Clean (${mem.numTensors}→${tf.memory().numTensors} tensors)`;
+                syncStatus.innerHTML = `🧹 Auto-Clean (${mem.numTensors}→${tf.memory().numTensors})`;
                 setTimeout(() => updateAIStatus(), 1000);
             }
         } catch(e) {}
@@ -363,15 +393,12 @@ async function idbGet() {
     });
 }
 
-let knnCpuDataset = {}; 
 async function saveKNN() {
     if (!knn) return;
     try {
-        await idbSet(
-            Object.fromEntries(
-                Object.entries(knnCpuDataset).map(([k, v]) => [k, { data: Array.from(v.data), shape: v.shape }])
-            )
-        );
+        await idbSet(Object.fromEntries(
+            Object.entries(knnCpuDataset).map(([k, v]) => [k, { data: Array.from(v.data), shape: v.shape }])
+        ));
         updateAIStatus();
     } catch(e) {}
 }
@@ -400,10 +427,12 @@ function _refreshKnnFromCpu() {
     knn.setClassifierDataset(ds);
 }
 
+// 🔥 GLOBAL RESET (Sab ke liye)
 async function resetAIBrain() {
-    if (confirm("Kya aap AI Brain ki sari memory reset karna chahte hain?")) {
+    if (confirm("Kya aap Master AI Brain ki sari memory reset karna chahte hain (Sab workers ke liye)?")) {
         indexedDB.deleteDatabase(IDB.name);
         if (knn) knn.clearAllClasses();
+        await fetch(SERVER_URL + '/api/reset-ai-brain', { method: 'POST' });
         location.reload();
     }
 }
@@ -443,13 +472,13 @@ function toggleAutoSave() {
 const POSITIVE_REPEAT = 3;
 const NEGATIVE_REPEAT = 1;
 
-function addToDataset(label, featureArr) {
+// 🔥 BROADCAST TO BACKEND
+function addToDataset(label, featureArr, fromServer = false) {
     const D = featureArr.length;
     if (!knnCpuDataset[label]) {
         knnCpuDataset[label] = { data: new Float32Array(featureArr), shape: [1, D] };
     } else {
         const old = knnCpuDataset[label];
-        const MAX_EXAMPLES = 500;
         const currentN = old.shape[0];
         if (currentN >= MAX_EXAMPLES) {
             const newData = new Float32Array(old.data.length);
@@ -464,6 +493,27 @@ function addToDataset(label, featureArr) {
         }
     }
     totalTrainedExamples++;
+
+    if (!fromServer) {
+        syncBatchQueue.push({ label, featureArr: Array.from(featureArr) });
+        if (!syncBatchTimer) {
+            syncBatchTimer = setTimeout(flushSyncBatch, 2000);
+        }
+    }
+}
+
+async function flushSyncBatch() {
+    if (syncBatchQueue.length === 0) return;
+    const updates = [...syncBatchQueue];
+    syncBatchQueue = [];
+    syncBatchTimer = null;
+    try {
+        await fetch(SERVER_URL + '/api/sync-ai-brain-batch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ workerId: workerName, updates })
+        });
+    } catch(e) {}
 }
 
 async function trainAIBrainAsync(task) {
@@ -642,7 +692,6 @@ async function fetchTasks() {
     try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 8000);
-        // Sirf apnay assigned pending tasks fetch hongay
         const res = await fetch(
             `${SERVER_URL}/api/tasks?tab=${currentTab}&page=${trainedPage}&size=40&workerId=${workerName}&t=${Date.now()}`,
             { cache: 'no-store', signal: controller.signal }
@@ -680,7 +729,6 @@ function renderPendingStreams() {
         activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
         let card = buildCard(activeTasksStore[id]);
         
-        // Append bottom to save scrolling issues
         if (isGrid) {
             gridArea.appendChild(card);
             if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[id]);
@@ -715,35 +763,12 @@ function checkTrainedImageErrors() {
     let notice = document.getElementById('expiredNotice');
     if (notice) {
         if (brokenCount > 0) {
-            notice.textContent = `⚠️ ${brokenCount} image(s) expire ho gayi hain (server 403). In cards ko retrain nahi kar sakte.`;
+            notice.textContent = `⚠️ ${brokenCount} image(s) expire ho gayi hain (server 403).`;
             notice.classList.add('visible');
         } else {
             notice.classList.remove('visible');
         }
     }
-    document.querySelectorAll('#trainedView .task-card').forEach(card => {
-        let allImgs = card.querySelectorAll('.g-img');
-        if (allImgs.length === 0) return;
-        let brokenImgs = card.querySelectorAll('.img-broken');
-        let retrainBtn = card.querySelector('[data-action="retrain"]');
-        if (!retrainBtn) return;
-        if (brokenImgs.length === allImgs.length) {
-            retrainBtn.disabled = true;
-            retrainBtn.style.background = '#333';
-            retrainBtn.style.color = '#666';
-            retrainBtn.style.cursor = 'not-allowed';
-            if (!card.querySelector('.retrain-disabled-note')) {
-                let note = document.createElement('div');
-                note.className = 'retrain-disabled-note';
-                note.textContent = '🚫 Images expired — retrain unavailable';
-                card.querySelector(`#act-${card.dataset.id}`)?.appendChild(note);
-            }
-        } else if (brokenImgs.length > 0) {
-            retrainBtn.title = `${brokenImgs.length}/${allImgs.length} images expire ho gayi`;
-            retrainBtn.style.background = '#664400';
-            retrainBtn.style.color = '#ffaa44';
-        }
-    });
 }
 
 function buildCard(t, isTrained = false) {
@@ -798,7 +823,6 @@ function buildCard(t, isTrained = false) {
 }
 
 document.body.addEventListener('click', (e) => {
-    // 🔥 FOCUS MODE ENGINE: Jab bhi kisi card pe click ho wo highlight ho jaye
     let card = e.target.closest('.task-card');
     if (card && currentTab === 'pending') {
         document.querySelectorAll('.task-card').forEach(c => c.classList.remove('focused-task'));
