@@ -66,7 +66,7 @@
         .grid-view-mode .task-list { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
         .manual-view-mode .task-list { grid-template-columns: repeat(auto-fill, minmax(440px, 1fr)); }
 
-        .task-card { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; padding: 10px; transition: transform 0.15s ease, box-shadow 0.15s ease; }
+        .task-card { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; padding: 10px; transition: none; }
         .task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 8px rgba(255,0,255,0.3); }
         .task-card.in-retrain { border: 2px solid #ff8800 !important; background: #221405 !important; }
 
@@ -103,14 +103,30 @@
         .dot.retrain-dot { background: #ff8800; }
 
         .actions { display: flex; gap: 6px; margin-top: 8px; }
-        .btn { flex: 1; padding: 9px; border: none; font-weight: bold; cursor: pointer; color: #fff; font-size: 12px; border-radius: 4px; }
+        .btn {
+            flex: 1; padding: 9px; border: none; font-weight: bold; cursor: pointer;
+            color: #fff; font-size: 12px; border-radius: 4px;
+            user-select: none; -webkit-user-select: none;
+            transition: none !important;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+        .btn:active { filter: brightness(0.75); transform: scale(0.97); }
         .btn-save { background: #00ff88; color: #000; }
+        .btn-save:active { background: #00cc6a; }
         .btn-reset { background: #444; }
+        .btn-reset:active { background: #2a2a2a; }
         .btn-del { background: #ff4444; flex: 0.3; }
+        .btn-del:active { background: #cc0000; }
         .btn-retrain { background: #ff8800; color: #000; }
+        .btn-retrain:active { background: #cc6600; }
         .btn-confirm { background: #00ff88; color: #000; }
+        .btn-confirm:active { background: #00cc6a; }
         .btn-cancel { background: #555; }
+        .btn-cancel:active { background: #333; }
         .btn-warn { background: #ff2222 !important; color: #fff !important; }
+        .img-grid img { transition: none !important; }
+        .img-grid img:active { transform: scale(0.95) !important; }
 
         #trainedView { display: none; flex: 1; flex-direction: column; background: #141414; border: 1px solid #262626; border-radius: 6px; overflow: hidden; margin-top: 10px; }
         .trained-container { flex: 1; overflow-y: auto; padding: 15px; display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; align-content: start; }
@@ -411,12 +427,17 @@ function connectDashboardWS() {
 
 function updateCounts(c) {
     if (!c) return;
-    document.getElementById('c-pending').innerText = c.pending;
-    document.getElementById('c-trained').innerText = c.trained;
-    document.getElementById('c-trained-total').innerText = `${c.trained} Solved`;
+    document.getElementById('c-pending').innerText = c.pending || 0;
+    document.getElementById('c-trained').innerText = c.trained || 0;
+    document.getElementById('c-trained-total').innerText = `${c.trained || 0} Solved`;
 
-    let activeInMyMode = selectedAppMode === 'grid' ? (c.gridWorkersOnline || 1) : (c.manualWorkersOnline || 1);
-    document.getElementById('teamCountText').innerText = `${selectedAppMode.toUpperCase()} Online: ${activeInMyMode}`;
+    let gridOnline   = c.gridWorkersOnline   || 0;
+    let manualOnline = c.manualWorkersOnline || 0;
+    let myOnline = selectedAppMode === 'grid' ? gridOnline : manualOnline;
+    // Self count karo agar 0 aaya
+    if (myOnline < 1) myOnline = 1;
+    document.getElementById('teamCountText').innerText =
+        `${selectedAppMode.toUpperCase()} Online: ${myOnline} | G:${gridOnline} M:${manualOnline}`;
 }
 
 async function initAI() {
@@ -496,15 +517,21 @@ async function idbGet() {
         req.onerror = () => rej(req.error);
     });
 }
-async function saveKNN() {
+let _saveKnnTimer = null;
+async function saveKNN(immediate = false) {
     if (!knn) return;
-    try {
-        let ds = knn.getClassifierDataset();
-        let ser = {};
-        for (let k in ds) { ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape }; }
-        await idbSet(ser);
-        updateAIStatus();
-    } catch(e) {}
+    if (_saveKnnTimer) clearTimeout(_saveKnnTimer);
+    const doSave = async () => {
+        try {
+            let ds = knn.getClassifierDataset();
+            let ser = {};
+            for (let k in ds) { ser[k] = { data: Array.from(ds[k].dataSync()), shape: ds[k].shape }; }
+            await idbSet(ser);
+            updateAIStatus();
+        } catch(e) {}
+    };
+    if (immediate) { await doSave(); }
+    else { _saveKnnTimer = setTimeout(doSave, 2500); }
 }
 async function loadKNN() {
     try {
@@ -573,9 +600,11 @@ async function trainAIBrainAsync(task) {
                 let features = aiModel.infer(tfImg, true);
                 tfImg.dispose();
                 if (task.clicks.includes(idx)) {
-                    for (let i = 0; i < 3; i++) knn.addExample(features, pText);
+                    // Positive: 5 baar add karo — stronger positive signal
+                    for (let i = 0; i < 5; i++) knn.addExample(features, pText);
                 } else {
-                    knn.addExample(features, negLabel);
+                    // Negative: 2 baar add karo — thoda weight
+                    for (let i = 0; i < 2; i++) knn.addExample(features, negLabel);
                 }
                 features.dispose();
             } catch(e) {}
@@ -595,9 +624,9 @@ async function trainAIBrainAsync(task) {
                 let features = aiModel.infer(tfImg, true);
                 tfImg.dispose();
                 if (task.clicks.includes(m.index)) {
-                    for (let i = 0; i < 3; i++) knn.addExample(features, pText);
+                    for (let i = 0; i < 5; i++) knn.addExample(features, pText);
                 } else {
-                    knn.addExample(features, negLabel);
+                    for (let i = 0; i < 2; i++) knn.addExample(features, negLabel);
                 }
                 features.dispose();
             } catch(e) {}
@@ -662,9 +691,10 @@ async function predictWithAI(task) {
             tfImg.dispose();
             let resolvedRes = await knn.predictClass(features);
             features.dispose();
-            let conf = resolvedRes.confidences[pText] || 0;
+            let conf    = resolvedRes.confidences[pText] || 0;
             let negConf = resolvedRes.confidences['negative_' + pText] || 0;
-            if (resolvedRes.label === pText && conf >= 0.60 && negConf < 0.40) {
+            // Lower threshold — AI zyada seekhne ke baad zyada confident hoga
+            if (resolvedRes.label === pText && conf >= 0.50 && negConf < 0.50) {
                 predictedClicks.push(item.index);
             }
         } catch(e) {}
@@ -688,22 +718,33 @@ async function predictWithAI(task) {
     }
 }
 
+let _reEvalQueued = false;
 async function reEvaluatePending() {
-    if (isEvaluatingAI) return;
+    if (isEvaluatingAI) {
+        // Evaluation chal rahi hai — queue mein rakh do
+        _reEvalQueued = true;
+        return;
+    }
     isEvaluatingAI = true;
-    for (let id in serverData.pending) {
+    _reEvalQueued = false;
+
+    let ids = Object.keys(activeTasksStore);
+    for (let id of ids) {
         let t = activeTasksStore[id];
         if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
             await predictWithAI(t);
         }
     }
     isEvaluatingAI = false;
+    // Queue mein tha — dobara run karo
+    if (_reEvalQueued) reEvaluatePending();
 }
 
 function renderPendingStreams() {
     let pending = serverData.pending;
     let gridCount = 0, manualCount = 0;
 
+    // Stale cards hatao
     document.querySelectorAll('#pendingView .task-card').forEach(card => {
         let id = card.dataset.id;
         if (!pending[id] || ghostBlocker.has(id)) {
@@ -718,60 +759,74 @@ function renderPendingStreams() {
     for (let id of Object.keys(pending)) {
         if (ghostBlocker.has(id)) continue;
         let td = pending[id], media = td.media || [];
-        let isGrid = media.length > 1;
-        let isEmpty = media.length === 0;
+        let mediaLen = media.length;
+        let isGrid   = mediaLen > 1;   // 9-tile grid
+        let isEmpty  = mediaLen === 0;  // media abhi nahi aayi
 
-        // ✅ FIX: Empty media task — dono workers ke liye count karo
+        // Empty media — count karo, store karo, card baad mein bnega
         if (isEmpty) {
             gridCount++;
             manualCount++;
-            // Store karo lekin card mat banao abhi — media aane par banana
             if (!activeTasksStore[id]) {
                 activeTasksStore[id] = { id, clicks: [], type: 'unknown', media: [], prompt: td.prompt || '' };
             }
             continue;
         }
 
-        if (isGrid) {
-            gridCount++;
-            if (selectedAppMode === 'manual') continue;
-        } else {
-            manualCount++;
-            if (selectedAppMode === 'grid') continue;
-        }
+        // Count update
+        if (isGrid) gridCount++; else manualCount++;
 
-        // FIX: Agar card already exist karta hai — skip
-        let alreadyHasCard = document.querySelector(`.task-card[data-id="${id}"]`);
-        if (alreadyHasCard) continue;
+        // Dono modes mein saari tasks show karo — worker apna kaam karega
+        // (Grid worker: grid + coord dono; Manual worker: coord only)
+        let shouldRender = isGrid
+            ? (selectedAppMode === 'grid')
+            : true; // coord/canvas tasks dono modes mein dikhao
 
-        // FIX: existing activeTasksStore entry update karo (type unknown tha)
+        if (!shouldRender) continue;
+
+        // Card already hai — skip
+        if (document.querySelector(`.task-card[data-id="${id}"]`)) continue;
+
+        // Store entry update/create
         if (activeTasksStore[id]) {
-            activeTasksStore[id].media = media;
-            activeTasksStore[id].type = isGrid ? 'grid' : 'coord';
+            activeTasksStore[id].media  = media;
+            activeTasksStore[id].type   = isGrid ? 'grid' : 'coord';
             activeTasksStore[id].prompt = td.prompt || activeTasksStore[id].prompt;
         } else {
-            activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
+            activeTasksStore[id] = {
+                id, clicks: [],
+                type: isGrid ? 'grid' : 'coord',
+                media,
+                prompt: td.prompt || ''
+            };
         }
+
         let card = buildCard(activeTasksStore[id]);
 
+        // Grid tasks → gridArea, Coord/canvas tasks → apne mode ke area
         if (isGrid) {
             gridFrag.appendChild(card);
             if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[id]);
         } else {
-            manualFrag.appendChild(card);
+            // Coord/canvas — selectedAppMode ke mutabiq sahi column
+            if (selectedAppMode === 'grid') {
+                gridFrag.appendChild(card);
+            } else {
+                manualFrag.appendChild(card);
+            }
         }
     }
 
-    if (selectedAppMode === 'grid') gridArea.appendChild(gridFrag);
+    if (selectedAppMode === 'grid')   gridArea.appendChild(gridFrag);
     if (selectedAppMode === 'manual') manualArea.appendChild(manualFrag);
 
-    // Auto Focus first task if none focused
+    // Pehli card pe auto-focus
     if (!currentlyFocusedTaskId) {
         let firstCard = document.querySelector('#pendingView .task-card');
         if (firstCard) setTaskFocus(firstCard.dataset.id);
     }
 
-    document.getElementById('c-grid').innerText = `${gridCount} Assigned`;
+    document.getElementById('c-grid').innerText   = `${gridCount} Assigned`;
     document.getElementById('c-manual').innerText = `${manualCount} Assigned`;
 }
 
@@ -809,13 +864,22 @@ function renderTrainedStream() {
     trainedArea.appendChild(frag);
 }
 
+function sanitizeText(str) {
+    let d = document.createElement('div');
+    d.appendChild(document.createTextNode(str || ''));
+    return d.innerHTML;
+}
+
 function buildCard(t, isTrained = false) {
     let card = document.createElement('div');
     card.className = 'task-card';
     card.dataset.id = t.id;
 
-    let parts = t.prompt.split('|||');
-    let exHtml = parts[1] ? `<img src="${parts[1]}" class="example-img">` : `<div class="example-img-placeholder">🖼️</div>`;
+    let parts = (t.prompt || '').split('|||');
+    let safePromptText = sanitizeText(parts[0]);
+    // Example image — src validate karo
+    let exImgSrc = (parts[1] || '').startsWith('data:image/') || (parts[1] || '').startsWith('http') ? parts[1] : '';
+    let exHtml = exImgSrc ? `<img src="${exImgSrc}" class="example-img">` : `<div class="example-img-placeholder">🖼️</div>`;
     let mediaHTML = '';
 
     if (t.type === 'grid') {
@@ -856,7 +920,7 @@ function buildCard(t, isTrained = false) {
             </div>
             ${isTrained ? `<span style="font-size:11px;color:#888" id="count-${t.id}">${t.clicks.length} saved</span>` : ''}
         </div>
-        <div class="prompt-container"><div class="example-wrap">${exHtml}</div><div class="task-prompt">${parts[0]}</div></div>
+        <div class="prompt-container"><div class="example-wrap">${exHtml}</div><div class="task-prompt">${safePromptText}</div></div>
         ${mediaHTML}
         ${actions}`;
     return card;
