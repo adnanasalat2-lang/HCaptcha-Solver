@@ -1,7 +1,7 @@
 {
   "name": "hcaptcha-master-server",
-  "version": "2.1.0",
-  "description": "Ultra-Fast Realtime Backend for hCaptcha Solver",
+  "version": "3.0.0",
+  "description": "hCaptcha Master Server",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -9,7 +9,9 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "ioredis": "^5.11.1",
     "ws": "^8.21.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
