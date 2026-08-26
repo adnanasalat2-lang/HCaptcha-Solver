@@ -98,6 +98,7 @@
     <div class="ai-bar">
         <span class="live-status" id="wsStatus">🔴 Offline</span>
         <span class="sync-status" id="syncStatus">🧠 AI Ready</span>
+        <span id="trainCountBadge" style="font-size:11px;color:#00ff88;font-weight:bold;background:#001a0a;border:1px solid #00ff88;padding:3px 8px;border-radius:4px;">📚 0 Trained</span>
         <button id="btnAutoTrain" class="btn-toggle on" onclick="toggleAutoTrain()">🧠 Auto Train: ON</button>
         <button id="btnAutoSave" class="btn-toggle on" onclick="toggleAutoSave()">💾 Auto Save: ON</button>
         <button class="btn-clear-ai" onclick="resetAIBrain()">🧹 Reset Brain</button>
@@ -152,8 +153,10 @@ let isFetching = false;
 let trainedPage = 0;
 
 let isAIReady = false, aiModel, knn;
-let autoTrainEnabled = true, autoSaveEnabled = true;
+let autoTrainEnabled = true;
+let autoSaveEnabled = true;
 let isEvaluatingAI = false;
+let totalTrainedExamples = 0;
 
 // ── WEBSOCKET LIVE ENGINE ──
 let ws = null;
@@ -292,8 +295,12 @@ function startMemoryMonitor() {
 function updateAIStatus() {
     try {
         let concepts = Object.keys(knnCpuDataset).filter(k => !k.startsWith('negative_')).length;
+        let totalEx = 0;
+        for (let k in knnCpuDataset) { totalEx += knnCpuDataset[k].shape[0]; }
         syncStatus.innerHTML = `🤖 AI Ready ✅ (${concepts} Concepts)`;
         syncStatus.classList.add('active');
+        let badge = document.getElementById('trainCountBadge');
+        if (badge) badge.textContent = `📚 ${totalEx} Trained`;
     } catch(e) {}
 }
 
@@ -408,63 +415,89 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
+// ── 10X TRAINING ENGINE ──
+// Positive examples ko 3x repeat karo — zyada weight milega correct answers ko
+// Negative examples 1x — balanced lekin kam dominant
+const POSITIVE_REPEAT = 3; // Positive label 3 dafa store hoga
+const NEGATIVE_REPEAT = 1; // Negative 1 dafa
+
+function addToDataset(label, featureArr) {
+    const D = featureArr.length;
+    if (!knnCpuDataset[label]) {
+        knnCpuDataset[label] = { data: new Float32Array(featureArr), shape: [1, D] };
+    } else {
+        const old = knnCpuDataset[label];
+        // Size cap: ek label ke liye max 500 examples — memory overflow nahi hoga
+        const MAX_EXAMPLES = 500;
+        const currentN = old.shape[0];
+        if (currentN >= MAX_EXAMPLES) {
+            // FIFO: purana pehla example hata do, naya add karo (sliding window)
+            const newData = new Float32Array(old.data.length);
+            newData.set(old.data.subarray(D), 0); // pehla example chod do
+            newData.set(featureArr, old.data.length - D);
+            knnCpuDataset[label] = { data: newData, shape: [currentN, D] };
+        } else {
+            const newData = new Float32Array(old.data.length + D);
+            newData.set(old.data, 0);
+            newData.set(featureArr, old.data.length);
+            knnCpuDataset[label] = { data: newData, shape: [currentN + 1, D] };
+        }
+    }
+    totalTrainedExamples++;
+}
+
 async function trainAIBrainAsync(task) {
     if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let negLabel = 'negative_' + pText;
     let trained = 0, skipped = 0;
 
+    syncStatus.innerHTML = `⏳ Training "${pText}"...`;
+
     for (let m of task.media) {
         let imgSrc = m.thumb || m.src;
         if (!imgSrc) continue;
         try {
             let img = new Image();
-            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
+            if (!imgSrc.startsWith('data:')) img.crossOrigin = 'anonymous';
             img.src = imgSrc;
             let loaded = await new Promise((res) => {
                 img.onload = () => res(true);
                 img.onerror = () => res(false);
-                setTimeout(() => res(false), 400);
+                setTimeout(() => res(false), 500);
             });
-            // Image load na ho (403/expired) to skip karo — silently
             if (!loaded || !img.complete || img.naturalWidth === 0) { skipped++; continue; }
 
             let tfImg = null, features = null;
             try {
                 tfImg = tf.browser.fromPixels(img);
-                features = aiModel.infer(tfImg, true); // [1, 1280]
-                const featureArr = new Float32Array(await features.data()); // CPU pe lo
-                const label = task.clicks.includes(m.index) ? pText : negLabel;
-
-                // ── Seedha CPU dataset mein store karo — KNN library nahi ──
-                if (!knnCpuDataset[label]) {
-                    knnCpuDataset[label] = { data: featureArr, shape: [1, featureArr.length] };
-                } else {
-                    // Existing data ke saath concatenate karo (CPU pe)
-                    const old = knnCpuDataset[label];
-                    const newData = new Float32Array(old.data.length + featureArr.length);
-                    newData.set(old.data, 0);
-                    newData.set(featureArr, old.data.length);
-                    knnCpuDataset[label] = { data: newData, shape: [old.shape[0] + 1, featureArr.length] };
-                }
+                features = aiModel.infer(tfImg, true);
+                const featureArr = new Float32Array(await features.data());
+                const isPositive = task.clicks.includes(m.index);
+                const label = isPositive ? pText : negLabel;
+                // 10X POWER: Positive = 3 dafa store, Negative = 1 dafa
+                const repeat = isPositive ? POSITIVE_REPEAT : NEGATIVE_REPEAT;
+                for (let r = 0; r < repeat; r++) addToDataset(label, featureArr);
                 trained++;
             } finally {
-                if (tfImg) tfImg.dispose();
-                if (features) features.dispose();
+                if (tfImg) { tfImg.dispose(); tfImg = null; }
+                if (features) { features.dispose(); features = null; }
             }
             await tf.nextFrame();
         } catch(e) { skipped++; }
     }
+
     await saveKNN();
-    // Status update — skipped images ka bhi pata chalega
-    if (skipped > 0 && trained === 0) {
-        syncStatus.innerHTML = `⚠️ Training skip (${skipped} images load nahi hui)`;
-        setTimeout(() => updateAIStatus(), 3000);
-    } else if (skipped > 0) {
-        syncStatus.innerHTML = `✅ Trained ${trained}, skipped ${skipped} expired`;
-        setTimeout(() => updateAIStatus(), 2000);
+    updateAIStatus();
+
+    if (trained === 0) {
+        syncStatus.innerHTML = `⚠️ Koi image load nahi hui — training skip`;
+        setTimeout(() => updateAIStatus(), 2500);
+    } else {
+        syncStatus.innerHTML = `✅ +${trained} trained (${skipped > 0 ? skipped + ' skip' : 'sab load'})`;
+        setTimeout(() => updateAIStatus(), 1500);
     }
-    reEvaluatePending();
+    // Auto-save hata diya — reEvaluatePending bhi nahi chalega (hang fix)
 }
 
 // ════════════════════════════════════════════════════════════
@@ -531,10 +564,12 @@ async function myPredict(featureTensor, pText) {
     return { label: bestLabel, confidences };
 }
 
+// predictWithAI — sirf PREVIEW: AI picks purple border se dikhata hai
+// Auto-save nahi hota — aap khud Save & Train karo
 async function predictWithAI(task) {
-    if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
+    if (!isAIReady || task.type !== 'grid' || !task.media) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
-    if (!knnCpuDataset[pText]) return;
+    if (!knnCpuDataset[pText]) return; // Is concept ki training nahi — skip
     let predictedClicks = [];
 
     for (let m of task.media) {
@@ -542,32 +577,34 @@ async function predictWithAI(task) {
         if (!imgSrc) continue;
         try {
             let img = new Image();
-            if (!imgSrc.startsWith('data:')) img.crossOrigin = "anonymous";
+            if (!imgSrc.startsWith('data:')) img.crossOrigin = 'anonymous';
             img.src = imgSrc;
-            await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 200); });
-            if (!img.complete || img.naturalWidth === 0) continue;
+            let loaded = await new Promise((res) => {
+                img.onload = () => res(true);
+                img.onerror = () => res(false);
+                setTimeout(() => res(false), 300);
+            });
+            if (!loaded || !img.complete || img.naturalWidth === 0) continue;
 
             let tfImg = null, features = null, resolvedRes = null;
             try {
                 tfImg = tf.browser.fromPixels(img);
-                features = aiModel.infer(tfImg, true); 
+                features = aiModel.infer(tfImg, true);
                 resolvedRes = await myPredict(features, pText);
             } finally {
                 if (tfImg) { tfImg.dispose(); tfImg = null; }
                 if (features) { features.dispose(); features = null; }
-                await tf.nextFrame();
             }
+            await tf.nextFrame();
 
             if (resolvedRes) {
                 const conf = resolvedRes.confidences[pText] || 0;
                 const negConf = resolvedRes.confidences['negative_' + pText] || 0;
-                // Accuracy threshold wahi rakha hai, but maxSim ki wajah se result behtar aayega
-                if (resolvedRes.label === pText && conf >= 0.65 && negConf < 0.50) {
+                if (resolvedRes.label === pText && conf >= 0.60 && negConf < 0.55) {
                     predictedClicks.push(m.index);
                 }
             }
-            // 🔥 SPEED FIX: 30ms ki bajaye 1ms ka delay (AI frame block nahi hogi)
-            await new Promise(r => setTimeout(r, 1));
+            await new Promise(r => setTimeout(r, 2));
         } catch(e) {}
     }
 
@@ -578,31 +615,44 @@ async function predictWithAI(task) {
             card.classList.add('ai-processing');
             predictedClicks.forEach(idx => {
                 let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
-                if (imgEl) { imgEl.classList.add('ai-pick'); }
+                if (imgEl) imgEl.classList.add('ai-pick');
             });
             if (autoSaveEnabled) {
+                // Auto Save: server ko submit karo — lekin TRAIN NAHI — sirf aapke manual save se training hogi
                 let btn = card.querySelector('.btn-save');
-                if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Instant Solved'; }
-                sendToServer(task.id, btn, card);
+                if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Auto Solved'; }
+                sendToServerNoTrain(task.id, card);
+            } else {
+                // Auto Save OFF: sirf suggest karo — user khud save kare
+                let btn = card.querySelector('.btn-save');
+                if (btn) { btn.style.background = '#7700cc'; btn.textContent = '🤖 AI Suggestion — Save karo?'; }
             }
         }
     }
 }
 
+// reEvaluatePending — hang-proof version
+// isEvaluatingAI lock 30sec ke baad force-release hoga
+let _reEvalTimer = null;
 async function reEvaluatePending() {
     if (isEvaluatingAI) return;
     isEvaluatingAI = true;
+    // Hang safety: 30 sec ke baad automatically unlock
+    _reEvalTimer = setTimeout(() => { isEvaluatingAI = false; }, 30000);
     try {
         const ids = Object.keys(serverData.pending);
         for (let id of ids) {
+            if (!isEvaluatingAI) break; // Agar force-released ho gaya to stop
             let t = activeTasksStore[id];
             if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
                 await predictWithAI(t);
-                // 🔥 SPEED FIX: 200ms se hata kar 15ms kar diya (GPU/CPU bhi recover karega aur lag bhi nahi hoga)
-                await new Promise(r => setTimeout(r, 15));
+                await new Promise(r => setTimeout(r, 20));
             }
         }
+    } catch(e) {
+        // Koi bhi error ho — lock release karo
     } finally {
+        clearTimeout(_reEvalTimer);
         isEvaluatingAI = false;
     }
 }
@@ -852,9 +902,12 @@ document.body.addEventListener('click', (e) => {
         }
         if (act === 'reset') {
             t.clicks = [];
-            card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick'));
+            card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick', 'retrain-pick'));
             card.querySelectorAll('.dot').forEach(d => d.remove());
             card.classList.remove('ai-processing');
+            // AI suggestion button style bhi reset karo
+            let saveBtn = card.querySelector('.btn-save');
+            if (saveBtn) { saveBtn.style.background = ''; saveBtn.textContent = 'Save & Train'; saveBtn.disabled = false; }
             return;
         }
         if (act === 'del') {
@@ -909,12 +962,10 @@ function deleteTrained(taskId) {
     fetch(`${SERVER_URL}/api/delete-hcaptcha/${taskId}`, { method: 'DELETE' }).then(() => fetchTasks());
 }
 
-function sendToServer(taskId, btnEl, card) {
+// Auto Save ke liye — submit karta hai server ko, TRAIN NAHI KARTA
+function sendToServerNoTrain(taskId, card) {
     let t = activeTasksStore[taskId];
-    if (!t || !t.clicks || t.clicks.length === 0) {
-        if (card) card.classList.remove('ai-processing');
-        return;
-    }
+    if (!t || !t.clicks || t.clicks.length === 0) return;
     fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -924,9 +975,35 @@ function sendToServer(taskId, btnEl, card) {
     if (card) card.remove();
     delete activeTasksStore[taskId];
     updateCountsDisplay();
+    // trainAIBrainAsync nahi — seedha return
+}
+
+// Manual Save ke liye — submit bhi karta hai, TRAIN BHI KARTA HAI
+function sendToServer(taskId, btnEl, card) {
+    let t = activeTasksStore[taskId];
+    if (!t || !t.clicks || t.clicks.length === 0) {
+        if (card) card.classList.remove('ai-processing');
+        return;
+    }
+    // Button reset karo agar AI suggestion wala style tha
+    if (btnEl) {
+        btnEl.style.background = '';
+        btnEl.textContent = '✅ Saving...';
+        btnEl.disabled = true;
+    }
+    fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId, clicks: t.clicks })
+    }).catch(()=>{});
+    ghostBlocker.add(taskId);
+    // Training pehle, phir card remove — task ka data rakho
     if (isAIReady && t.type === 'grid' && t.clicks.length > 0) {
         trainAIBrainAsync(t);
     }
+    if (card) card.remove();
+    delete activeTasksStore[taskId];
+    updateCountsDisplay();
 }
 
 function filterTasks() {
