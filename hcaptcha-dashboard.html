@@ -204,9 +204,11 @@ async function initAI() {
         await loadKNN();
         isAIReady = true;
         updateAIStatus();
-        reEvaluatePending();
         setupWebGLRecovery();
         startMemoryMonitor();
+        // ── CRITICAL FIX: AI ready hote hi foran predict mat karo ──
+        // GPU ko model load ke baad settle karne do, warna foran crash
+        setTimeout(() => reEvaluatePending(), 1500);
     } catch(e) {
         syncStatus.innerHTML = "⚠️ AI Fallback";
     }
@@ -401,6 +403,7 @@ async function predictWithAI(task) {
     let dataset = knn.getClassExampleCount();
     if (!dataset[pText] || dataset[pText] < 1) return;
     let predictedClicks = [];
+
     for (let m of task.media) {
         let imgSrc = m.thumb || m.src;
         if (!imgSrc) continue;
@@ -410,24 +413,36 @@ async function predictWithAI(task) {
             img.src = imgSrc;
             await new Promise((res) => { img.onload = res; img.onerror = () => res(); setTimeout(res, 200); });
             if (!img.complete || img.naturalWidth === 0) continue;
-            // ── FIX v2: KNN library khud internally leak karti hai (similarities) ──
-            // Tensor count track karo, prediction ke baad extra sab dispose karo
-            const tensorsBefore = tf.memory().numTensors;
-            let tfImg2 = null, features2 = null, resolvedRes = null;
+
+            // ── ROOT FIX: KNN dataset CPU pe temporarily move karo prediction ke waqt ──
+            // KNN similarities() GPU tensors ko bar bar concat karta hai — yahi 3.5GB leak hai
+            // Solution: predict ke time dataset CPU arrays mein convert karo, baad wapis rakho
+            let savedDataset = null;
+            let resolvedRes = null;
+            let tfImg2 = null, features2 = null;
             try {
+                // Dataset CPU pe serialize karo (GPU tensors free honge)
+                const gpuDataset = knn.getClassifierDataset();
+                savedDataset = {};
+                const cpuDataset = {};
+                for (let k in gpuDataset) {
+                    savedDataset[k] = { data: Array.from(gpuDataset[k].dataSync()), shape: gpuDataset[k].shape };
+                    cpuDataset[k] = tf.tensor(savedDataset[k].data, savedDataset[k].shape);
+                    gpuDataset[k].dispose(); // purani GPU tensor saaf karo
+                }
+                knn.setClassifierDataset(cpuDataset);
+
+                // Ab predict karo — ab concat zyada tensors nahi banayega
                 tfImg2 = tf.browser.fromPixels(img);
                 features2 = aiModel.infer(tfImg2, true);
                 resolvedRes = await knn.predictClass(features2);
             } finally {
                 if (tfImg2) { tfImg2.dispose(); tfImg2 = null; }
                 if (features2) { features2.dispose(); features2 = null; }
+                // GPU clean karo — KNN ke internal prediction tensors bhi
+                await tf.nextFrame();
             }
-            // ── KNN internal leak: prediction ke baad bhi extra tensors saaf karo ──
-            const tensorsAfter = tf.memory().numTensors;
-            if (tensorsAfter > tensorsBefore + 2) {
-                tf.engine().startScope();
-                tf.engine().endScope();
-            }
+
             if (resolvedRes) {
                 let conf = resolvedRes.confidences[pText] || 0;
                 let negConf = resolvedRes.confidences['negative_' + pText] || 0;
@@ -435,9 +450,12 @@ async function predictWithAI(task) {
                     predictedClicks.push(m.index);
                 }
             }
-            await tf.nextFrame();
+
+            // ── Har image ke baad GPU ko 50ms breathe karne do ──
+            await new Promise(r => setTimeout(r, 50));
         } catch(e) {}
     }
+
     if (predictedClicks.length >= 2 && predictedClicks.length <= 5) {
         task.clicks = predictedClicks;
         let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
@@ -456,15 +474,18 @@ async function predictWithAI(task) {
     }
 }
 
-// ── BUG FIX 1: isEvaluatingAI try/finally — kabhi stuck nahi hoga ──
+// ── FIXED reEvaluatePending: tasks ke beech delay — GPU crash nahi hoga ──
 async function reEvaluatePending() {
     if (isEvaluatingAI) return;
     isEvaluatingAI = true;
     try {
-        for (let id in serverData.pending) {
+        const ids = Object.keys(serverData.pending);
+        for (let id of ids) {
             let t = activeTasksStore[id];
             if (t && t.type === 'grid' && (!t.clicks || t.clicks.length === 0)) {
                 await predictWithAI(t);
+                // ── Har task ke baad 200ms ruko — GPU ko recover karne do ──
+                await new Promise(r => setTimeout(r, 200));
             }
         }
     } finally {
