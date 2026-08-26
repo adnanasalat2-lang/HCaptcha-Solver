@@ -171,10 +171,10 @@ let knnCpuDataset = {};
 let workerName = '';
 let workerMode = '';
 
-// ── SYNC BATCH ENGINE ──
 let syncBatchQueue = [];
 let syncBatchTimer = null;
-const MAX_EXAMPLES = 150; // Memory safe limit
+const MAX_EXAMPLES = 150; 
+let pingTimer = null; // 🔥 NEW: Heartbeat timer
 
 function startApp(mode) {
     let w = document.getElementById('wName').value.trim();
@@ -206,6 +206,14 @@ function initWS() {
             wsStatus.className = 'live-status active';
             wsStatus.innerText = '🟢 Live';
             ws.send(JSON.stringify({ action: 'dashboard', workerId: workerName, mode: workerMode }));
+            
+            // 🔥 NEW: Send heartbeat every 25 seconds to keep Chrome connection alive
+            if (pingTimer) clearInterval(pingTimer);
+            pingTimer = setInterval(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ action: 'ping' }));
+                }
+            }, 25000);
         };
         ws.onmessage = (ev) => {
             try {
@@ -241,9 +249,8 @@ function initWS() {
                     videoTasks = videoTasks.filter(v => v.id !== tid);
                     updateCountsDisplay();
                 }
-                // 🔥 NEW: Receive Live AI Concepts from other workers
                 if (msg.type === 'sync_ai_batch' && workerMode === 'grid') {
-                    if (msg.data.workerId !== workerName) { // Ignore apni bheji hui updates
+                    if (msg.data.workerId !== workerName) { 
                         msg.data.updates.forEach(u => {
                             addToDataset(u.label, u.featureArr, true);
                         });
@@ -255,6 +262,7 @@ function initWS() {
             } catch(e) {}
         };
         ws.onclose = () => {
+            if (pingTimer) clearInterval(pingTimer); // 🔥 NEW: Clear timer on close
             wsStatus.className = 'live-status';
             wsStatus.innerText = '🔴 Offline';
             setTimeout(initWS, 1500);
@@ -269,7 +277,6 @@ function updateCountsDisplay() {
     document.getElementById('c-manual').innerText = `${manualArea.children.length} Tasks`;
 }
 
-// 🔥 GLOBAL MASTER BRAIN FETCH 
 async function fetchGlobalBrain() {
     try {
         syncStatus.innerHTML = `⏳ Downloading Master Brain...`;
@@ -298,7 +305,7 @@ async function initAI() {
         aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
         knn = knnClassifier.create();
         await loadKNN(); 
-        await fetchGlobalBrain(); // Perfect Sync on Startup
+        await fetchGlobalBrain(); 
         isAIReady = true;
         updateAIStatus();
         setupWebGLRecovery();
@@ -427,7 +434,6 @@ function _refreshKnnFromCpu() {
     knn.setClassifierDataset(ds);
 }
 
-// 🔥 GLOBAL RESET (Sab ke liye)
 async function resetAIBrain() {
     if (confirm("Kya aap Master AI Brain ki sari memory reset karna chahte hain (Sab workers ke liye)?")) {
         indexedDB.deleteDatabase(IDB.name);
@@ -472,7 +478,6 @@ function toggleAutoSave() {
 const POSITIVE_REPEAT = 3;
 const NEGATIVE_REPEAT = 1;
 
-// 🔥 BROADCAST TO BACKEND
 function addToDataset(label, featureArr, fromServer = false) {
     const D = featureArr.length;
     if (!knnCpuDataset[label]) {
