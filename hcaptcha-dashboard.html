@@ -328,10 +328,18 @@ function connectDashboardWS() {
                 }
 
                 if (msg.action === 'new_task') {
-                    serverData.pending[msg.task.id] = msg.task;
+                    let incomingTask = msg.task;
+                    let existingEntry = activeTasksStore[incomingTask.id];
+                    // FIX: agar pehle unknown tha aur ab media aa gayi — type update karo
+                    if (existingEntry && existingEntry.type === 'unknown' && incomingTask.media && incomingTask.media.length > 0) {
+                        existingEntry.media = incomingTask.media;
+                        existingEntry.type = incomingTask.media.length > 1 ? 'grid' : 'coord';
+                        existingEntry.prompt = incomingTask.prompt || existingEntry.prompt;
+                    }
+                    serverData.pending[incomingTask.id] = incomingTask;
                     renderPendingStreams();
                     if (isAIReady && autoTrainEnabled && selectedAppMode === 'grid') {
-                        let t = activeTasksStore[msg.task.id];
+                        let t = activeTasksStore[incomingTask.id];
                         if (t && t.type === 'grid') predictWithAI(t);
                     }
                 }
@@ -732,11 +740,18 @@ function renderPendingStreams() {
             if (selectedAppMode === 'grid') continue;
         }
 
-        // ✅ FIX: Agar pehle 'unknown' type tha — ab card banana hai
+        // FIX: Agar card already exist karta hai — skip
         let alreadyHasCard = document.querySelector(`.task-card[data-id="${id}"]`);
-        if (activeTasksStore[id] && alreadyHasCard) continue;
+        if (alreadyHasCard) continue;
 
-        activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
+        // FIX: existing activeTasksStore entry update karo (type unknown tha)
+        if (activeTasksStore[id]) {
+            activeTasksStore[id].media = media;
+            activeTasksStore[id].type = isGrid ? 'grid' : 'coord';
+            activeTasksStore[id].prompt = td.prompt || activeTasksStore[id].prompt;
+        } else {
+            activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
+        }
         let card = buildCard(activeTasksStore[id]);
 
         if (isGrid) {
