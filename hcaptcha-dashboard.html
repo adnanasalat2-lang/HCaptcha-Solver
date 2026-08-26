@@ -361,16 +361,16 @@ async function trainAIBrainAsync(task) {
     reEvaluatePending();
 }
 
-// ── FIX 4: SMART PREDICTION — Accuracy best, galat select nahi ──
+// ── FIX 4: SMART PREDICTION — Pehle se hi chale, accuracy bhi best ──
 async function predictWithAI(task) {
     if (!isAIReady || !autoTrainEnabled || task.type !== 'grid' || !task.media) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let dataset = knn.getClassExampleCount();
 
-    // FIX: Minimum training data check — pehle enough examples chahiye
-    let positiveCount = dataset[pText] || 0;
-    let negativeCount = dataset['negative_' + pText] || 0;
-    if (positiveCount < 5 || negativeCount < 3) return; // andhay train mat karo
+    // Sirf check karo ke is concept ka koi example hai ya nahi
+    if (!dataset[pText] || dataset[pText] < 1) return;
+
+    let negativeExists = (dataset['negative_' + pText] || 0) > 0;
 
     let predictedClicks = [];
     for (let m of task.media) {
@@ -392,16 +392,23 @@ async function predictWithAI(task) {
             let resolvedRes = await res;
             let conf = resolvedRes.confidences[pText] || 0;
             let negConf = resolvedRes.confidences['negative_' + pText] || 0;
-            
-            // FIX: Smart threshold — positive clearly zyada ho negative se
-            if (resolvedRes.label === pText && conf >= 0.72 && negConf < 0.25 && (conf - negConf) > 0.40) {
-                predictedClicks.push(m.index);
+
+            // Negative data hai toh smart check, nahi hai toh sirf conf check
+            let pass = false;
+            if (negativeExists) {
+                // Dono hain — proper comparison karo
+                pass = (resolvedRes.label === pText && conf >= 0.72 && negConf < 0.28 && (conf - negConf) > 0.35);
+            } else {
+                // Sirf positive data hai — confidence high ho toh select karo
+                pass = (resolvedRes.label === pText && conf >= 0.80);
             }
+
+            if (pass) predictedClicks.push(m.index);
             await tf.nextFrame();
         } catch(e) {}
     }
 
-    // FIX: Safe range check — 1 to 6 images (0 ya 7+ galat hoga)
+    // Safe range — 1 se 6 tak (0 ya 7+ galat hoga)
     if (predictedClicks.length >= 1 && predictedClicks.length <= 6) {
         task.clicks = predictedClicks;
         let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
