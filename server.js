@@ -88,18 +88,12 @@ function initDB() {
             hcaptchaPending = {};
             hcaptchaTrained = data.trained || {};
             rebuildConceptBank();
-            console.log(`[DB] Engine Loaded. Trained: ${Object.keys(hcaptchaTrained).length}`);
-        } catch (e) {
-            console.error("[DB] Error loading database:", e.message);
-        }
+        } catch (e) { }
     }
     if (fs.existsSync(AI_BRAIN_FILE)) {
         try {
             globalAIBrain = JSON.parse(fs.readFileSync(AI_BRAIN_FILE, 'utf8'));
-            console.log(`[AI] Global Brain Loaded. Concepts: ${Object.keys(globalAIBrain).length}`);
-        } catch(e) {
-            console.error("[AI] Error loading AI Brain:", e.message);
-        }
+        } catch(e) { }
     }
 }
 initDB();
@@ -284,8 +278,6 @@ app.post('/api/new-hcaptcha', (req, res) => {
         return res.json({ success: true, autoSolved: true, clicks: autoRes.clicks });
     }
 
-    // 🔥 FIX: Prevent Duplication
-    // Agar same task dobara aata hai, toh usko dashboard par dobara assign mat karo
     if (hcaptchaPending[task.taskId]) {
         return res.json({ success: true, autoSolved: false });
     }
@@ -349,33 +341,28 @@ app.get('/api/ai-brain', (req, res) => {
     res.json(globalAIBrain);
 });
 
+// 🔥 SERVER CRASH FIX: Reduced memory load on server. Storage limit set to safe 1000 examples.
 app.post('/api/sync-ai-brain-batch', (req, res) => {
     const { workerId, updates } = req.body;
     if (updates && Array.isArray(updates)) {
         let changed = false;
         updates.forEach(u => {
             let { label, featureArr } = u;
-            
-            const WEIGHT = 10;
-            let heavyFeatures = [];
-            for(let i=0; i<WEIGHT; i++) {
-                heavyFeatures.push(...featureArr);
-            }
 
             if (!globalAIBrain[label]) {
-                globalAIBrain[label] = { data: heavyFeatures, shape: [WEIGHT, 1280] };
+                globalAIBrain[label] = { data: featureArr, shape: [1, 1280] };
                 changed = true;
             } else {
                 const old = globalAIBrain[label];
-                const MAX_EXAMPLES = 5000; 
+                const MAX_EXAMPLES = 1000; // Safe memory limit to prevent 502 Crash
                 const currentN = old.shape[0];
                 
                 if (currentN >= MAX_EXAMPLES) {
-                    old.data.splice(0, 1280 * WEIGHT);
-                    old.data.push(...heavyFeatures);
+                    old.data.splice(0, 1280);
+                    old.data.push(...featureArr);
                 } else {
-                    old.data.push(...heavyFeatures);
-                    old.shape[0] += WEIGHT;
+                    old.data.push(...featureArr);
+                    old.shape[0] += 1;
                 }
                 changed = true;
             }
