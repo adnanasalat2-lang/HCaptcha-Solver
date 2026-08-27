@@ -226,7 +226,6 @@ wss.on('connection', (ws) => {
         try {
             const data = JSON.parse(message);
             
-            // 🔥 NEW: Chrome Connection Alive Heartbeat
             if (data.action === 'ping') return; 
             
             if (data.action === 'register' && data.taskId) {
@@ -362,7 +361,8 @@ app.post('/api/sync-ai-brain-batch', (req, res) => {
                 changed = true;
             } else {
                 const old = globalAIBrain[label];
-                const MAX_EXAMPLES = 150; 
+                // 🔥 SAFE BOOST: Memory limit is now 800. Fast enough to remember, small enough to never crash.
+                const MAX_EXAMPLES = 800; 
                 const currentN = old.shape[0];
                 if (currentN >= MAX_EXAMPLES) {
                     old.data.splice(0, 1280);
