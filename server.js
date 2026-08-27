@@ -88,12 +88,18 @@ function initDB() {
             hcaptchaPending = {};
             hcaptchaTrained = data.trained || {};
             rebuildConceptBank();
-        } catch (e) { }
+            console.log(`[DB] Engine Loaded. Trained: ${Object.keys(hcaptchaTrained).length}`);
+        } catch (e) {
+            console.error("[DB] Error loading database:", e.message);
+        }
     }
     if (fs.existsSync(AI_BRAIN_FILE)) {
         try {
             globalAIBrain = JSON.parse(fs.readFileSync(AI_BRAIN_FILE, 'utf8'));
-        } catch(e) { }
+            console.log(`[AI] Global Brain Loaded. Concepts: ${Object.keys(globalAIBrain).length}`);
+        } catch(e) {
+            console.error("[AI] Error loading AI Brain:", e.message);
+        }
     }
 }
 initDB();
@@ -163,7 +169,7 @@ function broadcastDashboard(type, data) {
 
 function assignTask(taskId) {
     let task = hcaptchaPending[taskId];
-    if (!task || task.assignedTab) return; 
+    if (!task || task.assignedTo) return;
 
     let taskMode = (task.media && task.media.length > 1) ? 'grid' : 'manual';
     let bestWs = null;
@@ -174,7 +180,7 @@ function assignTask(taskId) {
         if (info.mode === taskMode && ws.readyState === WebSocket.OPEN) {
             let count = 0;
             for (let k in hcaptchaPending) {
-                if (hcaptchaPending[k].assignedTab === info.tabId) count++;
+                if (hcaptchaPending[k].assignedTo === info.workerId) count++;
             }
             
             let lastTime = info.lastAssigned || 0;
@@ -190,9 +196,17 @@ function assignTask(taskId) {
     if (bestWs) {
         let info = dashboardWorkers.get(bestWs);
         task.assignedTo = info.workerId;
-        task.assignedTab = info.tabId;
         info.lastAssigned = Date.now();
         bestWs.send(JSON.stringify({ type: 'new_task', data: task }));
+    }
+}
+
+function reassignTasksFrom(workerId) {
+    for (let taskId in hcaptchaPending) {
+        if (hcaptchaPending[taskId].assignedTo === workerId) {
+            hcaptchaPending[taskId].assignedTo = null;
+            assignTask(taskId);
+        }
     }
 }
 
@@ -212,6 +226,7 @@ wss.on('connection', (ws) => {
         try {
             const data = JSON.parse(message);
             
+            // 🔥 NEW: Chrome Connection Alive Heartbeat
             if (data.action === 'ping') return; 
             
             if (data.action === 'register' && data.taskId) {
@@ -233,11 +248,11 @@ wss.on('connection', (ws) => {
 
             if (data.action === 'dashboard') {
                 isDashboard = true;
-                dashboardWorkers.set(ws, { tabId: data.tabId, workerId: data.workerId, mode: data.mode, lastAssigned: 0 });
+                dashboardWorkers.set(ws, { workerId: data.workerId, mode: data.mode, lastAssigned: 0 });
                 ws.send(JSON.stringify({ type: 'counts', data: getCountsData() }));
                 
                 for (let taskId in hcaptchaPending) {
-                    if (!hcaptchaPending[taskId].assignedTab) {
+                    if (!hcaptchaPending[taskId].assignedTo) {
                         let taskMode = (hcaptchaPending[taskId].media && hcaptchaPending[taskId].media.length > 1) ? 'grid' : 'manual';
                         if (taskMode === data.mode) assignTask(taskId);
                     }
@@ -257,13 +272,13 @@ wss.on('connection', (ws) => {
             let info = dashboardWorkers.get(ws);
             dashboardWorkers.delete(ws);
             
-            for (let taskId in hcaptchaPending) {
-                if (hcaptchaPending[taskId].assignedTab === info.tabId) {
-                    hcaptchaPending[taskId].assignedTab = null;
-                    hcaptchaPending[taskId].assignedTo = null;
-                    assignTask(taskId);
+            let stillConnected = false;
+            for (let [otherWs, otherInfo] of dashboardWorkers.entries()) {
+                if (otherInfo.workerId === info.workerId && otherWs.readyState === WebSocket.OPEN) {
+                    stillConnected = true; break;
                 }
             }
+            if (!stillConnected) reassignTasksFrom(info.workerId);
         }
     });
 });
@@ -278,10 +293,6 @@ app.post('/api/new-hcaptcha', (req, res) => {
         return res.json({ success: true, autoSolved: true, clicks: autoRes.clicks });
     }
 
-    if (hcaptchaPending[task.taskId]) {
-        return res.json({ success: true, autoSolved: false });
-    }
-
     const keys = Object.keys(hcaptchaPending);
     if (keys.length >= MAX_PENDING) {
         keys.slice(0, 15).forEach(k => delete hcaptchaPending[k]);
@@ -292,8 +303,7 @@ app.post('/api/new-hcaptcha', (req, res) => {
         prompt: task.prompt,
         media: task.media,
         timestamp: task.timestamp,
-        assignedTo: null,
-        assignedTab: null
+        assignedTo: null 
     };
 
     assignTask(task.taskId); 
@@ -341,22 +351,19 @@ app.get('/api/ai-brain', (req, res) => {
     res.json(globalAIBrain);
 });
 
-// 🔥 SERVER CRASH FIX: Reduced memory load on server. Storage limit set to safe 1000 examples.
 app.post('/api/sync-ai-brain-batch', (req, res) => {
     const { workerId, updates } = req.body;
     if (updates && Array.isArray(updates)) {
         let changed = false;
         updates.forEach(u => {
             let { label, featureArr } = u;
-
             if (!globalAIBrain[label]) {
                 globalAIBrain[label] = { data: featureArr, shape: [1, 1280] };
                 changed = true;
             } else {
                 const old = globalAIBrain[label];
-                const MAX_EXAMPLES = 1000; // Safe memory limit to prevent 502 Crash
+                const MAX_EXAMPLES = 150; 
                 const currentN = old.shape[0];
-                
                 if (currentN >= MAX_EXAMPLES) {
                     old.data.splice(0, 1280);
                     old.data.push(...featureArr);
@@ -382,19 +389,14 @@ app.post('/api/reset-ai-brain', (req, res) => {
 app.get('/api/tasks', (req, res) => {
     const tab = req.query.tab === 'trained' ? 'trained' : 'pending';
     const workerId = req.query.workerId;
-    const tabId = req.query.tabId;
     const page = Math.max(0, parseInt(req.query.page) || 0);
     const size = Math.min(40, Math.max(1, parseInt(req.query.size) || DASHBOARD_PAGE_SIZE));
 
     let source = tab === 'trained' ? hcaptchaTrained : hcaptchaPending;
     let ids = Object.keys(source);
 
-    if (tab === 'pending') {
-        if (tabId) {
-            ids = ids.filter(id => hcaptchaPending[id].assignedTab === tabId);
-        } else if (workerId) {
-            ids = ids.filter(id => hcaptchaPending[id].assignedTo === workerId);
-        }
+    if (tab === 'pending' && workerId) {
+        ids = ids.filter(id => hcaptchaPending[id].assignedTo === workerId);
     }
 
     if (tab === 'trained') ids = ids.reverse();
