@@ -154,6 +154,9 @@ const trainedArea = document.getElementById('trainedArea');
 const syncStatus = document.getElementById('syncStatus');
 const wsStatus = document.getElementById('wsStatus');
 
+// 🔥 NEW: Har tab ki apni private ID, taake routing aur fetching bilkul perfect ho!
+const TAB_ID = Math.random().toString(36).substring(2, 15);
+
 let currentTab = 'pending';
 let serverData = { pending: {}, trained: {} }, activeTasksStore = {}, videoTasks = [];
 let ghostBlocker = new Set();
@@ -173,8 +176,12 @@ let workerMode = '';
 
 let syncBatchQueue = [];
 let syncBatchTimer = null;
-const MAX_EXAMPLES = 150; 
-let pingTimer = null; // 🔥 NEW: Heartbeat timer
+
+const MAX_EXAMPLES = 5000; 
+const POSITIVE_REPEAT = 10; 
+const NEGATIVE_REPEAT = 2;  
+
+let pingTimer = null;
 
 function startApp(mode) {
     let w = document.getElementById('wName').value.trim();
@@ -205,9 +212,8 @@ function initWS() {
         ws.onopen = () => {
             wsStatus.className = 'live-status active';
             wsStatus.innerText = '🟢 Live';
-            ws.send(JSON.stringify({ action: 'dashboard', workerId: workerName, mode: workerMode }));
+            ws.send(JSON.stringify({ action: 'dashboard', workerId: workerName, tabId: TAB_ID, mode: workerMode }));
             
-            // 🔥 NEW: Send heartbeat every 25 seconds to keep Chrome connection alive
             if (pingTimer) clearInterval(pingTimer);
             pingTimer = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) {
@@ -262,7 +268,7 @@ function initWS() {
             } catch(e) {}
         };
         ws.onclose = () => {
-            if (pingTimer) clearInterval(pingTimer); // 🔥 NEW: Clear timer on close
+            if (pingTimer) clearInterval(pingTimer);
             wsStatus.className = 'live-status';
             wsStatus.innerText = '🔴 Offline';
             setTimeout(initWS, 1500);
@@ -475,9 +481,6 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
-const POSITIVE_REPEAT = 3;
-const NEGATIVE_REPEAT = 1;
-
 function addToDataset(label, featureArr, fromServer = false) {
     const D = featureArr.length;
     if (!knnCpuDataset[label]) {
@@ -534,7 +537,11 @@ async function trainAIBrainAsync(task) {
         if (!imgSrc) continue;
         try {
             let img = new Image();
-            if (!imgSrc.startsWith('data:')) img.crossOrigin = 'anonymous';
+            // 🔥 NEW: Anti-CORS Cache Mechanism
+            if (!imgSrc.startsWith('data:')) {
+                img.crossOrigin = 'anonymous';
+                imgSrc += (imgSrc.includes('?') ? '&' : '?') + 'nocache=' + Date.now();
+            }
             img.src = imgSrc;
             let loaded = await new Promise((res) => {
                 img.onload = () => res(true);
@@ -550,6 +557,7 @@ async function trainAIBrainAsync(task) {
                 const featureArr = new Float32Array(await features.data());
                 const isPositive = task.clicks.includes(m.index);
                 const label = isPositive ? pText : negLabel;
+                
                 const repeat = isPositive ? POSITIVE_REPEAT : NEGATIVE_REPEAT;
                 for (let r = 0; r < repeat; r++) addToDataset(label, featureArr);
                 trained++;
@@ -617,7 +625,11 @@ async function predictWithAI(task) {
         if (!imgSrc) continue;
         try {
             let img = new Image();
-            if (!imgSrc.startsWith('data:')) img.crossOrigin = 'anonymous';
+            // 🔥 NEW: Anti-CORS Cache Mechanism
+            if (!imgSrc.startsWith('data:')) {
+                img.crossOrigin = 'anonymous';
+                imgSrc += (imgSrc.includes('?') ? '&' : '?') + 'nocache=' + Date.now();
+            }
             img.src = imgSrc;
             let loaded = await new Promise((res) => {
                 img.onload = () => res(true);
@@ -691,6 +703,7 @@ async function reEvaluatePending() {
     }
 }
 
+// 🔥 BUG FIX: fetchTasks ab strictly TAB_ID use karega
 async function fetchTasks() {
     if (isFetching || !workerName) return;
     isFetching = true;
@@ -698,7 +711,7 @@ async function fetchTasks() {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 8000);
         const res = await fetch(
-            `${SERVER_URL}/api/tasks?tab=${currentTab}&page=${trainedPage}&size=40&workerId=${workerName}&t=${Date.now()}`,
+            `${SERVER_URL}/api/tasks?tab=${currentTab}&page=${trainedPage}&size=40&workerId=${workerName}&tabId=${TAB_ID}&t=${Date.now()}`,
             { cache: 'no-store', signal: controller.signal }
         );
         clearTimeout(timeoutId);
