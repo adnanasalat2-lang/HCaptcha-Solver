@@ -60,7 +60,6 @@
         .dot.retrain-dot { background: #ff8800; }
         .trained-error-notice { font-size: 11px; color: #886633; background: #221a00; border: 1px dashed #554400; border-radius: 4px; padding: 4px 8px; margin-bottom: 6px; display: none; text-align: center; }
         .trained-error-notice.visible { display: block; }
-        .retrain-disabled-note { font-size: 10px; color: #886633; text-align: center; padding: 3px 0; }
         .actions { display: flex; gap: 6px; margin-top: 8px; }
         .btn { flex: 1; padding: 8px; border: none; font-weight: bold; cursor: pointer; color: #fff; font-size: 12px; border-radius: 4px; }
         .btn-save { background: #00ff88; color: #000; }
@@ -154,6 +153,9 @@ const trainedArea = document.getElementById('trainedArea');
 const syncStatus = document.getElementById('syncStatus');
 const wsStatus = document.getElementById('wsStatus');
 
+// 🔥 NEW: Har screen ki apni alag ID hogi (Duplication Rokne ke liye)
+const TAB_ID = Math.random().toString(36).substring(2, 15);
+
 let currentTab = 'pending';
 let serverData = { pending: {}, trained: {} }, activeTasksStore = {}, videoTasks = [];
 let ghostBlocker = new Set();
@@ -173,9 +175,6 @@ let workerMode = '';
 
 let syncBatchQueue = [];
 let syncBatchTimer = null;
-
-// 🔥 SAFE BOOST: Memory limit per concept increased to 800
-const MAX_EXAMPLES = 800; 
 let pingTimer = null;
 
 function startApp(mode) {
@@ -207,7 +206,8 @@ function initWS() {
         ws.onopen = () => {
             wsStatus.className = 'live-status active';
             wsStatus.innerText = '🟢 Live';
-            ws.send(JSON.stringify({ action: 'dashboard', workerId: workerName, mode: workerMode }));
+            // Send TAB_ID to server
+            ws.send(JSON.stringify({ action: 'dashboard', workerId: workerName, tabId: TAB_ID, mode: workerMode }));
             
             if (pingTimer) clearInterval(pingTimer);
             pingTimer = setInterval(() => {
@@ -253,7 +253,6 @@ function initWS() {
                 if (msg.type === 'sync_ai_batch' && workerMode === 'grid') {
                     if (msg.data.workerId !== workerName) { 
                         msg.data.updates.forEach(u => {
-                            // Only add incoming server data ONCE locally
                             addToDataset(u.label, u.featureArr, true);
                         });
                         saveKNN();
@@ -264,7 +263,7 @@ function initWS() {
             } catch(e) {}
         };
         ws.onclose = () => {
-            if (pingTimer) clearInterval(pingTimer);
+            if (pingTimer) clearInterval(pingTimer); 
             wsStatus.className = 'live-status';
             wsStatus.innerText = '🔴 Offline';
             setTimeout(initWS, 1500);
@@ -484,6 +483,7 @@ function addToDataset(label, featureArr, fromServer = false) {
     } else {
         const old = knnCpuDataset[label];
         const currentN = old.shape[0];
+        const MAX_EXAMPLES = 150; 
         if (currentN >= MAX_EXAMPLES) {
             const newData = new Float32Array(old.data.length);
             newData.set(old.data.subarray(D), 0); 
@@ -497,6 +497,13 @@ function addToDataset(label, featureArr, fromServer = false) {
         }
     }
     totalTrainedExamples++;
+
+    if (!fromServer) {
+        syncBatchQueue.push({ label, featureArr: Array.from(featureArr) });
+        if (!syncBatchTimer) {
+            syncBatchTimer = setTimeout(flushSyncBatch, 2000);
+        }
+    }
 }
 
 async function flushSyncBatch() {
@@ -512,6 +519,9 @@ async function flushSyncBatch() {
         });
     } catch(e) {}
 }
+
+const POSITIVE_REPEAT = 3;
+const NEGATIVE_REPEAT = 1;
 
 async function trainAIBrainAsync(task) {
     if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
@@ -542,19 +552,8 @@ async function trainAIBrainAsync(task) {
                 const featureArr = new Float32Array(await features.data());
                 const isPositive = task.clicks.includes(m.index);
                 const label = isPositive ? pText : negLabel;
-                
-                // 🔥 SMART BOOST FIX: Dashboard apni memory mein 5 dafa fast save karega
-                const repeat = isPositive ? 5 : 1; 
-                for (let r = 0; r < repeat; r++) {
-                    addToDataset(label, featureArr, true); // true = local addition only
-                }
-                
-                // 🔥 SMART BOOST FIX: Server ki line mein sirf ek (1) dafa bheje ga
-                syncBatchQueue.push({ label, featureArr: Array.from(featureArr) });
-                if (!syncBatchTimer) {
-                    syncBatchTimer = setTimeout(flushSyncBatch, 2000);
-                }
-
+                const repeat = isPositive ? POSITIVE_REPEAT : NEGATIVE_REPEAT;
+                for (let r = 0; r < repeat; r++) addToDataset(label, featureArr);
                 trained++;
             } finally {
                 if (tfImg) { tfImg.dispose(); tfImg = null; }
@@ -700,8 +699,9 @@ async function fetchTasks() {
     try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 8000);
+        // Fetch tasks with unique tabId
         const res = await fetch(
-            `${SERVER_URL}/api/tasks?tab=${currentTab}&page=${trainedPage}&size=40&workerId=${workerName}&t=${Date.now()}`,
+            `${SERVER_URL}/api/tasks?tab=${currentTab}&page=${trainedPage}&size=40&workerId=${workerName}&tabId=${TAB_ID}&t=${Date.now()}`,
             { cache: 'no-store', signal: controller.signal }
         );
         clearTimeout(timeoutId);
