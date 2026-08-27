@@ -173,8 +173,10 @@ let workerMode = '';
 
 let syncBatchQueue = [];
 let syncBatchTimer = null;
-const MAX_EXAMPLES = 150; 
-let pingTimer = null; // 🔥 NEW: Heartbeat timer
+
+// 🔥 SAFE BOOST: Memory limit per concept increased to 800
+const MAX_EXAMPLES = 800; 
+let pingTimer = null;
 
 function startApp(mode) {
     let w = document.getElementById('wName').value.trim();
@@ -207,7 +209,6 @@ function initWS() {
             wsStatus.innerText = '🟢 Live';
             ws.send(JSON.stringify({ action: 'dashboard', workerId: workerName, mode: workerMode }));
             
-            // 🔥 NEW: Send heartbeat every 25 seconds to keep Chrome connection alive
             if (pingTimer) clearInterval(pingTimer);
             pingTimer = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) {
@@ -252,6 +253,7 @@ function initWS() {
                 if (msg.type === 'sync_ai_batch' && workerMode === 'grid') {
                     if (msg.data.workerId !== workerName) { 
                         msg.data.updates.forEach(u => {
+                            // Only add incoming server data ONCE locally
                             addToDataset(u.label, u.featureArr, true);
                         });
                         saveKNN();
@@ -262,7 +264,7 @@ function initWS() {
             } catch(e) {}
         };
         ws.onclose = () => {
-            if (pingTimer) clearInterval(pingTimer); // 🔥 NEW: Clear timer on close
+            if (pingTimer) clearInterval(pingTimer);
             wsStatus.className = 'live-status';
             wsStatus.innerText = '🔴 Offline';
             setTimeout(initWS, 1500);
@@ -475,9 +477,6 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
-const POSITIVE_REPEAT = 3;
-const NEGATIVE_REPEAT = 1;
-
 function addToDataset(label, featureArr, fromServer = false) {
     const D = featureArr.length;
     if (!knnCpuDataset[label]) {
@@ -498,13 +497,6 @@ function addToDataset(label, featureArr, fromServer = false) {
         }
     }
     totalTrainedExamples++;
-
-    if (!fromServer) {
-        syncBatchQueue.push({ label, featureArr: Array.from(featureArr) });
-        if (!syncBatchTimer) {
-            syncBatchTimer = setTimeout(flushSyncBatch, 2000);
-        }
-    }
 }
 
 async function flushSyncBatch() {
@@ -550,8 +542,19 @@ async function trainAIBrainAsync(task) {
                 const featureArr = new Float32Array(await features.data());
                 const isPositive = task.clicks.includes(m.index);
                 const label = isPositive ? pText : negLabel;
-                const repeat = isPositive ? POSITIVE_REPEAT : NEGATIVE_REPEAT;
-                for (let r = 0; r < repeat; r++) addToDataset(label, featureArr);
+                
+                // 🔥 SMART BOOST FIX: Dashboard apni memory mein 5 dafa fast save karega
+                const repeat = isPositive ? 5 : 1; 
+                for (let r = 0; r < repeat; r++) {
+                    addToDataset(label, featureArr, true); // true = local addition only
+                }
+                
+                // 🔥 SMART BOOST FIX: Server ki line mein sirf ek (1) dafa bheje ga
+                syncBatchQueue.push({ label, featureArr: Array.from(featureArr) });
+                if (!syncBatchTimer) {
+                    syncBatchTimer = setTimeout(flushSyncBatch, 2000);
+                }
+
                 trained++;
             } finally {
                 if (tfImg) { tfImg.dispose(); tfImg = null; }
