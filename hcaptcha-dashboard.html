@@ -173,13 +173,8 @@ let workerMode = '';
 
 let syncBatchQueue = [];
 let syncBatchTimer = null;
-
-// 🔥 NEW: Boosted AI Limits and Learning Speed!
-const MAX_EXAMPLES = 5000; 
-const POSITIVE_REPEAT = 10; // 10x Learning Power
-const NEGATIVE_REPEAT = 2;  
-
-let pingTimer = null;
+const MAX_EXAMPLES = 150; 
+let pingTimer = null; // 🔥 NEW: Heartbeat timer
 
 function startApp(mode) {
     let w = document.getElementById('wName').value.trim();
@@ -212,6 +207,7 @@ function initWS() {
             wsStatus.innerText = '🟢 Live';
             ws.send(JSON.stringify({ action: 'dashboard', workerId: workerName, mode: workerMode }));
             
+            // 🔥 NEW: Send heartbeat every 25 seconds to keep Chrome connection alive
             if (pingTimer) clearInterval(pingTimer);
             pingTimer = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) {
@@ -266,7 +262,7 @@ function initWS() {
             } catch(e) {}
         };
         ws.onclose = () => {
-            if (pingTimer) clearInterval(pingTimer);
+            if (pingTimer) clearInterval(pingTimer); // 🔥 NEW: Clear timer on close
             wsStatus.className = 'live-status';
             wsStatus.innerText = '🔴 Offline';
             setTimeout(initWS, 1500);
@@ -479,6 +475,9 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
+const POSITIVE_REPEAT = 3;
+const NEGATIVE_REPEAT = 1;
+
 function addToDataset(label, featureArr, fromServer = false) {
     const D = featureArr.length;
     if (!knnCpuDataset[label]) {
@@ -551,8 +550,6 @@ async function trainAIBrainAsync(task) {
                 const featureArr = new Float32Array(await features.data());
                 const isPositive = task.clicks.includes(m.index);
                 const label = isPositive ? pText : negLabel;
-                
-                // Apply the new super-fast 10x repetition weighting
                 const repeat = isPositive ? POSITIVE_REPEAT : NEGATIVE_REPEAT;
                 for (let r = 0; r < repeat; r++) addToDataset(label, featureArr);
                 trained++;
