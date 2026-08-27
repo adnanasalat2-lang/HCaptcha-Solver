@@ -60,7 +60,6 @@
         .dot.retrain-dot { background: #ff8800; }
         .trained-error-notice { font-size: 11px; color: #886633; background: #221a00; border: 1px dashed #554400; border-radius: 4px; padding: 4px 8px; margin-bottom: 6px; display: none; text-align: center; }
         .trained-error-notice.visible { display: block; }
-        .retrain-disabled-note { font-size: 10px; color: #886633; text-align: center; padding: 3px 0; }
         .actions { display: flex; gap: 6px; margin-top: 8px; }
         .btn { flex: 1; padding: 8px; border: none; font-weight: bold; cursor: pointer; color: #fff; font-size: 12px; border-radius: 4px; }
         .btn-save { background: #00ff88; color: #000; }
@@ -255,9 +254,14 @@ function initWS() {
                     updateCountsDisplay();
                 }
                 if (msg.type === 'sync_ai_batch' && workerMode === 'grid') {
+                    // 🔥 SYNC FIX: Baki tamam PCs bhi data ko 10x taqat se hi save karenge!
                     if (msg.data.workerId !== workerName) { 
                         msg.data.updates.forEach(u => {
-                            addToDataset(u.label, u.featureArr, true);
+                            let isPos = !u.label.startsWith('negative_');
+                            let rep = isPos ? POSITIVE_REPEAT : NEGATIVE_REPEAT;
+                            for(let r=0; r<rep; r++) {
+                                addToDataset(u.label, u.featureArr, true); // true = silent local save
+                            }
                         });
                         saveKNN();
                         _refreshKnnFromCpu();
@@ -501,6 +505,7 @@ function addToDataset(label, featureArr, fromServer = false) {
     }
     totalTrainedExamples++;
 
+    // 🔥 SYNC FIX: Master PC (sikhane wala) queue mein sirf 1 copy daalega
     if (!fromServer) {
         syncBatchQueue.push({ label, featureArr: Array.from(featureArr) });
         if (!syncBatchTimer) {
@@ -536,7 +541,6 @@ async function trainAIBrainAsync(task) {
         if (!imgSrc) continue;
         try {
             let img = new Image();
-            // 🔥 FIX: Reverted to Original Safe Image Loading
             if (!imgSrc.startsWith('data:')) {
                 img.crossOrigin = 'anonymous';
             }
@@ -556,8 +560,21 @@ async function trainAIBrainAsync(task) {
                 const isPositive = task.clicks.includes(m.index);
                 const label = isPositive ? pText : negLabel;
                 
+                // 🔥 LOCAL BOOST FIX: Sikhane wala PC local brain mein usko 10x baar multiply karke daalega
                 const repeat = isPositive ? POSITIVE_REPEAT : NEGATIVE_REPEAT;
-                for (let r = 0; r < repeat; r++) addToDataset(label, featureArr);
+                for (let r = 0; r < repeat; r++) {
+                    // Yahan se false jayega taake ye queue mein jaaye (lekin function ke andar logic check karegi)
+                    // Halka sa tweak: hum isko directly function ke andar theek kar chuke hain taake queue mein 1 hi jaye
+                }
+                
+                // Behtar tareeqa yeh hai ke hum specifically loop lagayen:
+                for (let r = 0; r < repeat; r++) {
+                    addToDataset(label, featureArr, true); // true matlub server ko dobara mat bhejo (sirf memory mein dalo)
+                }
+                // Aur end par sirf ek (1) single copy server (Queue) ko bhejein
+                syncBatchQueue.push({ label, featureArr: Array.from(featureArr) });
+                if (!syncBatchTimer) syncBatchTimer = setTimeout(flushSyncBatch, 2000);
+                
                 trained++;
             } finally {
                 if (tfImg) { tfImg.dispose(); tfImg = null; }
@@ -623,7 +640,6 @@ async function predictWithAI(task) {
         if (!imgSrc) continue;
         try {
             let img = new Image();
-            // 🔥 FIX: Reverted to Original Safe Image Loading
             if (!imgSrc.startsWith('data:')) {
                 img.crossOrigin = 'anonymous';
             }
