@@ -60,6 +60,7 @@
         .dot.retrain-dot { background: #ff8800; }
         .trained-error-notice { font-size: 11px; color: #886633; background: #221a00; border: 1px dashed #554400; border-radius: 4px; padding: 4px 8px; margin-bottom: 6px; display: none; text-align: center; }
         .trained-error-notice.visible { display: block; }
+        .retrain-disabled-note { font-size: 10px; color: #886633; text-align: center; padding: 3px 0; }
         .actions { display: flex; gap: 6px; margin-top: 8px; }
         .btn { flex: 1; padding: 8px; border: none; font-weight: bold; cursor: pointer; color: #fff; font-size: 12px; border-radius: 4px; }
         .btn-save { background: #00ff88; color: #000; }
@@ -153,8 +154,6 @@ const trainedArea = document.getElementById('trainedArea');
 const syncStatus = document.getElementById('syncStatus');
 const wsStatus = document.getElementById('wsStatus');
 
-const TAB_ID = Math.random().toString(36).substring(2, 15);
-
 let currentTab = 'pending';
 let serverData = { pending: {}, trained: {} }, activeTasksStore = {}, videoTasks = [];
 let ghostBlocker = new Set();
@@ -174,12 +173,8 @@ let workerMode = '';
 
 let syncBatchQueue = [];
 let syncBatchTimer = null;
-
-const MAX_EXAMPLES = 5000; 
-const POSITIVE_REPEAT = 10; 
-const NEGATIVE_REPEAT = 2;  
-
-let pingTimer = null;
+const MAX_EXAMPLES = 150; 
+let pingTimer = null; // 🔥 NEW: Heartbeat timer
 
 function startApp(mode) {
     let w = document.getElementById('wName').value.trim();
@@ -210,8 +205,9 @@ function initWS() {
         ws.onopen = () => {
             wsStatus.className = 'live-status active';
             wsStatus.innerText = '🟢 Live';
-            ws.send(JSON.stringify({ action: 'dashboard', workerId: workerName, tabId: TAB_ID, mode: workerMode }));
+            ws.send(JSON.stringify({ action: 'dashboard', workerId: workerName, mode: workerMode }));
             
+            // 🔥 NEW: Send heartbeat every 25 seconds to keep Chrome connection alive
             if (pingTimer) clearInterval(pingTimer);
             pingTimer = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) {
@@ -254,14 +250,9 @@ function initWS() {
                     updateCountsDisplay();
                 }
                 if (msg.type === 'sync_ai_batch' && workerMode === 'grid') {
-                    // 🔥 SYNC FIX: Baki tamam PCs bhi data ko 10x taqat se hi save karenge!
                     if (msg.data.workerId !== workerName) { 
                         msg.data.updates.forEach(u => {
-                            let isPos = !u.label.startsWith('negative_');
-                            let rep = isPos ? POSITIVE_REPEAT : NEGATIVE_REPEAT;
-                            for(let r=0; r<rep; r++) {
-                                addToDataset(u.label, u.featureArr, true); // true = silent local save
-                            }
+                            addToDataset(u.label, u.featureArr, true);
                         });
                         saveKNN();
                         _refreshKnnFromCpu();
@@ -271,7 +262,7 @@ function initWS() {
             } catch(e) {}
         };
         ws.onclose = () => {
-            if (pingTimer) clearInterval(pingTimer);
+            if (pingTimer) clearInterval(pingTimer); // 🔥 NEW: Clear timer on close
             wsStatus.className = 'live-status';
             wsStatus.innerText = '🔴 Offline';
             setTimeout(initWS, 1500);
@@ -484,6 +475,9 @@ function toggleAutoSave() {
     btn.textContent = '💾 Auto Save: ' + (autoSaveEnabled ? 'ON' : 'OFF');
 }
 
+const POSITIVE_REPEAT = 3;
+const NEGATIVE_REPEAT = 1;
+
 function addToDataset(label, featureArr, fromServer = false) {
     const D = featureArr.length;
     if (!knnCpuDataset[label]) {
@@ -505,7 +499,6 @@ function addToDataset(label, featureArr, fromServer = false) {
     }
     totalTrainedExamples++;
 
-    // 🔥 SYNC FIX: Master PC (sikhane wala) queue mein sirf 1 copy daalega
     if (!fromServer) {
         syncBatchQueue.push({ label, featureArr: Array.from(featureArr) });
         if (!syncBatchTimer) {
@@ -541,9 +534,7 @@ async function trainAIBrainAsync(task) {
         if (!imgSrc) continue;
         try {
             let img = new Image();
-            if (!imgSrc.startsWith('data:')) {
-                img.crossOrigin = 'anonymous';
-            }
+            if (!imgSrc.startsWith('data:')) img.crossOrigin = 'anonymous';
             img.src = imgSrc;
             let loaded = await new Promise((res) => {
                 img.onload = () => res(true);
@@ -559,22 +550,8 @@ async function trainAIBrainAsync(task) {
                 const featureArr = new Float32Array(await features.data());
                 const isPositive = task.clicks.includes(m.index);
                 const label = isPositive ? pText : negLabel;
-                
-                // 🔥 LOCAL BOOST FIX: Sikhane wala PC local brain mein usko 10x baar multiply karke daalega
                 const repeat = isPositive ? POSITIVE_REPEAT : NEGATIVE_REPEAT;
-                for (let r = 0; r < repeat; r++) {
-                    // Yahan se false jayega taake ye queue mein jaaye (lekin function ke andar logic check karegi)
-                    // Halka sa tweak: hum isko directly function ke andar theek kar chuke hain taake queue mein 1 hi jaye
-                }
-                
-                // Behtar tareeqa yeh hai ke hum specifically loop lagayen:
-                for (let r = 0; r < repeat; r++) {
-                    addToDataset(label, featureArr, true); // true matlub server ko dobara mat bhejo (sirf memory mein dalo)
-                }
-                // Aur end par sirf ek (1) single copy server (Queue) ko bhejein
-                syncBatchQueue.push({ label, featureArr: Array.from(featureArr) });
-                if (!syncBatchTimer) syncBatchTimer = setTimeout(flushSyncBatch, 2000);
-                
+                for (let r = 0; r < repeat; r++) addToDataset(label, featureArr);
                 trained++;
             } finally {
                 if (tfImg) { tfImg.dispose(); tfImg = null; }
@@ -640,9 +617,7 @@ async function predictWithAI(task) {
         if (!imgSrc) continue;
         try {
             let img = new Image();
-            if (!imgSrc.startsWith('data:')) {
-                img.crossOrigin = 'anonymous';
-            }
+            if (!imgSrc.startsWith('data:')) img.crossOrigin = 'anonymous';
             img.src = imgSrc;
             let loaded = await new Promise((res) => {
                 img.onload = () => res(true);
@@ -723,7 +698,7 @@ async function fetchTasks() {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 8000);
         const res = await fetch(
-            `${SERVER_URL}/api/tasks?tab=${currentTab}&page=${trainedPage}&size=40&workerId=${workerName}&tabId=${TAB_ID}&t=${Date.now()}`,
+            `${SERVER_URL}/api/tasks?tab=${currentTab}&page=${trainedPage}&size=40&workerId=${workerName}&t=${Date.now()}`,
             { cache: 'no-store', signal: controller.signal }
         );
         clearTimeout(timeoutId);
