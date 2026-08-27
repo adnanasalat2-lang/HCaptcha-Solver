@@ -195,8 +195,8 @@ function assignTask(taskId) {
 
     if (bestWs) {
         let info = dashboardWorkers.get(bestWs);
-        task.assignedTo = info.workerId;      // Standard visibility
-        task.assignedTab = info.tabId;        // Perfect TAB Load Balancing
+        task.assignedTo = info.workerId;
+        task.assignedTab = info.tabId;
         info.lastAssigned = Date.now();
         bestWs.send(JSON.stringify({ type: 'new_task', data: task }));
     }
@@ -239,9 +239,7 @@ wss.on('connection', (ws) => {
 
             if (data.action === 'dashboard') {
                 isDashboard = true;
-                // Save the tabId received from the client for accurate routing
                 dashboardWorkers.set(ws, { tabId: data.tabId, workerId: data.workerId, mode: data.mode, lastAssigned: 0 });
-                
                 ws.send(JSON.stringify({ type: 'counts', data: getCountsData() }));
                 
                 for (let taskId in hcaptchaPending) {
@@ -284,6 +282,12 @@ app.post('/api/new-hcaptcha', (req, res) => {
     if (autoRes.solved) {
         notifyBrowsers(task.taskId, autoRes.clicks);
         return res.json({ success: true, autoSolved: true, clicks: autoRes.clicks });
+    }
+
+    // 🔥 FIX: Prevent Duplication
+    // Agar same task dobara aata hai, toh usko dashboard par dobara assign mat karo
+    if (hcaptchaPending[task.taskId]) {
+        return res.json({ success: true, autoSolved: false });
     }
 
     const keys = Object.keys(hcaptchaPending);
