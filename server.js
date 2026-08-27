@@ -167,9 +167,10 @@ function broadcastDashboard(type, data) {
     });
 }
 
+// 🔥 TAB ROUTING FIX: Tasks are assigned directly to unique Tab IDs
 function assignTask(taskId) {
     let task = hcaptchaPending[taskId];
-    if (!task || task.assignedTo) return;
+    if (!task || task.assignedTab) return;
 
     let taskMode = (task.media && task.media.length > 1) ? 'grid' : 'manual';
     let bestWs = null;
@@ -180,7 +181,7 @@ function assignTask(taskId) {
         if (info.mode === taskMode && ws.readyState === WebSocket.OPEN) {
             let count = 0;
             for (let k in hcaptchaPending) {
-                if (hcaptchaPending[k].assignedTo === info.workerId) count++;
+                if (hcaptchaPending[k].assignedTab === info.tabId) count++;
             }
             
             let lastTime = info.lastAssigned || 0;
@@ -196,15 +197,17 @@ function assignTask(taskId) {
     if (bestWs) {
         let info = dashboardWorkers.get(bestWs);
         task.assignedTo = info.workerId;
+        task.assignedTab = info.tabId; // Assign uniquely to tab
         info.lastAssigned = Date.now();
         bestWs.send(JSON.stringify({ type: 'new_task', data: task }));
     }
 }
 
-function reassignTasksFrom(workerId) {
+function reassignTasksFromTab(tabId) {
     for (let taskId in hcaptchaPending) {
-        if (hcaptchaPending[taskId].assignedTo === workerId) {
+        if (hcaptchaPending[taskId].assignedTab === tabId) {
             hcaptchaPending[taskId].assignedTo = null;
+            hcaptchaPending[taskId].assignedTab = null;
             assignTask(taskId);
         }
     }
@@ -247,11 +250,12 @@ wss.on('connection', (ws) => {
 
             if (data.action === 'dashboard') {
                 isDashboard = true;
-                dashboardWorkers.set(ws, { workerId: data.workerId, mode: data.mode, lastAssigned: 0 });
+                // Save the tabId received from the client for accurate routing
+                dashboardWorkers.set(ws, { tabId: data.tabId, workerId: data.workerId, mode: data.mode, lastAssigned: 0 });
                 ws.send(JSON.stringify({ type: 'counts', data: getCountsData() }));
                 
                 for (let taskId in hcaptchaPending) {
-                    if (!hcaptchaPending[taskId].assignedTo) {
+                    if (!hcaptchaPending[taskId].assignedTab) {
                         let taskMode = (hcaptchaPending[taskId].media && hcaptchaPending[taskId].media.length > 1) ? 'grid' : 'manual';
                         if (taskMode === data.mode) assignTask(taskId);
                     }
@@ -270,14 +274,7 @@ wss.on('connection', (ws) => {
         if (isDashboard && dashboardWorkers.has(ws)) {
             let info = dashboardWorkers.get(ws);
             dashboardWorkers.delete(ws);
-            
-            let stillConnected = false;
-            for (let [otherWs, otherInfo] of dashboardWorkers.entries()) {
-                if (otherInfo.workerId === info.workerId && otherWs.readyState === WebSocket.OPEN) {
-                    stillConnected = true; break;
-                }
-            }
-            if (!stillConnected) reassignTasksFrom(info.workerId);
+            reassignTasksFromTab(info.tabId);
         }
     });
 });
@@ -292,6 +289,10 @@ app.post('/api/new-hcaptcha', (req, res) => {
         return res.json({ success: true, autoSolved: true, clicks: autoRes.clicks });
     }
 
+    if (hcaptchaPending[task.taskId]) {
+        return res.json({ success: true, autoSolved: false });
+    }
+
     const keys = Object.keys(hcaptchaPending);
     if (keys.length >= MAX_PENDING) {
         keys.slice(0, 15).forEach(k => delete hcaptchaPending[k]);
@@ -302,7 +303,8 @@ app.post('/api/new-hcaptcha', (req, res) => {
         prompt: task.prompt,
         media: task.media,
         timestamp: task.timestamp,
-        assignedTo: null 
+        assignedTo: null,
+        assignedTab: null
     };
 
     assignTask(task.taskId); 
@@ -361,8 +363,7 @@ app.post('/api/sync-ai-brain-batch', (req, res) => {
                 changed = true;
             } else {
                 const old = globalAIBrain[label];
-                // 🔥 SAFE BOOST: Memory limit is now 800. Fast enough to remember, small enough to never crash.
-                const MAX_EXAMPLES = 800; 
+                const MAX_EXAMPLES = 150; 
                 const currentN = old.shape[0];
                 if (currentN >= MAX_EXAMPLES) {
                     old.data.splice(0, 1280);
@@ -389,14 +390,19 @@ app.post('/api/reset-ai-brain', (req, res) => {
 app.get('/api/tasks', (req, res) => {
     const tab = req.query.tab === 'trained' ? 'trained' : 'pending';
     const workerId = req.query.workerId;
+    const tabId = req.query.tabId;
     const page = Math.max(0, parseInt(req.query.page) || 0);
     const size = Math.min(40, Math.max(1, parseInt(req.query.size) || DASHBOARD_PAGE_SIZE));
 
     let source = tab === 'trained' ? hcaptchaTrained : hcaptchaPending;
     let ids = Object.keys(source);
 
-    if (tab === 'pending' && workerId) {
-        ids = ids.filter(id => hcaptchaPending[id].assignedTo === workerId);
+    if (tab === 'pending') {
+        if (tabId) {
+            ids = ids.filter(id => hcaptchaPending[id].assignedTab === tabId);
+        } else if (workerId) {
+            ids = ids.filter(id => hcaptchaPending[id].assignedTo === workerId);
+        }
     }
 
     if (tab === 'trained') ids = ids.reverse();
