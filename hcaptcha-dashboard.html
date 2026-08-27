@@ -154,7 +154,6 @@ const trainedArea = document.getElementById('trainedArea');
 const syncStatus = document.getElementById('syncStatus');
 const wsStatus = document.getElementById('wsStatus');
 
-// 🔥 NEW: Har tab ki apni private ID, taake routing aur fetching bilkul perfect ho!
 const TAB_ID = Math.random().toString(36).substring(2, 15);
 
 let currentTab = 'pending';
@@ -537,10 +536,9 @@ async function trainAIBrainAsync(task) {
         if (!imgSrc) continue;
         try {
             let img = new Image();
-            // 🔥 NEW: Anti-CORS Cache Mechanism
+            // 🔥 FIX: Reverted to Original Safe Image Loading
             if (!imgSrc.startsWith('data:')) {
                 img.crossOrigin = 'anonymous';
-                imgSrc += (imgSrc.includes('?') ? '&' : '?') + 'nocache=' + Date.now();
             }
             img.src = imgSrc;
             let loaded = await new Promise((res) => {
@@ -625,10 +623,9 @@ async function predictWithAI(task) {
         if (!imgSrc) continue;
         try {
             let img = new Image();
-            // 🔥 NEW: Anti-CORS Cache Mechanism
+            // 🔥 FIX: Reverted to Original Safe Image Loading
             if (!imgSrc.startsWith('data:')) {
                 img.crossOrigin = 'anonymous';
-                imgSrc += (imgSrc.includes('?') ? '&' : '?') + 'nocache=' + Date.now();
             }
             img.src = imgSrc;
             let loaded = await new Promise((res) => {
@@ -703,7 +700,6 @@ async function reEvaluatePending() {
     }
 }
 
-// 🔥 BUG FIX: fetchTasks ab strictly TAB_ID use karega
 async function fetchTasks() {
     if (isFetching || !workerName) return;
     isFetching = true;
