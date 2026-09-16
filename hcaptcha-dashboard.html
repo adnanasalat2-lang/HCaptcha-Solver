@@ -827,47 +827,64 @@ function buildCard(t, isTrained = false) {
     return card;
 }
 
-// 🖱️ Right-click: Retrain mode mein "Update & Train" trigger karo
+// 🖱️ Right-click = Save & Train (Pending) ya Update & Train (Retrain mode)
 document.body.addEventListener('contextmenu', (e) => {
     let card = e.target.closest('.task-card');
     if (!card) return;
 
     let tid = card.dataset.id;
-    if (!retrainEditingTasks.has(tid)) return; // sirf retrain mode mein
+    let t = activeTasksStore[tid];
+    if (!t) return;
+
+    let isInRetrain = retrainEditingTasks.has(tid);
+    let isPending = card.closest('#pendingView') !== null;
+
+    if (!isPending && !isInRetrain) return;
 
     e.preventDefault();
     e.stopPropagation();
 
-    let t = activeTasksStore[tid];
-    if (!t) return;
-
-    // Same logic as confirm-retrain button
-    let selectedImgs = card.querySelectorAll('.g-img.selected:not(.img-broken), .g-img.retrain-pick:not(.img-broken)');
-    if (!t.clicks || t.clicks.length === 0 || selectedImgs.length === 0) {
-        let confirmBtn = card.querySelector('[data-action="confirm-retrain"]');
-        if (confirmBtn) {
-            confirmBtn.classList.add('btn-warn');
-            let hasBroken = card.querySelectorAll('.img-broken').length > 0;
-            confirmBtn.textContent = hasBroken ? '⚠️ Valid image select karo!' : '⚠️ Pehle Select Karo!';
-            setTimeout(() => { confirmBtn.classList.remove('btn-warn'); confirmBtn.textContent = '✅ Update & Train'; }, 1500);
+    if (isPending) {
+        // --- Pending tab: Save & Train ---
+        let saveBtn = card.querySelector('[data-action="save"]');
+        if (!t.clicks || t.clicks.length === 0) {
+            if (saveBtn) {
+                saveBtn.classList.add('btn-warn');
+                saveBtn.textContent = '⚠️ Pehle Select Karo!';
+                setTimeout(() => { saveBtn.classList.remove('btn-warn'); saveBtn.textContent = 'Save & Train'; }, 1000);
+            }
+            return;
         }
-        return;
-    }
+        sendToServer(tid, saveBtn, card);
 
-    fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskId: tid, clicks: t.clicks })
-    }).then(() => {
-        if (isAIReady && t.type === 'grid') trainAIBrainAsync(t);
-        retrainEditingTasks.delete(tid);
-        card.classList.remove('in-retrain');
-        let b = card.querySelector(`#banner-${tid}`); if (b) b.remove();
-        let actBox = card.querySelector(`#act-${tid}`);
-        if (actBox) actBox.innerHTML = `
-            <button class="btn btn-retrain" data-action="retrain">🔧 Retrain</button>
-            <button class="btn btn-del" data-action="del-trained">❌</button>`;
-        fetchTasks();
-    });
+    } else if (isInRetrain) {
+        // --- Trained tab retrain mode: Update & Train ---
+        let selectedImgs = card.querySelectorAll('.g-img.selected:not(.img-broken), .g-img.retrain-pick:not(.img-broken)');
+        if (!t.clicks || t.clicks.length === 0 || selectedImgs.length === 0) {
+            let confirmBtn = card.querySelector('[data-action="confirm-retrain"]');
+            if (confirmBtn) {
+                confirmBtn.classList.add('btn-warn');
+                let hasBroken = card.querySelectorAll('.img-broken').length > 0;
+                confirmBtn.textContent = hasBroken ? '⚠️ Valid image select karo!' : '⚠️ Pehle Select Karo!';
+                setTimeout(() => { confirmBtn.classList.remove('btn-warn'); confirmBtn.textContent = '✅ Update & Train'; }, 1500);
+            }
+            return;
+        }
+        fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ taskId: tid, clicks: t.clicks })
+        }).then(() => {
+            if (isAIReady && t.type === 'grid') trainAIBrainAsync(t);
+            retrainEditingTasks.delete(tid);
+            card.classList.remove('in-retrain');
+            let b = card.querySelector(`#banner-${tid}`); if (b) b.remove();
+            let actBox = card.querySelector(`#act-${tid}`);
+            if (actBox) actBox.innerHTML = `
+                <button class="btn btn-retrain" data-action="retrain">🔧 Retrain</button>
+                <button class="btn btn-del" data-action="del-trained">❌</button>`;
+            fetchTasks();
+        });
+    }
 });
 
 document.body.addEventListener('click', (e) => {
