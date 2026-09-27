@@ -67,6 +67,8 @@
         .btn-reset { background: #444; }
         .btn-del { background: #ff4444; flex: 0.3; }
         .btn-retrain { background: #ff8800; color: #000; }
+        .btn-skip { background: #c0392b; color: #fff; }
+        .btn-skip:hover { background: #e74c3c; }
         .btn-confirm { background: #00ff88; color: #000; }
         .btn-cancel { background: #555; }
         .btn-warn { background: #ff2222 !important; color: #fff !important; }
@@ -806,10 +808,12 @@ function buildCard(t, isTrained = false) {
         mediaHTML += '</div>';
         if (isVid && !isTrained) videoTasks.push({ id: t.id, frames: m.frames, current: 0 });
     }
+    let skipBtn = (t.type === 'grid') ? `<button class="btn btn-skip" data-action="skip" title="Koi image match nahi — seedha Next/Verify">⏭ Skip</button>` : '';
     let actions = !isTrained ? `
         <div class="actions">
             <button class="btn btn-save" data-action="save">Save & Train</button>
             <button class="btn btn-reset" data-action="reset">Clear</button>
+            ${skipBtn}
             <button class="btn btn-del" data-action="del">❌</button>
         </div>` : `
         <div class="actions" id="act-${t.id}">
@@ -970,6 +974,10 @@ document.body.addEventListener('click', (e) => {
             sendToServer(tid, actionBtn, card);
             return;
         }
+        if (act === 'skip') {
+            skipTask(tid, actionBtn, card);
+            return;
+        }
         if (act === 'reset') {
             t.clicks = [];
             card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick', 'retrain-pick'));
@@ -1030,6 +1038,22 @@ document.body.addEventListener('click', (e) => {
 
 function deleteTrained(taskId) {
     fetch(`${SERVER_URL}/api/delete-hcaptcha/${taskId}`, { method: 'DELETE' }).then(() => fetchTasks());
+}
+
+// ⏭ SKIP: koi image match nahi — server ko clicks:[] bhejo (kuch train nahi)
+// Server relay karega { action:'solve', taskId, clicks:[] } → extension Next/Verify daba dega
+function skipTask(taskId, btnEl, card) {
+    if (btnEl) { btnEl.textContent = '⏭ Skipping...'; btnEl.disabled = true; }
+    fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId, clicks: [], skip: true })
+    }).catch(()=>{});
+    ghostBlocker.add(taskId);
+    if (card) card.remove();
+    delete activeTasksStore[taskId];
+    delete serverData.pending[taskId];
+    updateCountsDisplay();
 }
 
 function sendToServerNoTrain(taskId, card) {
