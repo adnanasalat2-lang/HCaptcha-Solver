@@ -96,6 +96,11 @@
         .img-grid-cell img.ai-pick { border-color: #ff00ff; opacity: 0.9; }
         .img-grid-cell img.retrain-pick { border-color: #ff8800 !important; opacity: 0.95; }
         .img-grid-cell img.img-broken { opacity: 0.15; cursor: not-allowed; }
+        .next-box { margin-top: 4px; min-height: 46px; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; border: 3px solid #552222; background: #2a1414; border-radius: 3px; color: #ff8888; font-weight: bold; font-size: 13px; user-select: none; }
+        .next-box:hover { background: #3a1a1a; }
+        .next-box.selected { border-color: #ff00ff; background: #2a1030; color: #ff66ff; }
+        .next-box.ai-pick { border-color: #ff00ff; background: #2a1030; color: #ff66ff; }
+        .next-box .nb-icon { font-size: 18px; }
         .img-broken-badge { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #1a0a0a; border: 1px dashed #552222; border-radius: 3px; font-size: 10px; color: #884444; pointer-events: none; gap: 3px; text-align: center; padding: 4px; }
         .img-broken-badge span { font-size: 16px; }
 
@@ -2086,10 +2091,12 @@ async function predictWithAI(task) {
     } else if (predictedClicks.length === 0 && autoSaveEnabled) {
         // 🤖 AI ne is concept ko jaana (knnCpuDataset[pText] mojood tha) par
         // is grid ki kisi image pe confident match nahi mila → matlab yahan
-        // kuch match nahi karta → automatically Skip/Next (bina select kiye).
+        // kuch match nahi karta → AI khud "Next / No Match" box select karke skip.
         let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
         if (card) {
             card.classList.add('ai-processing');
+            let nb = card.querySelector('.next-box');   // 10th box highlight
+            if (nb) { nb.classList.add('ai-pick'); }
             let btn = card.querySelector('.btn-skip');
             if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Auto Skip (No Match)'; }
         }
@@ -2254,6 +2261,13 @@ function buildCard(t, isTrained = false) {
                 <button class="btn btn-del" data-action="del-trained">❌</button>
             </div>`;
 
+        // ⏭ 10th box — "Next / No Match". Training tab pe click karke AI ko sikhao
+        // ke is grid me kuch match nahi (AI isko negative examples se seekhta hai).
+        let nextBoxHtml = !isTrained ? `
+            <div class="next-box ${t.skipSelected ? 'selected' : ''}" data-nextbox="1" title="Koi match nahi — AI ko sikhao ke yahan Next dabana hai">
+                <span class="nb-icon">⏭</span><span>Next / No Match</span>
+            </div>` : '';
+
         card.innerHTML = `
             <div class="task-head">
                 <span class="task-id">#${t.id.substring(0,6)}</span>
@@ -2261,6 +2275,7 @@ function buildCard(t, isTrained = false) {
             </div>
             <div class="prompt-container"><div class="example-wrap">${exHtml}</div><div class="task-prompt">${esc(promptText || '')}</div></div>
             ${mediaHTML}
+            ${nextBoxHtml}
             ${actions}`;
     } else {
         // ── CaptchaSonic ke liye 2 zaroori fixes:
@@ -2407,10 +2422,15 @@ document.body.addEventListener('click', (e) => {
             return;
         }
         if (act === 'save') {
+            // Agar "Next / No Match" box select hai → AI ko no-match sikhao + skip
+            if (t.skipSelected) {
+                saveSkipAndTrain(tid, actionBtn, card);
+                return;
+            }
             if (!t.clicks || t.clicks.length === 0) {
                 actionBtn.classList.add('btn-warn');
-                actionBtn.textContent = '⚠️ Pehle Select Karo!';
-                setTimeout(() => { actionBtn.classList.remove('btn-warn'); actionBtn.textContent = 'Save & Train'; }, 1000);
+                actionBtn.textContent = '⚠️ Select karo ya Next box dabao!';
+                setTimeout(() => { actionBtn.classList.remove('btn-warn'); actionBtn.textContent = 'Save & Train'; }, 1200);
                 return;
             }
             sendToServer(tid, actionBtn, card);
@@ -2442,9 +2462,29 @@ document.body.addEventListener('click', (e) => {
     }
     
     if (isTrainedCard && !isInRetrain) return;
-    
+
+    // ⏭ "Next / No Match" box click — toggle skip mode
+    let nextBox = e.target.closest('.next-box');
+    if (nextBox) {
+        let nowSel = nextBox.classList.toggle('selected');
+        nextBox.classList.remove('ai-pick');
+        t.skipSelected = nowSel;
+        if (nowSel) {
+            // No-match matlab koi image select nahi — sari selections clear
+            t.clicks = [];
+            card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick', 'retrain-pick'));
+        }
+        return;
+    }
+
     if (e.target.classList.contains('g-img')) {
         if (e.target.classList.contains('img-broken')) return;
+        // Image select kar rahe hain → Next box off karo (dono ek saath nahi)
+        if (t.skipSelected) {
+            t.skipSelected = false;
+            let nb = card.querySelector('.next-box');
+            if (nb) nb.classList.remove('selected', 'ai-pick');
+        }
         let idx = parseInt(e.target.dataset.index);
         if (e.target.classList.contains('selected') || e.target.classList.contains('retrain-pick') || e.target.classList.contains('ai-pick')) {
             e.target.classList.remove('selected', 'ai-pick', 'retrain-pick');
@@ -2476,6 +2516,64 @@ function skipTask(taskId, btnEl, card) {
     delete activeTasksStore[taskId];
     sessionStorage.removeItem('hcm_task_' + taskId);
     updateCountsDisplay();
+}
+
+// ⏭ SAVE + TRAIN "No Match": user ne Next box select kiya → AI ko sikhao ke
+// is prompt ke liye ye sari 9 images NEGATIVE hain (kuch match nahi), phir skip.
+// Isse AI aage khud "0 match" pehchan kar Next daba dega.
+function saveSkipAndTrain(taskId, btnEl, card) {
+    let t = activeTasksStore[taskId];
+    if (!t) return;
+    if (btnEl) { btnEl.textContent = '🧠 Sikh raha hai...'; btnEl.style.pointerEvents = 'none'; }
+    // AI training: sari images ko negative banao is prompt ke liye
+    if (isAIReady && t.type === 'grid') trainNoMatchAsync(t);
+    // Server ko skip bhejo → extension Next/Verify daba dega
+    fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId, clicks: [], skip: true, workerId: workerName })
+    }).catch(()=>{});
+    _addToGhostBlocker(taskId);
+    if (card) card.remove();
+    delete activeTasksStore[taskId];
+    sessionStorage.removeItem('hcm_task_' + taskId);
+    updateCountsDisplay();
+}
+
+// AI ko "No Match" sikhana — grid ki sari images is prompt ke NEGATIVE examples
+async function trainNoMatchAsync(task) {
+    if (!isAIReady || task.type !== 'grid' || !task.media) return;
+    let pText = task.prompt.split('|||')[0].trim().toLowerCase();
+    let negLabel = 'negative_' + pText;
+    syncStatus.innerHTML = `⏳ "No Match" seekh raha "${pText}"...`;
+    for (let m of task.media) {
+        let imgSrc = m.thumb || m.src;
+        if (!imgSrc) continue;
+        try {
+            let img = new Image();
+            if (!imgSrc.startsWith('data:')) img.crossOrigin = 'anonymous';
+            img.src = imgSrc;
+            let loaded = await new Promise((res) => {
+                img.onload = () => res(true);
+                img.onerror = () => res(false);
+                setTimeout(() => res(false), 500);
+            });
+            if (!loaded || !img.complete || img.naturalWidth === 0) continue;
+            let tfImg = null, features = null;
+            try {
+                tfImg = tf.browser.fromPixels(img);
+                features = aiModel.infer(tfImg, true);
+                const featureArr = new Float32Array(await features.data());
+                for (let r = 0; r < NEGATIVE_REPEAT; r++) addToDataset(negLabel, featureArr);
+            } finally {
+                if (tfImg) { tfImg.dispose(); tfImg = null; }
+                if (features) { features.dispose(); features = null; }
+            }
+            await tf.nextFrame();
+        } catch(e) {}
+    }
+    await saveKNN();
+    updateAIStatus();
 }
 
 function sendToServerNoTrain(taskId, card) {
