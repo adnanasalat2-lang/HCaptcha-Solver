@@ -170,7 +170,7 @@
         <button class="btn-clear-ai" onclick="resetAIBrain()">🧹 Reset Brain</button>
         <button class="btn-clear-ai" onclick="doLogout()" style="background:#332211;color:#ffaa55;border-color:#775522;">🚪 Logout</button>
         <div class="search-box">
-            <input type="text" id="searchInput" oninput="filterTasks()" placeholder="🔍 Task ID..."/>
+            <input type="text" id="searchInput" oninput="filterTasks()" placeholder="🔍 Trained: ID ya prompt..."/>
         </div>
     </div>
 </div>
@@ -2151,8 +2151,14 @@ async function fetchTasks() {
     try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 8000);
+        // 🔍 Trained tab mein search box ka text server ko bhejo (poore DB mein dhoonde)
+        let searchParam = '';
+        if (currentTab === 'trained') {
+            let s = (document.getElementById('searchInput')?.value || '').trim();
+            if (s) searchParam = '&search=' + encodeURIComponent(s);
+        }
         const res = await fetch(
-            `${SERVER_URL}/api/tasks?tab=${currentTab}&page=${trainedPage}&size=40&workerId=${workerName}&t=${Date.now()}`,
+            `${SERVER_URL}/api/tasks?tab=${currentTab}&page=${trainedPage}&size=40&workerId=${workerName}${searchParam}&t=${Date.now()}`,
             { cache: 'no-store', signal: controller.signal }
         );
         clearTimeout(timeoutId);
@@ -2647,8 +2653,21 @@ function sendToServer(taskId, btnEl, card) {
 }
 
 function filterTasks() {
+    // Trained tab: server-side search (poore trained DB mein ID ya prompt se) —
+    // taake purana galat task jo current page pe nahi hai wo bhi mil jaye,
+    // phir usko Retrain / Delete kar sako.
+    if (currentTab === 'trained') {
+        clearTimeout(window._trainedSearchTimer);
+        window._trainedSearchTimer = setTimeout(() => {
+            trainedPage = 0;
+            trainedArea.innerHTML = '';   // purane cards clear, fresh result dikhao
+            fetchTasks();
+        }, 350);
+        return;
+    }
+    // Pending tab: client-side filter (jaise pehle)
     let f = document.getElementById('searchInput').value.toLowerCase().replace('#', '');
-    document.querySelectorAll('.task-card').forEach(c => {
+    document.querySelectorAll('#pendingView .task-card').forEach(c => {
         c.style.display = c.dataset.id.toLowerCase().includes(f) ? "" : "none";
     });
 }
