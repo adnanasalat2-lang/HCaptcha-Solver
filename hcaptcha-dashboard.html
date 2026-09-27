@@ -1414,18 +1414,26 @@ function initWS() {
                 }
                 if (msg.type === 'new_task') {
                     let td = msg.data;
-                    if (ghostBlocker.has(td.id)) return;
 
-                    // ── FIX: DUPLICATE TASK GUARD ──
-                    // Kabhi kabhi same task 2 baar dashboard mein aa jata
-                    // tha — WS message race, drift poll overlap, ya server
-                    // reassign. Ab: agar wahi task 5 sec ke andar dobara
-                    // aaye to silent skip. Har taskId ka last-seen time
-                    // track. Purani entries (>5 sec) apne aap expire.
+                    // ── FIX: SAME TASK RETRY REAL-TIME DIKHE ──
+                    // new_task server ka authoritative push hai = ye ab LIVE
+                    // pending hai. Agar ye task pehle solve/skip hua tha (yaani
+                    // ghostBlocker mein hai), to wo purana block hata do — warna
+                    // same task retry (incorrect answer) pe count to barhta tha
+                    // par card nahi banta tha, sirf refresh pe dikhta tha.
+                    const wasGhost = ghostBlocker.has(td.id);
+                    if (wasGhost) {
+                        ghostBlocker.delete(td.id);
+                        if (window._hcmSeenTasks) window._hcmSeenTasks.delete(td.id);
+                    }
+
+                    // ── DUPLICATE TASK GUARD (WS race) ──
+                    // Wahi task 5 sec ke andar dobara aaye to silent skip —
+                    // LEKIN genuine retry (wasGhost) ko block nahi karna.
                     if (!window._hcmSeenTasks) window._hcmSeenTasks = new Map();
                     const seen = window._hcmSeenTasks;
                     const lastSeen = seen.get(td.id);
-                    if (lastSeen && (Date.now() - lastSeen) < 5000) return;
+                    if (!wasGhost && lastSeen && (Date.now() - lastSeen) < 5000) return;
                     seen.set(td.id, Date.now());
                     // Cleanup — purani entries hatao (memory bloat rok)
                     if (seen.size > 200) {
