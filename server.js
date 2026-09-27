@@ -314,8 +314,18 @@ app.post('/api/new-hcaptcha', (req, res) => {
 });
 
 app.post('/api/submit-hcaptcha', (req, res) => {
-    const { taskId, clicks } = req.body;
-    if (!taskId || !clicks || clicks.length === 0) return res.json({ success: false });
+    const { taskId, clicks, skip } = req.body;
+    if (!taskId) return res.json({ success: false });
+
+    // ⏭ SKIP: koi image match nahi — extension ko clicks:[] bhejo (Next/Verify),
+    // kuch train mat karo, task pending se hata do
+    if (skip || !clicks || clicks.length === 0) {
+        notifyBrowsers(taskId, []);
+        delete hcaptchaPending[taskId];
+        broadcastDashboard('task_solved', { taskId });
+        broadcastDashboard('counts', getCountsData());
+        return res.json({ success: true, skipped: true });
+    }
 
     let source = hcaptchaPending[taskId] || hcaptchaTrained[taskId];
     if (source) {
