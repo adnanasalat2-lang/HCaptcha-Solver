@@ -403,6 +403,8 @@ app.get('/api/tasks', (req, res) => {
     const tabId = req.query.tabId;
     const page = Math.max(0, parseInt(req.query.page) || 0);
     const size = Math.min(40, Math.max(1, parseInt(req.query.size) || DASHBOARD_PAGE_SIZE));
+    // 🔍 Search: poore database mein ID ya prompt se dhoondo (sirf current page nahi)
+    const search = (req.query.search || '').toString().trim().toLowerCase().replace(/^#/, '');
 
     let source = tab === 'trained' ? hcaptchaTrained : hcaptchaPending;
     let ids = Object.keys(source);
@@ -413,6 +415,15 @@ app.get('/api/tasks', (req, res) => {
         } else if (workerId) {
             ids = ids.filter(id => hcaptchaPending[id].assignedTo === workerId);
         }
+    }
+
+    // 🔍 ID ya prompt text par filter — poore trained/pending set par
+    if (search) {
+        ids = ids.filter(id => {
+            if (id.toLowerCase().includes(search)) return true;
+            let p = (source[id] && source[id].prompt ? source[id].prompt : '').toLowerCase();
+            return p.includes(search);
+        });
     }
 
     if (tab === 'trained') ids = ids.reverse();
