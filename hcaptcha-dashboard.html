@@ -107,6 +107,8 @@
         .btn-save { background: #00ff88; color: #000; }
         .btn-reset { background: #444; }
         .btn-del { background: #ff4444; flex: 0.3; }
+        .btn-skip { background: #c0392b; color: #fff; }
+        .btn-skip:hover { background: #e74c3c; }
         .btn-retrain { background: #ff8800; color: #000; }
         .btn-confirm { background: #00ff88; color: #000; }
         .btn-cancel { background: #555; }
@@ -2081,6 +2083,17 @@ async function predictWithAI(task) {
         if (autoSaveEnabled) {
             sendToServerNoTrain(task.id, card);  // card=null OK
         }
+    } else if (predictedClicks.length === 0 && autoSaveEnabled) {
+        // 🤖 AI ne is concept ko jaana (knnCpuDataset[pText] mojood tha) par
+        // is grid ki kisi image pe confident match nahi mila → matlab yahan
+        // kuch match nahi karta → automatically Skip/Next (bina select kiye).
+        let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
+        if (card) {
+            card.classList.add('ai-processing');
+            let btn = card.querySelector('.btn-skip');
+            if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Auto Skip (No Match)'; }
+        }
+        skipTask(task.id, null, card);  // card=null OK, tab-agnostic
     }
 }
 
@@ -2233,6 +2246,7 @@ function buildCard(t, isTrained = false) {
             <div class="actions">
                 <button class="btn btn-save" data-action="save">Save & Train</button>
                 <button class="btn btn-reset" data-action="reset">Clear</button>
+                <button class="btn btn-skip" data-action="skip" title="Koi image match nahi — seedha Next/Verify">⏭ Skip</button>
                 <button class="btn btn-del" data-action="del">❌</button>
             </div>` : `
             <div class="actions" id="act-${t.id}">
@@ -2402,6 +2416,10 @@ document.body.addEventListener('click', (e) => {
             sendToServer(tid, actionBtn, card);
             return;
         }
+        if (act === 'skip') {
+            skipTask(tid, actionBtn, card);
+            return;
+        }
         if (act === 'reset') {
             t.clicks = [];
             card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick', 'retrain-pick'));
@@ -2441,6 +2459,23 @@ document.body.addEventListener('click', (e) => {
 
 function deleteTrained(taskId) {
     fetch(`${SERVER_URL}/api/delete-hcaptcha/${taskId}`, { method: 'DELETE' }).then(() => fetchTasks());
+}
+
+// ⏭ SKIP: koi image match nahi — server ko clicks:[] + skip:true bhejo.
+// Kuch train nahi hota; server extension ko { action:'solve', clicks:[] } relay
+// karega → extension kolotibablo pe seedha Next/Verify daba dega.
+function skipTask(taskId, btnEl, card) {
+    if (btnEl) { btnEl.textContent = '⏭ Skipping...'; btnEl.style.pointerEvents = 'none'; }
+    fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ taskId, clicks: [], skip: true, workerId: workerName })
+    }).catch(()=>{});
+    _addToGhostBlocker(taskId);
+    if (card) card.remove();
+    delete activeTasksStore[taskId];
+    sessionStorage.removeItem('hcm_task_' + taskId);
+    updateCountsDisplay();
 }
 
 function sendToServerNoTrain(taskId, card) {
