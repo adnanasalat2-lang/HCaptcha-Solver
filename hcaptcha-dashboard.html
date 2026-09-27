@@ -2088,19 +2088,30 @@ async function predictWithAI(task) {
         if (autoSaveEnabled) {
             sendToServerNoTrain(task.id, card);  // card=null OK
         }
-    } else if (predictedClicks.length === 0 && autoSaveEnabled) {
-        // 🤖 AI ne is concept ko jaana (knnCpuDataset[pText] mojood tha) par
-        // is grid ki kisi image pe confident match nahi mila → matlab yahan
-        // kuch match nahi karta → AI khud "Next / No Match" box select karke skip.
+    } else if (predictedClicks.length === 0) {
+        // 🤖 AI ne concept jaana (knnCpuDataset[pText] mojood tha) par is grid ki
+        // kisi image pe confident match nahi mila → matlab "No Match".
+        //  • Auto Train ON  → Next box ko SUGGESTION ke tor pe highlight karo
+        //  • Auto Save ON   → khud skip kar do
+        //  • Auto Save OFF  → sirf suggest; tum Save & Train dabao ge to skip+train hoga
+        // Training sirf tumhare Save & Train pe hoti hai — har task pe khud nahi.
+        task.skipSelected = true;   // Save & Train ko batao ke ye no-match hai
         let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
         if (card) {
             card.classList.add('ai-processing');
-            let nb = card.querySelector('.next-box');   // 10th box highlight
-            if (nb) { nb.classList.add('ai-pick'); }
-            let btn = card.querySelector('.btn-skip');
-            if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Auto Skip (No Match)'; }
+            card.querySelectorAll('.g-img').forEach(im => im.classList.remove('ai-pick', 'selected'));
+            let nb = card.querySelector('.next-box');   // 10th box highlight (AI ki pick)
+            if (nb) nb.classList.add('ai-pick');
+            let btn = card.querySelector('.btn-save');
+            if (btn) {
+                btn.style.background = autoSaveEnabled ? '#ff00ff' : '#7700cc';
+                btn.textContent = autoSaveEnabled ? '🤖 Auto Skip' : '🤖 AI: No Match';
+            }
         }
-        skipTask(task.id, null, card);  // card=null OK, tab-agnostic
+        // Auto-commit sirf Auto Save ON pe; warna human confirm karega
+        if (autoSaveEnabled) {
+            skipTask(task.id, null, card);  // card=null OK, tab-agnostic
+        }
     }
 }
 
