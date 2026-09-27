@@ -3,11 +3,36 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="referrer" content="no-referrer">
+    <meta name="referrer" content="unsafe-url">
     <title>hCaptcha Master Pro — Live Stream</title>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"></script>
+    <!-- ── LOGIN BLINK FIX ──
+         Har task card ka iframe yahi poora page load karta hai. Pehle iframe
+         mein TensorFlow ki 3 bhaari scripts load hoti, phir login screen ka HTML
+         render hota, aur task sab se aakhir mein banta → har naye task pe login
+         screen ki jhalak. Ab: (1) task iframe mein TensorFlow load hi nahi hota
+         (wahan use nahi hota), (2) task banne tak iframe mein sirf safed dikhe,
+         (3) main page pe saved login ho to login screen shuru se chhupi rahe. -->
+    <script>
+    (function () {
+        var isFrame = /[?&]task_frame=1(&|$)/.test(location.search);
+        var hasLogin = false;
+        try { hasLogin = !!(localStorage.getItem('hcm_worker_name') && localStorage.getItem('hcm_worker_mode')); } catch (e) {}
+        if (isFrame) document.documentElement.classList.add('hcm-task-frame');
+        else if (hasLogin) document.documentElement.classList.add('hcm-auto-login');
+        if (!isFrame) {
+            document.write(
+                '<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"><\/script>' +
+                '<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1/dist/mobilenet.min.js"><\/script>' +
+                '<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/knn-classifier@1.2.4/dist/knn-classifier.min.js"><\/script>'
+            );
+        }
+    })();
+    </script>
+    <style>
+        html.hcm-task-frame, html.hcm-task-frame body { background: #ffffff !important; }
+        html.hcm-task-frame body > * { visibility: hidden !important; }
+        html.hcm-auto-login #loginOverlay { display: none !important; }
+    </style>
     <style>
         * { box-sizing: border-box; }
         body { background-color: #0c0c0c; color: #ffffff; font-family: Arial, sans-serif; margin: 0; padding: 12px; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
@@ -33,18 +58,37 @@
         .col-title-ai { color: #00ff88; font-size: 14px; }
         .col-title-manual { color: #ff9900; font-size: 14px; }
         .stream-count { background: #000; padding: 2px 6px; border-radius: 8px; font-size: 11px; color: #fff; }
-        .task-list { flex: 1; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+        /* ── GRID LAYOUT: tasks ab horizontal grid mein flow karti hain,
+           dashboard ke size ke hisaab se jitni fit ho jayen. Ek line mein
+           multiple tasks aa jayengi (space milte hi). auto-fill + minmax
+           browser ko decide karne deta hai — chhoti screen pe kam per row,
+           badi screen pe zyada per row.
+           minmax(400px, 1fr) = har task minimum 400px chahiye (iframe fit
+           hone ke liye), warna space ke hisaab se stretch ho jaye. */
+        /* Grid cells iframe ki asli width (~420px) ke barabar rakhi hain
+           taake iframe kabhi cut na ho — canvas responsive banane se
+           Sonic ka click coordinate calc toot jata hai. */
+        .task-list { flex: 1; overflow-y: auto; padding: 10px; display: grid; grid-template-columns: repeat(auto-fill, minmax(420px, 1fr)); gap: 10px; align-content: start; }
+        /* Trained container ke liye bhi grid layout */
+        .trained-container { display: grid !important; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 12px; align-content: start; }
         .task-card { background: #1c1c1c; border: 1px solid #333; border-radius: 6px; padding: 10px; transition: transform 0.2s, border 0.2s; }
         .focused-task { border: 2px solid #00ff88 !important; background: #1c261f !important; box-shadow: 0 0 15px rgba(0, 255, 136, 0.2); transform: scale(1.01); z-index: 10; }
+        /* In-training: jab worker task pe click/drag kar raha ho — bright orange
+           highlight taake naye tasks aane pe bhi worker ko pata rahe wo kis task
+           pe kaam kar raha. Auto-remove hota jab task solved/deleted ho. */
+        .task-card.in-training { border: 3px solid #ffaa00 !important; background: #2a1a05 !important; box-shadow: 0 0 20px rgba(255, 170, 0, 0.4); position: relative; z-index: 15; }
+        .task-card.in-training::before { content: "🔧 Training in progress"; position: absolute; top: -12px; left: 8px; background: #ffaa00; color: #000; font-size: 10px; font-weight: bold; padding: 2px 8px; border-radius: 3px; letter-spacing: 0.3px; z-index: 20; pointer-events: none; }
         .task-card.ai-processing { border-color: #ff00ff; box-shadow: 0 0 8px rgba(255,0,255,0.3); }
         .task-card.in-retrain { border: 2px solid #ff8800 !important; background: #221405 !important; }
         .task-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
         .task-id { color: #ff4444; font-family: monospace; font-size: 13px; font-weight: bold; }
-        .prompt-container { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; background: #222; padding: 5px; border-radius: 4px; border: 1px solid #333; }
-        .example-wrap { flex-shrink: 0; width: 42px; height: 42px; }
-        .example-img { width: 42px; height: 42px; object-fit: cover; border-radius: 3px; border: 1px solid #555; }
-        .example-img-placeholder { width: 42px; height: 42px; border-radius: 3px; background: #2a2a2a; border: 1px dashed #555; display: flex; align-items: center; justify-content: center; font-size: 16px; }
+        
+        .prompt-container { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; background: #222; padding: 6px 10px; border-radius: 4px; border: 1px solid #333; }
+        .example-wrap { flex-shrink: 0; width: 44px; height: 44px; }
+        .example-img { width: 44px; height: 44px; object-fit: cover; border-radius: 3px; border: 1px solid #555; }
+        .example-img-placeholder { width: 44px; height: 44px; border-radius: 3px; background: #2a2a2a; border: 1px dashed #555; display: flex; align-items: center; justify-content: center; font-size: 16px; }
         .task-prompt { color: #fff; font-size: 12px; font-weight: bold; line-height: 1.3; }
+
         .img-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
         .img-grid-cell { position: relative; width: 100%; height: 105px; }
         .img-grid-cell img { width: 100%; height: 105px; object-fit: cover; cursor: pointer; border: 3px solid transparent; background: #222; border-radius: 3px; display: block; }
@@ -54,24 +98,20 @@
         .img-grid-cell img.img-broken { opacity: 0.15; cursor: not-allowed; }
         .img-broken-badge { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #1a0a0a; border: 1px dashed #552222; border-radius: 3px; font-size: 10px; color: #884444; pointer-events: none; gap: 3px; text-align: center; padding: 4px; }
         .img-broken-badge span { font-size: 16px; }
-        .single-box { position: relative; width: 100%; cursor: crosshair; display: flex; justify-content: center; align-items: center; background: #000; border-radius: 4px; border: 1px solid #444; overflow: hidden; }
-        .single-box img { width: 100%; height: auto; min-height: 380px; max-height: 480px; object-fit: contain; display: block; user-select: none; }
-        .dot { position: absolute; width: 16px; height: 16px; background: #00ff88; border: 2px solid #000; border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none; z-index: 10; }
-        .dot.retrain-dot { background: #ff8800; }
+
         .trained-error-notice { font-size: 11px; color: #886633; background: #221a00; border: 1px dashed #554400; border-radius: 4px; padding: 4px 8px; margin-bottom: 6px; display: none; text-align: center; }
         .trained-error-notice.visible { display: block; }
-        .retrain-disabled-note { font-size: 10px; color: #886633; text-align: center; padding: 3px 0; }
+        
         .actions { display: flex; gap: 6px; margin-top: 8px; }
-        .btn { flex: 1; padding: 8px; border: none; font-weight: bold; cursor: pointer; color: #fff; font-size: 12px; border-radius: 4px; }
+        .btn { flex: 1; padding: 9px; border: none; font-weight: bold; cursor: pointer; color: #fff; font-size: 12px; border-radius: 4px; text-align: center; user-select: none; }
         .btn-save { background: #00ff88; color: #000; }
         .btn-reset { background: #444; }
         .btn-del { background: #ff4444; flex: 0.3; }
         .btn-retrain { background: #ff8800; color: #000; }
-        .btn-skip { background: #c0392b; color: #fff; }
-        .btn-skip:hover { background: #e74c3c; }
         .btn-confirm { background: #00ff88; color: #000; }
         .btn-cancel { background: #555; }
         .btn-warn { background: #ff2222 !important; color: #fff !important; }
+        
         #trainedView { display: none; flex: 1; flex-direction: column; background: #141414; border: 1px solid #262626; border-radius: 6px; overflow: hidden; margin-top: 10px; }
         .trained-container { flex: 1; overflow-y: auto; padding: 15px; display: flex; flex-wrap: wrap; gap: 12px; }
         .retrain-banner { font-size: 11px; color: #ff8800; margin-bottom: 6px; padding: 5px; background: #331c00; border-radius: 3px; border: 1px dashed #ff8800; font-weight: bold; text-align: center; }
@@ -103,20 +143,48 @@
         <h1>hCaptcha Master Pro</h1>
         <div class="tabs">
             <button class="tab-btn active" id="btn-pending" onclick="setTab('pending')">Pending <span class="count-badge" id="c-pending">0</span></button>
-            <button class="tab-btn" id="btn-trained" onclick="setTab('trained')">Trained <span class="count-badge" id="c-trained">0</span></button>
+            <button class="tab-btn" id="btn-trained" onclick="setTab('trained')" title="Trained: total (🤖 grid dashboard · 👷 coord/manual dashboard)">
+                Trained <span class="count-badge" id="c-trained">0</span>
+                <span style="font-size:10px;color:#888;margin-left:4px;">
+                    (<span id="c-trained-grid" style="color:#00ff88;">0</span>·<span id="c-trained-coord" style="color:#ffbb44;">0</span>)
+                </span>
+            </button>
         </div>
     </div>
     <div class="ai-bar">
         <span class="live-status" id="wsStatus">🔴 Offline</span>
+        <span id="myWorkerBadge" style="font-size:11px;color:#00ff88;font-weight:bold;background:#001a0a;border:1px solid #00ff88;padding:3px 8px;border-radius:4px;">👤 —</span>
         <span class="sync-status" id="syncStatus">🧠 AI Ready</span>
         <span id="trainCountBadge" style="font-size:11px;color:#00ff88;font-weight:bold;background:#001a0a;border:1px solid #00ff88;padding:3px 8px;border-radius:4px;">📚 0 Trained</span>
+        <button id="btnWorkers" class="btn-toggle" onclick="toggleWorkersPanel()">👥 <span id="onlineCount">0</span> Online</button>
         <button id="btnAutoTrain" class="btn-toggle on" onclick="toggleAutoTrain()">🧠 Auto Train: ON</button>
         <button id="btnAutoSave" class="btn-toggle on" onclick="toggleAutoSave()">💾 Auto Save: ON</button>
+        <button id="btnSkipList" class="btn-toggle" onclick="toggleSkipListPanel()" style="background:#331111;color:#ff8866;border-color:#552222;">🚫 AI Skip: <span id="skipListCount">0</span></button>
         <button class="btn-clear-ai" onclick="resetAIBrain()">🧹 Reset Brain</button>
+        <button class="btn-clear-ai" onclick="doLogout()" style="background:#332211;color:#ffaa55;border-color:#775522;">🚪 Logout</button>
         <div class="search-box">
             <input type="text" id="searchInput" oninput="filterTasks()" placeholder="🔍 Task ID..."/>
         </div>
     </div>
+</div>
+
+<div id="workersPanel" style="display:none;position:absolute;top:60px;right:16px;z-index:5000;background:#141414;border:1px solid #00ff88;border-radius:8px;padding:12px 14px;min-width:240px;box-shadow:0 8px 24px rgba(0,0,0,0.7);">
+    <div style="color:#00ff88;font-weight:bold;font-size:13px;margin-bottom:8px;border-bottom:1px solid #333;padding-bottom:6px;">👥 Online Workers</div>
+    <div id="workersList" style="display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto;"></div>
+</div>
+
+<div id="skipListPanel" style="display:none;position:absolute;top:60px;right:16px;z-index:5000;background:#141414;border:1px solid #ff8866;border-radius:8px;padding:12px 14px;min-width:380px;max-width:500px;box-shadow:0 8px 24px rgba(0,0,0,0.7);">
+    <div style="color:#ff8866;font-weight:bold;font-size:13px;margin-bottom:6px;border-bottom:1px solid #333;padding-bottom:6px;">🚫 AI Skip List (Poora Prompt)</div>
+    <div style="color:#888;font-size:11px;margin-bottom:8px;line-height:1.4;">
+        Task ka <b>poora prompt</b> yahaan add karo. Jab bhi wo <b>exact wahi prompt</b> aayega, Sonic/NopeCHA usay <b>hCaptcha samjhega hi nahi</b> — sirf manual worker solve karega.<br>
+        Case-insensitive, extra spaces ignore honge.<br>
+        Example: <code style="color:#ff8866;font-size:10px">Click the animal that jumps the highest</code>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:8px;">
+        <textarea id="skipInput" placeholder="Task ka poora prompt paste karo…" rows="2" style="flex:1;padding:6px 8px;background:#222;border:1px solid #444;color:#fff;border-radius:4px;font-size:12px;outline:none;resize:vertical;font-family:inherit;"></textarea>
+        <button onclick="addSkipPrompt()" style="background:#ff8866;color:#000;border:none;padding:6px 12px;border-radius:4px;font-weight:bold;cursor:pointer;font-size:12px;align-self:stretch;">➕ Add</button>
+    </div>
+    <div id="skipList" style="display:flex;flex-direction:column;gap:4px;max-height:320px;overflow-y:auto;"></div>
 </div>
 
 <div class="workspace-split" id="pendingView">
@@ -129,7 +197,7 @@
     </div>
     <div class="column" id="colManual">
         <div class="column-header">
-            <span class="col-title-manual">👷 Manual Worker Stream (Videos / Coordinates)</span>
+            <span class="col-title-manual">👷 Manual Worker Stream (Parallel Real Frames)</span>
             <span class="stream-count" id="c-manual">0 Tasks</span>
         </div>
         <div class="task-list" id="manualArea"></div>
@@ -148,6 +216,792 @@
 </div>
 
 <script>
+// ══════════════════════════════════════════════════════════════════════
+// ── BACKGROUND-TAB ANTI-THROTTLE (v2 — Web Worker based) ──
+// Chrome background tabs mein: setTimeout 1min minimum, rAF paused,
+// canvas rendering paused. Silent audio pe Chrome autoplay policy block
+// kar sakta agar user ne site pe interact nahi kiya — isliye woh method
+// reliable nahi tha.
+//
+// v2 approach — Web Worker: workers Chrome mein background tab ke bawajood
+// throttle NAHI hote. Worker se setInterval chala ke main thread ko
+// postMessage se wake karo. Ye guaranteed kaam karega.
+//
+// Layers:
+//   1. document.hidden = "visible" (sites khud pause na karain)
+//   2. rAF → setTimeout wrapper (canvas render continue)
+//   3. Silent audio (best-effort — jab kaam kare, tab aur bhi tez)
+//   4. Web Worker timer — GUARANTEED background operation
+// ══════════════════════════════════════════════════════════════════════
+(function _antiThrottle() {
+    // ── 1 & 2: visibility + rAF patches ──
+    try {
+        Object.defineProperty(document, 'hidden', { get: () => false, configurable: true });
+        Object.defineProperty(document, 'visibilityState', { get: () => 'visible', configurable: true });
+        const _origAdd = document.addEventListener.bind(document);
+        document.addEventListener = function (type, listener, options) {
+            if (type === 'visibilitychange') return;
+            return _origAdd(type, listener, options);
+        };
+        window.addEventListener('visibilitychange', (e) => { e.stopImmediatePropagation(); }, true);
+    } catch (e) {}
+    try {
+        const _rafMap = new Map();
+        let _rafId = 0;
+        window.requestAnimationFrame = function (cb) {
+            const id = ++_rafId;
+            const t = setTimeout(() => { _rafMap.delete(id); try { cb(performance.now()); } catch (_) {} }, 16);
+            _rafMap.set(id, t);
+            return id;
+        };
+        window.cancelAnimationFrame = function (id) {
+            const t = _rafMap.get(id); if (t) { clearTimeout(t); _rafMap.delete(id); }
+        };
+    } catch (e) {}
+
+    // ── 3: Silent audio (best-effort) ──
+    try {
+        const _startAudio = () => {
+            try {
+                if (window._hcmAntiThrottleAudio) return;
+                const audio = new Audio('data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjQ1LjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAACAAAEAAA1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTU1NTVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVAAAAAExhdmM1OC45MQAAAAAAAAAAAAAAACQCgAAAAAAAAAgQaOc21QAAAAAAAAAAAAAAAAAAAAD/85DEABKQKlwHRHgAqqqqqqqqqqqoAAAAABLcNCwuFwsFgsLBYLBYLBYLB//OEZP0AAAJoAAAAAAAAAAAAAAAABLcNCwuFwsFgsLBYLBYLBYLB//OEZP0AAAJoAAAAAAAAAAAAAAAA');
+                audio.loop = true;
+                audio.volume = 0.001;
+                const p = audio.play();
+                if (p && p.catch) p.catch(() => {});
+                window._hcmAntiThrottleAudio = audio;
+            } catch (_) {}
+        };
+        _startAudio();
+        const _once = () => {
+            _startAudio();
+            document.removeEventListener('click', _once, true);
+            document.removeEventListener('keydown', _once, true);
+        };
+        document.addEventListener('click', _once, true);
+        document.addEventListener('keydown', _once, true);
+    } catch (e) {}
+
+    // ── 4: Web Worker timer — GUARANTEED background timers ──
+    // Workers throttled nahi hote. Worker se setInterval chala ke main
+    // thread ko postMessage se wake karo. Setinterval/setTimeout ko
+    // hijack karke worker route pe daal do — automatic protection.
+    try {
+        const workerCode = `
+            const timers = new Map();
+            self.onmessage = (e) => {
+                const d = e.data;
+                if (d.type === 'setInterval') {
+                    const tid = setInterval(() => self.postMessage({ type: 'tick', id: d.id }), d.ms);
+                    timers.set(d.id, tid);
+                } else if (d.type === 'setTimeout') {
+                    const tid = setTimeout(() => { timers.delete(d.id); self.postMessage({ type: 'tick', id: d.id, once: true }); }, d.ms);
+                    timers.set(d.id, tid);
+                } else if (d.type === 'clear') {
+                    const tid = timers.get(d.id);
+                    if (tid) { clearInterval(tid); clearTimeout(tid); timers.delete(d.id); }
+                }
+            };
+        `;
+        const blob = new Blob([workerCode], { type: 'text/javascript' });
+        const worker = new Worker(URL.createObjectURL(blob));
+        const _cbMap = new Map();
+        let _cbId = 0;
+
+        worker.onmessage = (e) => {
+            const cb = _cbMap.get(e.data.id);
+            if (!cb) return;
+            if (e.data.once) _cbMap.delete(e.data.id);
+            try { cb(); } catch (_) {}
+        };
+
+        // ── HIJACK setInterval + setTimeout ──
+        // Sab non-zero durations worker route pe daal do (10ms threshold).
+        // 10ms se kam wale native rehte hain (worker roundtrip unke liye
+        // heavy hai) — lekin Chrome throttling minimum bhi 4ms hai native,
+        // to short delays affect nahi hote.
+        // Ye AGGRESSIVE routing hai — TensorFlow.js jaise libs bhi jab
+        // internally setTimeout use karti hain to unke bhi timers worker
+        // pe jayenge = background mein guaranteed operation.
+        const _origSetInterval = window.setInterval.bind(window);
+        const _origClearInterval = window.clearInterval.bind(window);
+        const _origSetTimeout = window.setTimeout.bind(window);
+        const _origClearTimeout = window.clearTimeout.bind(window);
+        const WORKER_MIN_MS = 10;
+
+        window.setInterval = function (cb, ms, ...args) {
+            if (typeof cb !== 'function' || !ms || ms < WORKER_MIN_MS) {
+                return _origSetInterval(cb, ms, ...args);
+            }
+            const id = ++_cbId;
+            _cbMap.set(id, args.length ? () => cb(...args) : cb);
+            worker.postMessage({ type: 'setInterval', id, ms });
+            return -id;
+        };
+        window.clearInterval = function (id) {
+            if (typeof id === 'number' && id < 0) {
+                const wid = -id;
+                _cbMap.delete(wid);
+                worker.postMessage({ type: 'clear', id: wid });
+            } else {
+                _origClearInterval(id);
+            }
+        };
+        window.setTimeout = function (cb, ms, ...args) {
+            if (typeof cb !== 'function' || !ms || ms < WORKER_MIN_MS) {
+                return _origSetTimeout(cb, ms, ...args);
+            }
+            const id = ++_cbId;
+            _cbMap.set(id, args.length ? () => cb(...args) : cb);
+            worker.postMessage({ type: 'setTimeout', id, ms });
+            return -id;
+        };
+        window.clearTimeout = function (id) {
+            if (typeof id === 'number' && id < 0) {
+                const wid = -id;
+                _cbMap.delete(wid);
+                worker.postMessage({ type: 'clear', id: wid });
+            } else {
+                _origClearTimeout(id);
+            }
+        };
+        window._hcmWorkerTimersActive = true;
+    } catch (e) {
+        // Worker creation failure — visibility patch se hi kaam chalega
+    }
+})();
+
+const urlParams = new URLSearchParams(window.location.search);
+const isTaskFrame = urlParams.get('task_frame') === '1';
+const frameTaskId = urlParams.get('taskId');
+
+function replayRawXhrToNopecha(rawJson, b64Image) {
+    if (!rawJson) return;
+    let finalJson = rawJson;
+    try {
+        if (b64Image && b64Image.startsWith('data:')) {
+            const parsed = JSON.parse(rawJson);
+            if (parsed.tasklist && Array.isArray(parsed.tasklist)) {
+                parsed.tasklist.forEach(item => {
+                    item.datapoint_uri = b64Image;
+                });
+                finalJson = JSON.stringify(parsed);
+            }
+        }
+    } catch (_) {}
+
+    const msg = {
+        source: "3149371273",
+        payload: {
+            k: "xhr",
+            url: "https://hcaptcha.com/checkcaptcha/getcaptcha",
+            body: finalJson,
+            timestamp: Date.now(),
+        },
+    };
+    try { window.postMessage(msg, "*"); } catch (_) {}
+    try {
+        document.querySelectorAll('iframe').forEach(f => {
+            try { f.contentWindow.postMessage(msg, '*'); } catch (_) {}
+        });
+    } catch (_) {}
+}
+
+if (isTaskFrame) {
+    // ── Poori dashboard CSS ko override karo — body/html ka background
+    // kaala tha (dashboard theme), jo iframe mein bhi inherit ho raha
+    // tha aur "kaala gap" bana raha tha. Ab force safed karte hain.
+    const styleOverride = document.createElement('style');
+    styleOverride.textContent = `
+        html, body { background: #ffffff !important; margin: 0 !important; padding: 0 !important; height: auto !important; min-height: 0 !important; overflow: hidden !important; }
+        body * { box-sizing: border-box; }
+        /* AI-blocked task visual indicator */
+        .challenge-header.hcm-ai-blocked { background: #cc4444 !important; }
+        .hcm-ai-blocked h2 { text-decoration: line-through; opacity: 0.75; }
+    `;
+    document.head.appendChild(styleOverride);
+
+    document.body.innerHTML = '<div id="frameMount" style="width:100%;margin:0;padding:0;display:block;background:#ffffff;"></div>';
+    document.body.classList.add('no-selection');
+    // Dashboard ka HTML hat gaya — ab chhupana band (Sonic/NopeCHA ke elements bhi dikhen)
+    document.documentElement.classList.remove('hcm-task-frame');
+
+    // Skip list state (upar declare karo, taake initial localStorage load
+    // se pehle available ho)
+    let _iframeSkipList = [];
+    let _currentPromptText = '';
+
+    // Iframe boot pe skip list localStorage se padho (parent same origin hai)
+    try {
+        const savedSkip = localStorage.getItem('hcm_ai_skip_prompts');
+        if (savedSkip) _iframeSkipList = JSON.parse(savedSkip);
+    } catch(e) {}
+
+    let rawTask = sessionStorage.getItem('hcm_task_' + frameTaskId);
+    if (rawTask) {
+        try { renderChallengeInFrame(JSON.parse(rawTask)); } catch(e) {}
+    } else {
+        window.parent.postMessage({ type: 'hcm_get_task', taskId: frameTaskId }, '*');
+    }
+
+    window.addEventListener('message', function(ev) {
+        if (!ev.data) return;
+        if (ev.data.type === 'hcm_task_response' && ev.data.taskId === frameTaskId) {
+            // Skip list save karo (agar parent ne bheji ho)
+            if (Array.isArray(ev.data.skipList)) {
+                _iframeSkipList = ev.data.skipList;
+            }
+            renderChallengeInFrame(ev.data.task);
+        }
+        // Live update: parent me skip list badli hai
+        if (ev.data.type === 'hcm_skip_list_update') {
+            _iframeSkipList = Array.isArray(ev.data.skipList) ? ev.data.skipList : [];
+            _applyAiBlockState();
+        }
+        if (ev.data.type === 'hcm_live_raw_xhr' && ev.data.taskId === frameTaskId) {
+            const currentT = JSON.parse(sessionStorage.getItem('hcm_task_' + frameTaskId) || '{}');
+            const b64 = (currentT.media && currentT.media[0]) ? (currentT.media[0].thumb || currentT.media[0].src) : '';
+            replayRawXhrToNopecha(ev.data.rawXhrJson, b64);
+        }
+        // ── LIVE FRAME START: naye stream ke liye buffer khoool do,
+        // koi purana loop timer band karo
+        if (ev.data.type === 'hcm_live_frame_start' && ev.data.taskId === frameTaskId) {
+            if (typeof window.__hcmStartLive === 'function') {
+                window.__hcmStartLive();
+            }
+        }
+        // ── LIVE FRAME (single): har frame turant canvas pe draw karo,
+        // saath saath collect bhi karo taake end pe loop mein play sake
+        if (ev.data.type === 'hcm_live_frame_one' && ev.data.taskId === frameTaskId) {
+            if (typeof window.__hcmAddLiveFrame === 'function') {
+                window.__hcmAddLiveFrame(ev.data.frame, ev.data.index);
+            }
+        }
+        // ── LIVE FRAME END: collected frames ko loop mein play karo
+        if (ev.data.type === 'hcm_live_frame_end' && ev.data.taskId === frameTaskId) {
+            if (typeof window.__hcmEndLive === 'function') {
+                window.__hcmEndLive();
+            }
+        }
+    });
+
+    // (Skip list state upar declare ho chuki hai — yahan sirf helper functions)
+
+    function _normPromptIframe(s) {
+        return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    }
+
+    function _isCurrentPromptBlocked() {
+        if (!_currentPromptText || _iframeSkipList.length === 0) return false;
+        const n = _normPromptIframe(_currentPromptText);
+        return _iframeSkipList.some(p => _normPromptIframe(p) === n);
+    }
+
+    // AI markers ko hide/show karo based on skip status
+    function _applyAiBlockState() {
+        const blocked = _isCurrentPromptBlocked();
+        // Sonic ke detection markers
+        const bbox = document.querySelector('.bounding-box-example');
+        const header = document.querySelector('.challenge-header');
+        const promptH2 = document.querySelector('h2.prompt-text');
+        if (blocked) {
+            // Sonic/NopeCHA ko yeh hCaptcha nahi lagega — markers hide
+            if (bbox) bbox.setAttribute('data-hcm-blocked', '1');
+            if (header) header.classList.add('hcm-ai-blocked');
+            if (promptH2) {
+                promptH2.classList.add('hcm-ai-blocked');
+                // Class rename so h2.prompt-text selector match na kare
+                promptH2.classList.remove('prompt-text');
+                promptH2.classList.add('prompt-text-blocked');
+            }
+            // Manual worker ko show karo yeh AI-skipped hai
+            _showAiBlockedBanner(true);
+        } else {
+            // Wapas normal — Sonic/NopeCHA phir se detect kar sakein
+            if (bbox) bbox.removeAttribute('data-hcm-blocked');
+            if (header) header.classList.remove('hcm-ai-blocked');
+            if (promptH2) {
+                promptH2.classList.remove('hcm-ai-blocked');
+                if (!promptH2.classList.contains('prompt-text')) {
+                    promptH2.classList.add('prompt-text');
+                }
+                promptH2.classList.remove('prompt-text-blocked');
+            }
+            _showAiBlockedBanner(false);
+        }
+    }
+
+    function _showAiBlockedBanner(show) {
+        let banner = document.getElementById('hcm-ai-blocked-banner');
+        if (show) {
+            if (!banner) {
+                banner = document.createElement('div');
+                banner.id = 'hcm-ai-blocked-banner';
+                banner.style.cssText = 'position:absolute;top:0;right:0;background:#ff8866;color:#000;padding:2px 8px;font-size:10px;font-weight:bold;border-radius:0 0 0 4px;z-index:200;pointer-events:none;';
+                banner.textContent = '🚫 AI Blocked — Manual Only';
+                const wrapper = document.querySelector('.interface-wrapper');
+                if (wrapper) {
+                    wrapper.style.position = 'relative';
+                    wrapper.appendChild(banner);
+                }
+            }
+        } else {
+            if (banner) banner.remove();
+        }
+    }
+
+
+    function renderChallengeInFrame(t) {
+        _currentPromptText = ((t && t.prompt) || '').split('|||')[0];
+        _renderCanvasChallenge(t);
+        // Ab live frames lene ko tayyar — parent ko batao (pehle frames
+        // iframe load hone se pehle bhej diye jaate aur gum ho jaate the)
+        try { window.parent.postMessage({ type: 'hcm_frame_ready', taskId: frameTaskId }, '*'); } catch (e) {}
+        // Render ke baad AI block state apply karo
+        setTimeout(_applyAiBlockState, 50);
+    }
+
+    function _renderCanvasChallenge(t) {
+        const [promptText, exampleUrl] = (t.prompt || '').split('|||');
+        const m = (t.media && t.media.length > 0) ? t.media[0] : {};
+        let isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
+        let src = isVid ? m.frames[0] : ((m.thumb && m.thumb.startsWith('data:')) ? m.thumb : (m.src || m.thumb || ''));
+
+        // ── DYNAMIC EXACT DIMENSIONS INJECTED FROM REAL CLIENT SITE ──
+        // Real hCaptcha widget production sizes:
+        //   wrapper: ~400px wide, canvas: 320×320 (CSS), internal: 1000×940
+        //   header: ~55px, footer: ~48px → total wrapper height ~423px
+        // Chhoti canvas (260×260) se do masle hote thy:
+        //   1) task visually chhoti dikhti thi
+        //   2) CaptchaSonic ka ML low-res canvas pe click positions
+        //      thora shift kar deta tha
+        const d = t.dimensions || {};
+        const wrapW = d.wrapW || 400;
+        // headH real site se aata hai — 2-line prompt pe 70+ ho sakta hai
+        const headH = d.headH || 70;
+        const canvasW = d.canvasW || 320;
+        const canvasH = d.canvasH || 320;
+        const iW = d.canvasInternalW || 1000;
+        const iH = d.canvasInternalH || 940;
+        const submitW = d.submitW || 83;
+        const submitH = d.submitH || 38;
+
+        // FIX: XSS defense — url string mein quote escape karo (CSS attribute breakout)
+        const exHtml = exampleUrl ? `<div class="challenge-example" style="width:44px;height:44px;flex-shrink:0;"><div class="image" style="width:100%;height:100%;background-image:url('${esc(exampleUrl)}');background-size:cover;border-radius:4px;border:1px solid #fff;"></div></div>` : '';
+
+        const mount = document.getElementById('frameMount');
+        if (!mount) return;
+
+        mount.innerHTML = `
+        <div class="interface-wrapper" style="width:${wrapW}px;margin:2px auto;background:#ffffff;border-radius:4px;box-shadow:0 4px 18px rgba(0,0,0,0.35);overflow:hidden;box-sizing:border-box;">
+            <div class="challenge-container" aria-label="hCaptcha challenge" data-cy="challenge-frame" style="width:100%;display:flex;flex-direction:column;margin:0;padding:0;">
+                <div class="display-error" aria-hidden="true" style="display:none;"></div>
+                <!-- CaptchaSonic ke task-type detection ke liye — dynamic:
+                     - drag/move/place tasks → hidden (Sonic isBboxDD detect kare)
+                     - click/select tasks → visible marker (Sonic isBbox detect kare) -->
+                <div class="bounding-box-example" style="display:none;" aria-hidden="true"></div>
+                <div class="challenge" style="width:100%;display:flex;flex-direction:column;margin:0;padding:0;">
+                    <!-- Proportional Header -->
+                    <div class="challenge-header" style="width:100%;height:${Math.max(30, headH - 15)}px;background:#00796b;padding:0 14px;box-sizing:border-box;margin:0;display:flex;align-items:center;justify-content:space-between;">
+                        <div class="prompt-wrapper" style="flex:1;padding-right:8px;overflow:hidden;">
+                            <h2 class="prompt-text" style="margin:0;font-size:14px;font-weight:600;color:#ffffff;line-height:1.3;">${esc(promptText) || 'Please complete the challenge'}</h2>
+                        </div>
+                        ${exHtml}
+                    </div>
+                    <!-- View: Renders canvas at exact real-site dimensions and centered -->
+                    <div class="challenge-view" style="width:100%;background:#ffffff;padding:0;margin:0;position:relative;display:flex;justify-content:center;align-items:flex-start;overflow:hidden;">
+                        <canvas class="challenge-canvas" width="${iW}" height="${iH}" style="width:${canvasW}px;height:${canvasH}px;cursor:crosshair;display:block;margin:0 auto;"></canvas>
+                        <!-- ZAROORI: image ki upar wali kaali band (240/940 = ~25.5%) ko
+                             teal overlay se cover karte hain. pointer-events:none, isliye
+                             clicks canvas tak jayengi — coordinate system intact rehta hai. -->
+                        <div style="position:absolute;top:0;left:0;width:100%;height:25.5%;background:#00796b;pointer-events:none;z-index:5;"></div>
+                    </div>
+                </div>
+            </div>
+            <!-- Footer directly touching bottom -->
+            <div class="interface-challenge" style="width:100%;height:48px;display:flex;justify-content:space-between;align-items:center;background:#ffffff;padding:0 14px;border-top:1px solid #eeeeee;margin:0;box-sizing:border-box;">
+                <div style="display:flex;gap:14px;color:#7f8c8d;font-size:17px;cursor:default;">
+                    <span title="Info">ℹ️</span>
+                    <span title="Reload">🔄</span>
+                    <span title="Accessibility">♿</span>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <div class="button-undo" role="button" title="Undo aakhri click" tabindex="0" style="height:${submitH}px;padding:0 12px;display:flex;justify-content:center;align-items:center;background:#555555;color:#fff;font-weight:bold;border-radius:4px;cursor:pointer;font-size:12px;user-select:none;">↶ Undo</div>
+                    <div class="button-submit button code-submit" role="button" title="Submit Answers (ya right-click karo card pe)" aria-label="Submit Answers" aria-disabled="false" tabindex="0" style="width:${submitW}px;height:${submitH}px;display:flex;justify-content:center;align-items:center;background:#00796b;color:#ffffff;font-weight:bold;border-radius:4px;cursor:pointer;font-size:13px;border:none;box-shadow:0 2px 4px rgba(0,0,0,0.15);user-select:none;">
+                        Verify
+                    </div>
+                </div>
+            </div>
+        </div>
+        `;
+
+        window.hcaptcha = {
+            isReady: true,
+            getResponse: function() { return "hcaptcha_mock_token"; },
+            getResp: function() { return "hcaptcha_mock_token"; },
+            render: function() {},
+            reset: function() {}
+        };
+
+        // ── ZAROORI: guess ki hui height pe depend nahi karte — jo ACTUAL
+        // size ban gaya hai (header+canvas+footer sab milaake) wahi parent
+        // ko bata dete hain, taake iframe hamesha bilkul sahi fit ho, koi
+        // kaala gap ya cut-off na aaye.
+        let _lastReportedH = 0;
+        function _reportActualHeight() {
+            const wrapperEl = mount.querySelector('.interface-wrapper');
+            if (!wrapperEl) return;
+            const h = wrapperEl.getBoundingClientRect().height;
+            if (h > 50 && Math.abs(h - _lastReportedH) > 2) {
+                _lastReportedH = h;
+                window.parent.postMessage({ type: 'hcm_frame_height', taskId: frameTaskId, height: Math.ceil(h) }, '*');
+            }
+        }
+        _reportActualHeight();
+        setTimeout(_reportActualHeight, 100);
+        setTimeout(_reportActualHeight, 500);
+        setTimeout(_reportActualHeight, 1000);
+        setTimeout(_reportActualHeight, 2000);
+        // Aur agar future mein wrapper ka size badle (image load hone se ya
+        // kisi bhi wajah se), ResizeObserver turant pata laga ke report kare.
+        try {
+            const wrapperEl = mount.querySelector('.interface-wrapper');
+            if (wrapperEl && window.ResizeObserver) {
+                const ro = new ResizeObserver(() => _reportActualHeight());
+                ro.observe(wrapperEl);
+            }
+        } catch (e) {}
+
+        // ── CaptchaSonic ke task-type detection ke liye:
+        // Prompt padho aur `.bounding-box-example` element ko dynamically
+        // dikhao ya hataao. Sonic ka logic:
+        //   isBbox   = .bounding-box-example EXISTS  → click task
+        //   isBboxDD = .challenge-header + NO bbox   → drag/drop task
+        try {
+            const p = (promptText || '').toLowerCase();
+            const isDrag = /(drag|move|place|fit|put|draw|drop)/.test(p);
+            const bboxEl = mount.querySelector('.bounding-box-example');
+            if (bboxEl && isDrag) bboxEl.remove();
+        } catch (e) {}
+
+        // NOTE: window.location.hash ko override MAT karo — iframe src mein
+        // pehle se sahi hash hai (host, sitekey, frame, id, hcapfake wagera)
+        // jo Sonic aur NopeCHA dono ke liye zaroori hai.
+
+        const canvas = mount.querySelector('canvas.challenge-canvas');
+        const submitBtn = mount.querySelector('.button-submit');
+        let frameClicks = [];
+        let frameDrags  = [];
+        let dragStartPt = null;
+        let dragLastPt  = null; // NopeCHA drag: last mousemove position track karo
+        let lastCapturedTime = 0;
+
+        // ── Reusable helper: image draw karke uske upar kaali band ko
+        // real site jaisa light gray se cover karta hai. NopeCHA canvas
+        // ── ZAROORI PERFORMANCE FIX:
+        // Sonic canvas se bahut zyada getImageData karta hai. Default
+        // canvas GPU-backed hoti hai — har getImageData mein GPU→CPU
+        // transfer hota hai (bahut slow). willReadFrequently:true canvas
+        // ko CPU-backed banata hai — getImageData 10-20x fast, aur
+        // clicks "phasna" bhi khatam.
+        const ctx = canvas ? canvas.getContext('2d', { willReadFrequently: true }) : null;
+
+        // Reusable helper: image draw karke uske upar kaali band ko
+        // real site jaisa light gray se cover karta hai.
+        function _drawFrame(img) {
+            if (!ctx) return;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            const bandH = Math.round(canvas.height * 0.255);
+            ctx.fillStyle = '#f0f0f0';
+            ctx.fillRect(0, 0, canvas.width, bandH);
+        }
+
+        // Canvas ko turant safed paint karo — Sonic pehli try mein
+        // "content hai" samjhe, wait kare image aane tak
+        (function _preInitCanvas() {
+            if (!ctx) return;
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        })();
+
+        function _drawToCanvas(src2) {
+            if (!canvas || !src2) return;
+            const img2 = new Image();
+            // CORS-safe: data URLs pe ignored, external URLs pe canvas clean
+            // rehta hai taake Sonic/NopeCHA getImageData padh sakein
+            if (!src2.startsWith('data:')) img2.crossOrigin = 'anonymous';
+            img2.onload = function () {
+                _drawFrame(img2);
+                if (t.rawXhrJson) {
+                    replayRawXhrToNopecha(t.rawXhrJson, src2);
+                }
+            };
+            img2.src = src2;
+        }
+        _drawToCanvas(src);
+
+        function _pctFromEvent(e) {
+            const rect = canvas.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+            let px = Math.max(0, Math.min(100, (clickX / rect.width) * 100));
+            let py = Math.max(0, Math.min(100, (clickY / rect.height) * 100));
+
+            // AUTO clicks (NopeCHA/Sonic) mein py shift compensate karo
+            if (!e.isTrusted) {
+                // Additive shift — sada seedha, har jagha barabar shift.
+                // POSITIVE = clicks ko neechay karo, NEGATIVE = upar.
+                //
+                // Tuning history:
+                //   BAND=14/7/3/1 (purani stretch formula) sab clicks
+                //   ko UPAR shift karti thi → user complaint "thora
+                //   upar" har baar aayi. Ab additive DOWN shift.
+                //   +2 = 2% neechay — abhi bhi thora upar
+                //   +4 = 4% neechay — thora zyada correction
+                const Y_SHIFT = 4;
+                py = py + Y_SHIFT;
+                py = Math.max(0, Math.min(100, py));
+            }
+            return { px, py };
+        }
+
+        function _addDot(px, py, color) {
+            // ── BUG FIX: pehle dot ka position % .challenge-view ke andar
+            // set hota tha, lekin canvas .challenge-view se CHHOTA hai
+            // (dono taraf padding hai). Isliye "35% of canvas" aur
+            // "35% of challenge-view" alag jagah aate the — dot canvas
+            // ke bahar left shift ho jata tha. Ab dot ko canvas ke exact
+            // pixel position pe rakhte hain (challenge-view ke relative),
+            // taake dot BILKUL wahin dikhe jahan click hui.
+            const canvasRect = canvas.getBoundingClientRect();
+            const viewRect = mount.querySelector('.challenge-view').getBoundingClientRect();
+            const dotX = (canvasRect.left - viewRect.left) + (px / 100) * canvasRect.width;
+            const dotY = (canvasRect.top - viewRect.top) + (py / 100) * canvasRect.height;
+            const dot = document.createElement('div');
+            dot.className = 'dot';
+            dot.dataset.px = px;
+            dot.dataset.py = py;
+            dot.style.cssText = `position:absolute;width:14px;height:14px;background:${color || '#00ff88'};border:2px solid #000;border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;z-index:100;left:${dotX}px;top:${dotY}px;`;
+            mount.querySelector('.challenge-view').appendChild(dot);
+        }
+
+        // Undo: aakhri click/drag hataao (dots + lists dono se), parent ko bhi bataao
+        function _undoLastClick() {
+            const dots = mount.querySelectorAll('.challenge-view .dot');
+            if (dots.length === 0) return;
+            if (frameDrags.length > 0 && dots.length >= 2) {
+                const lastDrag = frameDrags[frameDrags.length - 1];
+                const d2 = dots[dots.length - 2], d1 = dots[dots.length - 1];
+                if (d2 && d1 &&
+                    Math.abs(parseFloat(d2.dataset.px) - lastDrag[0].px) < 0.5 &&
+                    Math.abs(parseFloat(d1.dataset.px) - lastDrag[1].px) < 0.5) {
+                    d2.remove(); d1.remove(); frameDrags.pop();
+                    window.parent.postMessage({ type: "hcm_undo", taskId: frameTaskId, kind: 'drag' }, "*");
+                    return;
+                }
+            }
+            dots[dots.length - 1].remove();
+            if (frameClicks.length > 0) {
+                frameClicks.pop();
+                window.parent.postMessage({ type: "hcm_undo", taskId: frameTaskId, kind: 'click' }, "*");
+            }
+        }
+
+        function handleMouseDown(e) {
+            if (e.button !== 0) return; // sirf left-click; right/middle ignore
+            const p = _pctFromEvent(e);
+            if (!p) return;
+            dragStartPt = p;
+            dragLastPt = p; // last known position — mousemove ke saath update hoga
+        }
+
+        function handleMouseMove(e) {
+            // Sirf tab track karo jab drag in progress ho (mousedown ho chuka)
+            if (!dragStartPt) return;
+            // Sirf primary button held ho tab (drag confirm)
+            if (e.buttons !== 0 && (e.buttons & 1) === 0) return;
+            const p = _pctFromEvent(e);
+            if (p) dragLastPt = p;
+        }
+
+        function handleMouseUp(e) {
+            if (e.button !== 0) return; // right-click ka mouseup skip
+            if (!dragStartPt) return;
+            // ── ZAROORI: NopeCHA/synthetic drags mein mouseup event ka
+            // clientX/Y kabhi kabhi drift karta hai (last mousemove se
+            // match nahi karta). Isliye last recorded mousemove position
+            // ko end lo — jo actual drag ka destination hai. Agar
+            // mousemove kabhi fire hi nahi hui (pure click), fallback
+            // to mouseup ka position.
+            const evPt = _pctFromEvent(e);
+            const end = dragLastPt || evPt || dragStartPt;
+            const dist = Math.hypot(end.px - dragStartPt.px, end.py - dragStartPt.py);
+
+            lastCapturedTime = Date.now();
+            if (dist < 2) {
+                frameClicks.push({ px: dragStartPt.px, py: dragStartPt.py });
+                _addDot(dragStartPt.px, dragStartPt.py, '#00ff88');
+                window.parent.postMessage({ type: "hcm_click", taskId: frameTaskId, px: dragStartPt.px, py: dragStartPt.py }, "*");
+            } else {
+                frameDrags.push([dragStartPt, end]);
+                _addDot(dragStartPt.px, dragStartPt.py, '#ffaa00');
+                _addDot(end.px, end.py, '#ff4488');
+                window.parent.postMessage({ type: "hcm_drag", taskId: frameTaskId, from: dragStartPt, to: end }, "*");
+            }
+            dragStartPt = null;
+            dragLastPt = null;
+        }
+
+        function handleDirectClick(e) {
+            if (e.button !== 0) return; // right/middle click ignore
+            if (Date.now() - lastCapturedTime < 150) return;
+            const p = _pctFromEvent(e);
+            if (!p) return;
+            frameClicks.push({ px: p.px, py: p.py });
+            _addDot(p.px, p.py, '#00ff88');
+            window.parent.postMessage({ type: "hcm_click", taskId: frameTaskId, px: p.px, py: p.py }, "*");
+        }
+
+        if (canvas) {
+            canvas.addEventListener('mousedown', handleMouseDown);
+            canvas.addEventListener('mousemove', handleMouseMove);
+            canvas.addEventListener('mouseup', handleMouseUp);
+            canvas.addEventListener('click', handleDirectClick);
+        }
+
+        // ── VERIFY submit helper (button + right-click + Sonic auto both call this)
+        function _doVerifySubmit() {
+            if (submitBtn.dataset.submitted === '1') return;
+            // ── ZAROORI: Sonic kabhi kabhi clicks lagane se pehle .button-submit
+            // pe skip trigger kar deti hai (uska tt() function). Iske liye
+            // check: agar koi clicks/drags actually record hui hain hi nahi,
+            // toh verify ignore karo — sirf tab accept jab data ho.
+            const hasData = (frameClicks && frameClicks.length > 0) ||
+                            (frameDrags && frameDrags.length > 0);
+            if (!hasData) {
+                console.log('[HCM-Frame] Verify blocked — no clicks recorded yet');
+                return;
+            }
+            // Aur ek safety: agar aakhri click abhi abhi hui hai (< 300ms),
+            // thodi der ruko taake Sonic aur clicks lagane ka mauka mile
+            const timeSinceLastClick = Date.now() - lastCapturedTime;
+            if (timeSinceLastClick < 300) {
+                setTimeout(_doVerifySubmit, 350 - timeSinceLastClick);
+                return;
+            }
+            submitBtn.dataset.submitted = '1';
+            submitBtn.style.background = '#ff00ff';
+            submitBtn.textContent = 'Submitting...';
+            let canvasImg = '';
+            try { canvasImg = canvas.toDataURL('image/jpeg', 0.85); } catch(e) {}
+            window.parent.postMessage({ 
+                type: "hcm_submit", taskId: frameTaskId, 
+                clicks: frameClicks, drags: frameDrags, canvasImg: canvasImg
+            }, "*");
+        }
+        if (submitBtn) submitBtn.addEventListener('click', _doVerifySubmit);
+        const undoBtn = mount.querySelector('.button-undo');
+        if (undoBtn) undoBtn.addEventListener('click', _undoLastClick);
+        // ── RIGHT-CLICK anywhere in widget = Verify submit (jaisa original)
+        mount.addEventListener('contextmenu', function(e) {
+            e.preventDefault();
+            _doVerifySubmit();
+            return false;
+        });
+
+        // ── VIDEO PLAYER v2 — EK HI CHALTA HUA PLAYER ──
+        // Pehle "mar mar ke" chalti thi kyunke:
+        //  1) Live frames network se jaise jaise pahunchte, TABHI draw hote
+        //     the — network ka har jhatka seedha video mein jhatka banta.
+        //  2) Live shuru hote hi chalta loop band, phir end pe naya loop
+        //     shuru — har switch pe video atakti / frame 0 pe jump karti.
+        //  3) Speed badalti rehti thi (350ms / 130ms / 3000÷frames).
+        // Ab: ek hi timer, fixed 130ms (extension isi raftaar se capture
+        // karti hai). Frames ki list sirf BADHTI hai — player rukta nahi,
+        // bas aage wale frames list mein judte jaate hain.
+        const FRAME_MS = 130;
+        let _playFrames = [];
+        let _playIdx = 0;
+        let _playTimer = null;
+        const _isReady = im => !!(im && im.complete && im.naturalWidth > 0);
+
+        function _setPlayFrames(list) {
+            const ready = (list || []).filter(_isReady);
+            if (!ready.length) return;
+            _playFrames = ready;
+            if (_playIdx >= _playFrames.length) _playIdx = 0;
+            if (!_playTimer) {
+                _drawFrame(_playFrames[_playIdx]);
+                _playTimer = setInterval(() => {
+                    if (_playFrames.length < 2) return;
+                    _playIdx = (_playIdx + 1) % _playFrames.length;
+                    _drawFrame(_playFrames[_playIdx]);
+                }, FRAME_MS);
+            }
+        }
+
+        // Task ke saath aaye frames (extension ne register se pehle record kiye)
+        let _initialImgs = [];
+        function _startVideoLoop(frames) {
+            _initialImgs = frames.map(fsrc => {
+                const im = new Image();
+                // Har frame load hote hi list update — order wahi rehta hai
+                im.onload = () => { if (!_liveActive) _setPlayFrames(_initialImgs); };
+                im.src = fsrc;
+                return im;
+            });
+        }
+
+        // ── LIVE STREAM: live frames alag list mein jama hote hain. Jab live
+        // list initial list jitni (ya zyada) ho jaye tab player us pe switch
+        // karta hai — pehle 8 live frames wahi hote hain jo initial the, is
+        // liye switch pe koi jump nahi dikhta. Uske baad video lambi hoti jaati.
+        let _liveBuffer = [];
+        let _liveActive = false;
+        function _liveReady() { return _liveBuffer.filter(_isReady); }
+        function _maybeSwitchToLive() {
+            const live = _liveReady();
+            const need = Math.max(2, _initialImgs.filter(_isReady).length);
+            if (!_liveActive && live.length >= need) _liveActive = true;
+            if (_liveActive) _setPlayFrames(live);
+        }
+        window.__hcmStartLive = function () {
+            _liveBuffer = [];
+            _liveActive = false;   // initial video chalti rahe
+        };
+        window.__hcmAddLiveFrame = function (frameSrc, index) {
+            if (!frameSrc) return;
+            const idx = (index != null) ? index : _liveBuffer.length;
+            const im = new Image();
+            im.onload = _maybeSwitchToLive;
+            im.src = frameSrc;
+            _liveBuffer[idx] = im;   // index pe rakho — order hamesha sahi
+        };
+        window.__hcmEndLive = function () {
+            // Jo frames abhi load ho rahe hain unka thoda intezaar, phir final list
+            setTimeout(_maybeSwitchToLive, 300);
+            setTimeout(_maybeSwitchToLive, 1500);
+        };
+
+        if (isVid && m.frames && m.frames.length > 0) {
+            _startVideoLoop(m.frames);
+        }
+    }
+}
+
+// ── FIX: HTML ESCAPE HELPER — dashboard workers ke beech XSS block ──────
+// hCaptcha ka prompt text (t.prompt) real site se aata hai — normal
+// case safe hai, lekin defense-in-depth ke liye escape karo.
+// worker name aur task ID bhi other workers dekhte hain — koi bhi
+// worker apni ID mein <script> daal ke sab workers ka session hijack
+// nahi kar sake, isliye har user-controlled string escape.
+function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+        {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]
+    ));
+}
+
 const SERVER_URL = location.origin;
 const WS_URL = SERVER_URL.replace(/^http/, 'ws');
 const gridArea = document.getElementById('gridArea');
@@ -159,6 +1013,65 @@ const wsStatus = document.getElementById('wsStatus');
 let currentTab = 'pending';
 let serverData = { pending: {}, trained: {} }, activeTasksStore = {}, videoTasks = [];
 let ghostBlocker = new Set();
+// ── Cap ghostBlocker: long sessions mein hazaro solved/deleted task IDs
+// yaad rakhne se memory bharti thi. 500 se zyada hone pe purani IDs
+// hataao (FIFO — Set insertion order preserve karta hai).
+function _addToGhostBlocker(id) {
+    ghostBlocker.add(id);
+    if (ghostBlocker.size > 500) {
+        const first = ghostBlocker.values().next().value;
+        ghostBlocker.delete(first);
+    }
+}
+
+// ── LIVE FRAME BUFFER — iframe abhi ready nahi to messages queue karo ──
+// Video tasks (Part 2 specially) mein iframe load hone se pehle live_video
+// events aane lagti hain. postMessage silently drop ho jati thi to video
+// dashboard pe stuck at 1st frame reh jati. Ab:
+//   - Message send karo, agar iframe.contentWindow nahi hai to buffer karo
+//   - Iframe ready hone pe (500ms polling max 5s) buffered messages flush karo
+// ── v2: IFRAME "READY" HANDSHAKE ──
+// Pehle `ifr.contentWindow` milte hi bhej dete the — lekin contentWindow
+// iframe DOM mein aate hi mil jata hai, page load hone se PEHLE. Us waqt
+// bheje frames (khaas kar pehle 8) gum ho jaate the. Ab iframe task render
+// karke khud 'hcm_frame_ready' bhejta hai; tab tak sab messages buffer.
+const _iframeMsgBuffer = {};   // taskId → [message, ...]
+const _readyFrameWin = {};     // taskId → iframe ki window jisne ready bola
+function _flushIframeBuffer(taskId) {
+    const win = _readyFrameWin[taskId];
+    const buf = _iframeMsgBuffer[taskId];
+    if (!win || !buf) return;
+    for (const m of buf) { try { win.postMessage(m, '*'); } catch (_) {} }
+    delete _iframeMsgBuffer[taskId];
+}
+function _postToIframeWithRetry(taskId, msg) {
+    const ifr = document.querySelector(`iframe[data-id="${taskId}"]`);
+    const win = _readyFrameWin[taskId];
+    // Sirf tab seedha bhejo jab ISI iframe ne ready bola ho
+    // (card rebuild hone pe purani window ka ready na mana jaye)
+    if (ifr && win && ifr.contentWindow === win) {
+        try { win.postMessage(msg, '*'); return; } catch (_) {}
+    }
+    if (!_iframeMsgBuffer[taskId]) {
+        _iframeMsgBuffer[taskId] = [];
+        // 15s mein ready na hua (card delete) → buffer phenk do, memory na bhare
+        setTimeout(() => { delete _iframeMsgBuffer[taskId]; }, 15000);
+    }
+    _iframeMsgBuffer[taskId].push(msg);
+}
+window.addEventListener('message', function (ev) {
+    if (!ev.data || ev.data.type !== 'hcm_frame_ready') return;
+    const tid = ev.data.taskId;
+    const ifr = document.querySelector(`iframe[data-id="${tid}"]`);
+    if (!ifr || ifr.contentWindow !== ev.source) return;
+    _readyFrameWin[tid] = ev.source;
+    _flushIframeBuffer(tid);
+});
+
+// ── LIVE VIDEO STREAM STATE — sirf streamId → realTaskId mapping.
+// Frames collect nahi karte, seedha iframe ko bhej dete hain jaise aati hain.
+const _liveStreamMap = {}; // streamId -> realTaskId
+
 let retrainEditingTasks = new Set();
 let isFetching = false;
 let trainedPage = 0;
@@ -176,15 +1089,105 @@ let workerMode = '';
 let syncBatchQueue = [];
 let syncBatchTimer = null;
 const MAX_EXAMPLES = 150; 
-let pingTimer = null; // 🔥 NEW: Heartbeat timer
+let pingTimer = null;
 
-function startApp(mode) {
-    let w = document.getElementById('wName').value.trim();
+window.addEventListener('message', function(ev) {
+    if (!ev.data) return;
+    if (ev.data.type === 'hcm_get_task') {
+        const tid = ev.data.taskId;
+        const t = activeTasksStore[tid];
+        if (t && ev.source) {
+            // Skip prompts bhi bhejo taake iframe pehle load pe hi decide
+            // kar sake AI blocked hai ya nahi
+            ev.source.postMessage({
+                type: 'hcm_task_response',
+                taskId: tid,
+                task: t,
+                skipList: aiSkipPrompts
+            }, '*');
+        }
+    }
+    if (ev.data.type === 'hcm_frame_height') {
+        const tid = ev.data.taskId;
+        const h = ev.data.height;
+        const ifr = document.querySelector(`iframe[data-id="${tid}"]`);
+        if (!ifr) return;
+        // Iframe height = content ki actual height + 30 (footer space).
+        // Koi min-floor nahi — content jitna ho iframe utni. Isse
+        // empty space nahi bachegi.
+        if (h > 50) {
+            ifr.style.height = (h + 30) + 'px';
+        }
+    }
+    if (ev.data.type === 'hcm_click') {
+        const tid = ev.data.taskId;
+        const t = activeTasksStore[tid];
+        if (t) t.clicks.push({ px: ev.data.px, py: ev.data.py });
+        // Worker actively training pe hai — highlight
+        try { document.querySelector(`.task-card[data-id="${tid}"]`)?.classList.add('in-training'); } catch(_) {}
+    }
+    if (ev.data.type === 'hcm_drag') {
+        const tid = ev.data.taskId;
+        const t = activeTasksStore[tid];
+        if (t) {
+            if (!t.drags) t.drags = [];
+            t.drags.push([ev.data.from, ev.data.to]);
+        }
+        try { document.querySelector(`.task-card[data-id="${tid}"]`)?.classList.add('in-training'); } catch(_) {}
+    }
+    if (ev.data.type === 'hcm_token') {
+        const tid = ev.data.taskId;
+        const token = ev.data.token;
+        if (tid && token) {
+            fetch(`${SERVER_URL}/api/submit-hcaptcha-token`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ taskId: tid, token }),
+            }).catch(() => {});
+            _addToGhostBlocker(tid);
+            document.querySelector(`.task-card[data-id="${tid}"]`)?.remove();
+            delete activeTasksStore[tid];
+            sessionStorage.removeItem('hcm_task_' + tid);
+            updateCountsDisplay();
+        }
+    }
+    if (ev.data.type === 'hcm_undo') {
+        const tid = ev.data.taskId;
+        const t = activeTasksStore[tid];
+        if (t) {
+            if (ev.data.kind === 'drag' && t.drags && t.drags.length > 0) t.drags.pop();
+            else if (t.clicks && t.clicks.length > 0) t.clicks.pop();
+        }
+    }
+    if (ev.data.type === 'hcm_submit') {
+        const tid = ev.data.taskId;
+        const t = activeTasksStore[tid];
+        if (t) {
+            if (ev.data.clicks && ev.data.clicks.length > 0) t.clicks = ev.data.clicks;
+            if (ev.data.drags && ev.data.drags.length > 0) t.drags = ev.data.drags;
+            if (ev.data.canvasImg) t.canvasImg = ev.data.canvasImg;
+        }
+        const card = document.querySelector(`.task-card[data-id="${tid}"]`);
+        sendToServer(tid, null, card);
+    }
+});
+
+function startApp(mode, savedName) {
+    if (isTaskFrame) return;
+    let w = savedName || document.getElementById('wName').value.trim();
     if (!w) return alert('Bhai, pehle apna Name ya ID likhein!');
     
     workerName = w;
     workerMode = mode;
     document.getElementById('loginOverlay').style.display = 'none';
+
+    try {
+        localStorage.setItem('hcm_worker_name', workerName);
+        localStorage.setItem('hcm_worker_mode', workerMode);
+    } catch (e) {}
+
+    const wb = document.getElementById('myWorkerBadge');
+    if (wb) wb.textContent = `👤 ${workerName} (${mode === 'grid' ? 'Grid' : 'Manual'})`;
 
     if (mode === 'manual') {
         document.getElementById('colGrid').style.display = 'none';
@@ -197,7 +1200,170 @@ function startApp(mode) {
     }
     initWS();
     fetchTasks();
+
+    // ── SAFETY NET: Har 20 sec drift check ─────────────────────────────
+    // Agar WS message somehow miss ho ya render fail ho (rare browser
+    // edges), background poll se catch up ho jayega — user ko manually
+    // refresh nahi karna paಡega. Sirf pending tab pe active.
+    if (!window._hcmDriftTimer) {
+        window._hcmDriftTimer = setInterval(() => {
+            if (currentTab === 'pending' && !isFetching && workerName) {
+                fetchTasks();
+            }
+        }, 20000);
+    }
 }
+
+function doLogout() {
+    if (!confirm('Logout karna hai?')) return;
+    try {
+        localStorage.removeItem('hcm_worker_name');
+        localStorage.removeItem('hcm_worker_mode');
+    } catch (e) {}
+    try { if (ws) ws.close(); } catch (e) {}
+    location.reload();
+}
+
+function toggleWorkersPanel() {
+    const p = document.getElementById('workersPanel');
+    p.style.display = (p.style.display === 'none' || !p.style.display) ? 'block' : 'none';
+    // Doosra panel band karo agar khula ho
+    document.getElementById('skipListPanel').style.display = 'none';
+}
+
+// ── AI SKIP LIST (per-user, localStorage-persisted)
+// POORE prompts add karo — jab bhi kisi task ka prompt exactly match kare
+// (case + spaces ignored), Sonic/NopeCHA ko signal do "yeh hCaptcha nahi
+// hai" — .bounding-box-example, .challenge-header, h2.prompt-text markers
+// HATA do iframe render me. Manual worker phir bhi normally solve kar sakta hai.
+let aiSkipPrompts = [];
+try {
+    const saved = localStorage.getItem('hcm_ai_skip_prompts');
+    if (saved) aiSkipPrompts = JSON.parse(saved);
+} catch(e) {}
+
+// Prompt ko normalize karo (case + extra spaces + trim) taake typo/spacing
+// se match miss na ho
+function _normPrompt(s) {
+    return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function _saveSkipList() {
+    try { localStorage.setItem('hcm_ai_skip_prompts', JSON.stringify(aiSkipPrompts)); } catch(e) {}
+    const badge = document.getElementById('skipListCount');
+    if (badge) badge.textContent = aiSkipPrompts.length;
+}
+_saveSkipList(); // initial badge update
+
+function toggleSkipListPanel() {
+    const p = document.getElementById('skipListPanel');
+    const open = (p.style.display === 'none' || !p.style.display);
+    p.style.display = open ? 'block' : 'none';
+    document.getElementById('workersPanel').style.display = 'none';
+    if (open) renderSkipList();
+}
+
+function addSkipPrompt() {
+    const inp = document.getElementById('skipInput');
+    const raw = (inp.value || '').trim();
+    if (!raw) return;
+    const norm = _normPrompt(raw);
+    // Check duplicate (normalized comparison)
+    if (aiSkipPrompts.some(p => _normPrompt(p) === norm)) {
+        inp.value = '';
+        return;
+    }
+    aiSkipPrompts.push(raw); // display ke liye original rakhte hain
+    _saveSkipList();
+    inp.value = '';
+    renderSkipList();
+    // Sab pending task iframes ko notify karo (fresh check karen)
+    _notifyAllTaskFramesSkipListChanged();
+}
+
+function removeSkipPrompt(idx) {
+    if (idx < 0 || idx >= aiSkipPrompts.length) return;
+    aiSkipPrompts.splice(idx, 1);
+    _saveSkipList();
+    renderSkipList();
+    // Sab tasks ko notify — un tasks pe AI wapas enable ho jaye
+    _notifyAllTaskFramesSkipListChanged();
+}
+
+function renderSkipList() {
+    const list = document.getElementById('skipList');
+    if (!list) return;
+    if (aiSkipPrompts.length === 0) {
+        list.innerHTML = '<div style="color:#666;font-size:12px;text-align:center;padding:12px;">Koi prompt block nahi — sab tasks pe AI enabled hai</div>';
+        return;
+    }
+    list.innerHTML = aiSkipPrompts.map((prompt, idx) => {
+        const safe = prompt.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+        return `
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;background:#1a1a1a;border:1px solid #333;padding:8px 10px;border-radius:4px;">
+                <span style="color:#ff8866;font-size:12px;line-height:1.4;flex:1;word-break:break-word;">${safe}</span>
+                <button onclick="removeSkipPrompt(${idx})" style="background:#552222;color:#fff;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:11px;flex-shrink:0;">✕</button>
+            </div>
+        `;
+    }).join('');
+}
+
+// Iframe ko batao skip list badal gayi — wo apna DOM re-adjust kare
+function _notifyAllTaskFramesSkipListChanged() {
+    document.querySelectorAll('iframe.hcaptcha-task-frame').forEach(ifr => {
+        try {
+            ifr.contentWindow.postMessage({
+                type: 'hcm_skip_list_update',
+                skipList: aiSkipPrompts
+            }, '*');
+        } catch(e) {}
+    });
+}
+
+function renderWorkers(workers) {
+    const count = document.getElementById('onlineCount');
+    if (count) count.textContent = (workers || []).length;
+    const list = document.getElementById('workersList');
+    if (!list) return;
+    if (!workers || !workers.length) {
+        list.innerHTML = '<div style="color:#666;font-size:12px;">Koi worker online nahi</div>';
+        return;
+    }
+    // FIX: workerId user-controlled hai — escape karo (XSS safe).
+    // ── NEW: SEPARATE COUNTS for grid vs coord/manual tasks ──
+    // Server ab solvedGrid + solvedManual alag track karta hai.
+    // Grid = 🤖 (AI-driven), Manual/Coord = 👷 (manual solve).
+    list.innerHTML = workers.map(w => {
+        const isMe = w.workerId === workerName;
+        const modeIcon = w.mode === 'grid' ? '🤖' : '👷';
+        const g = Number(w.solvedGrid) || 0;
+        const m = Number(w.solvedManual) || 0;
+        const total = Number(w.solved) || (g + m);
+        return `<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;padding:4px 6px;background:${isMe ? '#1c261f' : '#1c1c1c'};border-radius:4px;border:1px solid ${isMe ? '#00ff88' : '#333'};">
+            <span style="color:#fff;">${modeIcon} ${esc(w.workerId)}${isMe ? ' (aap)' : ''}</span>
+            <span style="display:flex;gap:6px;align-items:center;font-weight:bold;">
+                <span style="color:#00ff88;" title="Grid (AI) tasks">🤖 ${g}</span>
+                <span style="color:#ffbb44;" title="Manual/Coord tasks">👷 ${m}</span>
+                <span style="color:#888;" title="Total">= ${total}</span>
+            </span>
+        </div>`;
+    }).join('');
+}
+
+(function autoLogin() {
+    if (isTaskFrame) return;
+    try {
+        const savedName = localStorage.getItem('hcm_worker_name');
+        const savedMode = localStorage.getItem('hcm_worker_mode');
+        if (savedName && savedMode) {
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', () => startApp(savedMode, savedName));
+            } else {
+                startApp(savedMode, savedName);
+            }
+        }
+    } catch (e) {}
+})();
 
 let ws = null;
 function initWS() {
@@ -209,7 +1375,6 @@ function initWS() {
             wsStatus.innerText = '🟢 Live';
             ws.send(JSON.stringify({ action: 'dashboard', workerId: workerName, mode: workerMode }));
             
-            // 🔥 NEW: Send heartbeat every 25 seconds to keep Chrome connection alive
             if (pingTimer) clearInterval(pingTimer);
             pingTimer = setInterval(() => {
                 if (ws.readyState === WebSocket.OPEN) {
@@ -221,34 +1386,182 @@ function initWS() {
             try {
                 let msg = JSON.parse(ev.data);
                 if (msg.type === 'counts') {
+                    // Pending — jaisa pehle tha (sirf total)
                     document.getElementById('c-pending').innerText = msg.data.pending;
+                    // Trained — total + split (grid · coord/manual)
                     document.getElementById('c-trained').innerText = msg.data.trained;
-                    document.getElementById('c-trained-total').innerText = `${msg.data.trained} Solved`;
-                }
-                if (msg.type === 'new_task' && currentTab === 'pending') {
-                    let td = msg.data;
-                    if (!ghostBlocker.has(td.id) && !activeTasksStore[td.id]) {
-                        serverData.pending[td.id] = td;
-                        let isGrid = (td.media || []).length > 1;
-                        activeTasksStore[td.id] = { id: td.id, clicks: [], type: isGrid ? 'grid' : 'coord', media: td.media || [], prompt: td.prompt || '' };
-                        let card = buildCard(activeTasksStore[td.id]);
-                        
-                        if (isGrid) {
-                            gridArea.appendChild(card); 
-                            if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[td.id]);
-                        } else {
-                            manualArea.appendChild(card);
-                        }
-                        updateCountsDisplay();
+                    const cTG = document.getElementById('c-trained-grid');
+                    const cTC = document.getElementById('c-trained-coord');
+                    if (cTG) cTG.textContent = msg.data.trainedGrid    || 0;
+                    if (cTC) cTC.textContent = msg.data.trainedManual  || 0;
+                    const cTot = document.getElementById('c-trained-total');
+                    if (cTot) cTot.innerText = `${msg.data.trained} Solved`;
+                    if (msg.data.onlineWorkers) renderWorkers(msg.data.onlineWorkers);
+                    // Legacy c-grid / c-manual (agar page mein hain)
+                    if (typeof msg.data.gridPending === 'number') {
+                        const g = document.getElementById('c-grid');
+                        const m = document.getElementById('c-manual');
+                        if (g) g.innerText = `${msg.data.gridPending} Grids`;
+                        if (m) m.innerText = `${msg.data.manualPending} Tasks`;
                     }
                 }
+                if (msg.type === 'new_task') {
+                    let td = msg.data;
+                    if (ghostBlocker.has(td.id)) return;
+
+                    // ── FIX: DUPLICATE TASK GUARD ──
+                    // Kabhi kabhi same task 2 baar dashboard mein aa jata
+                    // tha — WS message race, drift poll overlap, ya server
+                    // reassign. Ab: agar wahi task 5 sec ke andar dobara
+                    // aaye to silent skip. Har taskId ka last-seen time
+                    // track. Purani entries (>5 sec) apne aap expire.
+                    if (!window._hcmSeenTasks) window._hcmSeenTasks = new Map();
+                    const seen = window._hcmSeenTasks;
+                    const lastSeen = seen.get(td.id);
+                    if (lastSeen && (Date.now() - lastSeen) < 5000) return;
+                    seen.set(td.id, Date.now());
+                    // Cleanup — purani entries hatao (memory bloat rok)
+                    if (seen.size > 200) {
+                        const cutoff = Date.now() - 30000;
+                        for (const [k, t] of seen) {
+                            if (t < cutoff) seen.delete(k);
+                        }
+                    }
+
+                    // Server data hamesha update — future fetchTasks se consistent
+                    serverData.pending[td.id] = td;
+
+                    // Store update — agar pehle se hai to bhi refresh kar do
+                    // (fresh media/prompt aa sakta hai)
+                    //
+                    // ── BUG FIX: FAIL KE BAD PICHLA PROMPT + BLANK CANVAS ──
+                    // Comment kehta tha "agar pehle se hai to bhi refresh" —
+                    // lekin code sirf `!activeTasksStore[td.id]` pe create
+                    // karta tha. hCaptcha fail hone ke bad retry mein wahi
+                    // taskId aa sakti hai (prompt + dhash same match). Nateeja:
+                    //   - activeTasksStore mein purana media/prompt reh gaya
+                    //   - sessionStorage mein purana JSON reh gaya
+                    //   - iframe naya cache-buster URL use karta lekin session
+                    //     Storage se PURANA task data padhta → old prompt +
+                    //     blank/broken canvas
+                    // Fix: agar naya td aaya to STORE + SESSION dono forcefully
+                    // update karo. clicks purane rakho SIRF jab ID nayi ho (fresh
+                    // task = fresh clicks). Purana card bhi replace karo taake
+                    // iframe re-init ho.
+                    let isGrid = (td.media || []).length > 1;
+                    const _wasInStore = !!activeTasksStore[td.id];
+                    activeTasksStore[td.id] = {
+                        id: td.id,
+                        clicks: [],   // fresh task = fresh clicks (retry pe bhi clean start)
+                        type: isGrid ? 'grid' : 'coord',
+                        media: td.media || [],
+                        prompt: td.prompt || '',
+                        sitekey: td.sitekey || '',
+                        websiteURL: td.websiteURL || '',
+                        rawXhrJson: td.rawXhrJson || '',
+                        dimensions: td.dimensions || null,
+                    };
+                    try { sessionStorage.setItem('hcm_task_' + td.id, JSON.stringify(activeTasksStore[td.id])); } catch(e) {}
+
+                    // ── FIX: AI AUTO-SOLVE tab switch pe band ho jata tha ──
+                    // Purana: predictWithAI sirf card append hone ke andar
+                    // call hota tha (rendering branch). Jab user trained
+                    // tab ya doosri Chrome tab pe ho, code `currentTab !==
+                    // 'pending'` pe return kar deta — AI predict never fires.
+                    // Ab: AI predict tab-independent hai (server data mein
+                    // task exists, media available, koi visual card zaroori
+                    // nahi). Predict hone dena → auto-solve hoti rahegi.
+                    if (isGrid && isAIReady && autoTrainEnabled) {
+                        predictWithAI(activeTasksStore[td.id]);
+                    }
+
+                    // Sirf pending tab pe hi visual card render karo — dusre
+                    // tabs pe user hai to store ho gayi, switching pe dikh jayegi
+                    if (currentTab !== 'pending') { updateCountsDisplay(); return; }
+
+                    // DOM card exists check — agar already visible hai lekin
+                    // task data refresh hui hai (retry) to card REBUILD karo
+                    // taake iframe naye cache-buster ke saath reload ho —
+                    // warna purana prompt/canvas dikhta rehta.
+                    const existingCard = document.querySelector(`.task-card[data-id="${td.id}"]`);
+                    if (existingCard) {
+                        if (_wasInStore) {
+                            // Retry ka case — card + iframe forcefully rebuild
+                            existingCard.remove();
+                        } else {
+                            updateCountsDisplay();
+                            return;
+                        }
+                    }
+
+                    // Fresh card build karo aur DOM mein add karo
+                    let card = buildCard(activeTasksStore[td.id]);
+                    if (isGrid) {
+                        if (gridArea) gridArea.appendChild(card);
+                        // NOTE: predictWithAI upar call ho chuki — yahan
+                        // dobara nahi call kar rahe (redundant hoti).
+                    } else {
+                        if (manualArea) manualArea.appendChild(card);
+                    }
+                    updateCountsDisplay();
+                }
+
+                if (msg.type === 'task_raw_xhr') {
+                    const tid = msg.data.taskId;
+                    const rJson = msg.data.rawXhrJson;
+                    if (activeTasksStore[tid]) {
+                        activeTasksStore[tid].rawXhrJson = rJson;
+                        try { sessionStorage.setItem('hcm_task_' + tid, JSON.stringify(activeTasksStore[tid])); } catch(e) {}
+                        const ifr = document.querySelector(`iframe[data-id="${tid}"]`);
+                        if (ifr && ifr.contentWindow) {
+                            ifr.contentWindow.postMessage({ type: 'hcm_live_raw_xhr', taskId: tid, rawXhrJson: rJson }, '*');
+                        }
+                    }
+                }
+
+                // ── LIVE VIDEO STREAMING (extension se aati hain 25 frames tak)
+                // Extension real hCaptcha canvas se live frames capture karti hai
+                // aur WS pe bhejti hai. Yahan hum unhe streamId ke hisaab se
+                // collect karte hain, aur jab poori collect ho jayen (ya
+                // live_video_end aa jaye), iframe ko bhej dete hain jahan
+                // smooth loop mein play hongi. streamId aur realTaskId alag
+                // hote hain — 'live_video_link' unhe map karta hai.
+                if (msg.type === 'live_video_link') {
+                    const streamId = msg.data.streamTaskId;
+                    const realId = msg.data.realTaskId;
+                    _liveStreamMap[streamId] = realId;
+                }
+                if (msg.type === 'live_video_start') {
+                    const sid = msg.data.taskId;
+                    const realId = _liveStreamMap[sid] || sid;   // extension ab asli taskId se hi stream karti hai
+                    if (realId) _postToIframeWithRetry(realId, { type: 'hcm_live_frame_start', taskId: realId });
+                }
+                if (msg.type === 'live_video_frame') {
+                    const sid = msg.data.taskId;
+                    const realId = _liveStreamMap[sid] || sid;   // extension ab asli taskId se hi stream karti hai
+                    _postToIframeWithRetry(realId, {
+                        type: 'hcm_live_frame_one',
+                        taskId: realId,
+                        frame: msg.data.frame,
+                        index: msg.data.index
+                    });
+                }
+                if (msg.type === 'live_video_end') {
+                    const sid = msg.data.taskId;
+                    const realId = _liveStreamMap[sid] || sid;   // extension ab asli taskId se hi stream karti hai
+                    if (realId) _postToIframeWithRetry(realId, { type: 'hcm_live_frame_end', taskId: realId });
+                }
+
                 if (msg.type === 'task_solved' || msg.type === 'task_deleted') {
                     let tid = msg.data.taskId;
-                    ghostBlocker.add(tid);
+                    _addToGhostBlocker(tid);
                     document.querySelector(`.task-card[data-id="${tid}"]`)?.remove();
                     delete activeTasksStore[tid];
                     delete serverData.pending[tid];
+                    sessionStorage.removeItem('hcm_task_' + tid);
                     videoTasks = videoTasks.filter(v => v.id !== tid);
+                    delete _readyFrameWin[tid];
+                    delete _iframeMsgBuffer[tid];
                     updateCountsDisplay();
                 }
                 if (msg.type === 'sync_ai_batch' && workerMode === 'grid') {
@@ -264,7 +1577,7 @@ function initWS() {
             } catch(e) {}
         };
         ws.onclose = () => {
-            if (pingTimer) clearInterval(pingTimer); // 🔥 NEW: Clear timer on close
+            if (pingTimer) clearInterval(pingTimer);
             wsStatus.className = 'live-status';
             wsStatus.innerText = '🔴 Offline';
             setTimeout(initWS, 1500);
@@ -300,53 +1613,123 @@ async function fetchGlobalBrain() {
     } catch (e) {}
 }
 
-async function initAI() {
+// ── AI RESILIENCE STATE ──
+// Multiple browsers ya heavy GPU pressure mein WebGL context "lost" ho jata
+// tha (Chrome memory bacha ne ke liye) — TensorFlow.js ke SAAB WebGL objects
+// invalid ho jate, "INVALID_OPERATION: object does not belong to this
+// context" ki barish. AI band, dashboard white screen.
+//
+// Ye layer 3 defense levels deti:
+//   1. Init pe context-lost listener attach — auto reinit on loss
+//   2. WebGL fail → CPU backend fallback (slower but ALWAYS works)
+//   3. Predict/infer wrap — WebGL error catch → reinit + retry
+let _tfReinitInFlight = false;
+let _tfBackendUsed = "";
+
+async function _attachWebGLLostHandler() {
+    // TF ka internal canvas dhundo (WebGL context wala) — us pe listener lagao
     try {
-        await tf.setBackend('webgl');
-        await tf.ready();
-        aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
-        knn = knnClassifier.create();
-        await loadKNN(); 
-        await fetchGlobalBrain(); 
+        const backend = tf.getBackend();
+        if (backend !== 'webgl') return;
+        const gl = tf.backend().gpgpu?.gl;
+        if (!gl || !gl.canvas) return;
+        gl.canvas.addEventListener('webglcontextlost', (ev) => {
+            ev.preventDefault();
+            console.warn('[AI] WebGL context lost — auto-reinit scheduled');
+            isAIReady = false;
+            setTimeout(reinitTF, 1500);
+        }, false);
+    } catch (_) {}
+}
+
+async function reinitTF() {
+    if (_tfReinitInFlight) return;
+    _tfReinitInFlight = true;
+    try {
+        console.warn('[AI] Reinitializing TensorFlow.js…');
+        // Try WebGL first (may work again if context restored)
+        let ok = false;
+        try {
+            await tf.setBackend('webgl');
+            await tf.ready();
+            _tfBackendUsed = 'webgl';
+            ok = true;
+        } catch (_) {}
+        // Fallback to CPU if WebGL still failing
+        if (!ok) {
+            try {
+                await tf.setBackend('cpu');
+                await tf.ready();
+                _tfBackendUsed = 'cpu';
+                ok = true;
+                console.warn('[AI] Fell back to CPU backend');
+            } catch (_) {}
+        }
+        if (!ok) return;   // give up this attempt, will retry on next context event
+        // Reload model
+        try {
+            aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
+            if (!knn) knn = knnClassifier.create();
+            await _refreshKnnFromCpu?.();
+        } catch (_) {}
         isAIReady = true;
         updateAIStatus();
-        setupWebGLRecovery();
-        startMemoryMonitor();
-        setTimeout(() => reEvaluatePending(), 1500);
-    } catch(e) {
-        syncStatus.innerHTML = "⚠️ AI Fallback";
+        _attachWebGLLostHandler();
+        console.warn(`[AI] Reinit OK — backend: ${_tfBackendUsed}`);
+    } finally {
+        _tfReinitInFlight = false;
     }
 }
 
-function setupWebGLRecovery() {
-    function attachToCanvas(canvas) {
-        if (!canvas || canvas._hcmListenerAttached) return;
-        canvas._hcmListenerAttached = true;
-        canvas.addEventListener('webglcontextlost', async (e) => {
-            e.preventDefault();
-            isAIReady = false;
-            syncStatus.innerHTML = '⚠️ WebGL Crash — Recovering...';
+async function initAI() {
+    try {
+        // Try WebGL first (fast — GPU), CPU fallback if unavailable
+        let ok = false;
+        try {
+            await tf.setBackend('webgl');
+            await tf.ready();
+            _tfBackendUsed = 'webgl';
+            ok = true;
+        } catch (_) {}
+        if (!ok) {
             try {
-                await new Promise(r => setTimeout(r, 3000));
-                await tf.disposeVariables();
-                await tf.setBackend('webgl');
+                await tf.setBackend('cpu');
                 await tf.ready();
-                aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
-                knn = knnClassifier.create();
-                _refreshKnnFromCpu();
-                isAIReady = true;
-                updateAIStatus();
-                syncStatus.innerHTML = '✅ WebGL Recovered!';
-                setTimeout(() => updateAIStatus(), 2000);
-            } catch(err) {
-                syncStatus.innerHTML = '❌ WebGL Failed — Reload Karen';
-            }
-        });
+                _tfBackendUsed = 'cpu';
+                ok = true;
+                console.warn('[AI] Using CPU backend — WebGL unavailable');
+            } catch (_) {}
+        }
+        if (!ok) { syncStatus.innerHTML = "⚠️ AI Fallback"; return; }
+
+        aiModel = await mobilenet.load({ version: 2, alpha: 1.0 });
+        knn = knnClassifier.create();
+        await loadKNN();
+        await fetchGlobalBrain();
+        isAIReady = true;
+        updateAIStatus();
+        startMemoryMonitor();
+        _attachWebGLLostHandler();
+        setTimeout(() => reEvaluatePending(), 1500);
+    } catch(e) {
+        syncStatus.innerHTML = "⚠️ AI Fallback";
+        // Extreme fallback — schedule reinit later
+        setTimeout(reinitTF, 5000);
     }
-    document.querySelectorAll('canvas').forEach(attachToCanvas);
-    const observer = new MutationObserver(() => { document.querySelectorAll('canvas').forEach(attachToCanvas); });
-    observer.observe(document.body, { childList: true, subtree: true });
 }
+
+// ── Global error catcher — WebGL errors ko chup karo aur reinit trigger karo
+window.addEventListener('error', (ev) => {
+    const msg = String(ev.message || '');
+    if (msg.includes('WebGL') || msg.includes('context lost') || msg.includes('does not belong to this context')) {
+        if (isAIReady) {
+            console.warn('[AI] WebGL error caught globally — scheduling reinit');
+            isAIReady = false;
+            setTimeout(reinitTF, 1000);
+        }
+        ev.preventDefault?.();
+    }
+}, true);
 
 function startMemoryMonitor() {
     setInterval(() => {
@@ -355,10 +1738,17 @@ function startMemoryMonitor() {
             if (mem.numTensors > 80) {
                 tf.engine().startScope();
                 tf.engine().endScope();
-                syncStatus.innerHTML = `🧹 Auto-Clean (${mem.numTensors}→${tf.memory().numTensors})`;
                 setTimeout(() => updateAIStatus(), 1000);
             }
-        } catch(e) {}
+        } catch(e) {
+            const em = String(e?.message || e || '');
+            if (em.includes('WebGL') || em.includes('context') || em.includes('does not belong')) {
+                if (isAIReady && typeof reinitTF === 'function') {
+                    isAIReady = false;
+                    setTimeout(reinitTF, 1500);
+                }
+            }
+        }
     }, 5000);
 }
 
@@ -456,8 +1846,6 @@ function setTab(tab) {
         document.getElementById('pendingView').style.display = 'none';
         document.getElementById('trainedView').style.display = 'flex';
         trainedArea.innerHTML = '';
-        let notice = document.getElementById('expiredNotice');
-        if (notice) notice.classList.remove('visible');
     }
     fetchTasks();
 }
@@ -482,8 +1870,9 @@ const NEGATIVE_REPEAT = 1;
 
 function addToDataset(label, featureArr, fromServer = false) {
     const D = featureArr.length;
+    const initialRows = 1;
     if (!knnCpuDataset[label]) {
-        knnCpuDataset[label] = { data: new Float32Array(featureArr), shape: [1, D] };
+        knnCpuDataset[label] = { data: new Float32Array(featureArr), shape: [initialRows, D] };
     } else {
         const old = knnCpuDataset[label];
         const currentN = old.shape[0];
@@ -527,9 +1916,6 @@ async function trainAIBrainAsync(task) {
     if (!isAIReady || task.type !== 'grid' || !task.media || !task.clicks || task.clicks.length === 0) return;
     let pText = task.prompt.split('|||')[0].trim().toLowerCase();
     let negLabel = 'negative_' + pText;
-    let trained = 0, skipped = 0;
-
-    syncStatus.innerHTML = `⏳ Training "${pText}"...`;
 
     for (let m of task.media) {
         let imgSrc = m.thumb || m.src;
@@ -543,7 +1929,7 @@ async function trainAIBrainAsync(task) {
                 img.onerror = () => res(false);
                 setTimeout(() => res(false), 500);
             });
-            if (!loaded || !img.complete || img.naturalWidth === 0) { skipped++; continue; }
+            if (!loaded || !img.complete || img.naturalWidth === 0) continue;
 
             let tfImg = null, features = null;
             try {
@@ -554,13 +1940,21 @@ async function trainAIBrainAsync(task) {
                 const label = isPositive ? pText : negLabel;
                 const repeat = isPositive ? POSITIVE_REPEAT : NEGATIVE_REPEAT;
                 for (let r = 0; r < repeat; r++) addToDataset(label, featureArr);
-                trained++;
             } finally {
                 if (tfImg) { tfImg.dispose(); tfImg = null; }
                 if (features) { features.dispose(); features = null; }
             }
             await tf.nextFrame();
-        } catch(e) { skipped++; }
+        } catch(e) {
+            const em = String(e?.message || e || '');
+            if (em.includes('WebGL') || em.includes('context lost') || em.includes('does not belong')) {
+                if (isAIReady && typeof reinitTF === 'function') {
+                    isAIReady = false;
+                    setTimeout(reinitTF, 1000);
+                }
+                break;
+            }
+        }
     }
     await saveKNN();
     updateAIStatus();
@@ -647,26 +2041,45 @@ async function predictWithAI(task) {
                 }
             }
             await new Promise(r => setTimeout(r, 2));
-        } catch(e) {}
+        } catch(e) {
+            // WebGL error detect → auto-reinit trigger
+            const em = String(e?.message || e || '');
+            if (em.includes('WebGL') || em.includes('context lost') || em.includes('does not belong')) {
+                if (isAIReady && typeof reinitTF === 'function') {
+                    isAIReady = false;
+                    setTimeout(reinitTF, 1000);
+                }
+                break;   // abort this task's remaining predictions
+            }
+        }
     }
 
     if (predictedClicks.length >= 1 && predictedClicks.length <= 6) {
         task.clicks = predictedClicks;
+        // ── FIX: AUTO-SOLVE SUBMIT tab-independent ──
+        // Purana bug: submit sirf `if (card)` ke andar hota tha. Jab user
+        // trained tab pe ho ya doosri Chrome tab pe, DOM card nahi hota
+        // pending view mein → server ko submit hi nahi jata → auto-solve
+        // BAND ho jata. Ab: card visual bas cosmetic hai, submit alag —
+        // agar autoSave enabled hai to card ke hisaab ke bagair bhi
+        // server ko clicks bhej do.
         let card = document.querySelector(`.task-card[data-id="${task.id}"]`);
         if (card) {
+            // Visual feedback — jab pending tab pe user ho
             card.classList.add('ai-processing');
             predictedClicks.forEach(idx => {
                 let imgEl = card.querySelector(`.g-img[data-index="${idx}"]`);
                 if (imgEl) imgEl.classList.add('ai-pick');
             });
-            if (autoSaveEnabled) {
-                let btn = card.querySelector('.btn-save');
-                if (btn) { btn.style.background = '#ff00ff'; btn.textContent = '🤖 Auto Solved'; }
-                sendToServerNoTrain(task.id, card);
-            } else {
-                let btn = card.querySelector('.btn-save');
-                if (btn) { btn.style.background = '#7700cc'; btn.textContent = '🤖 AI Suggestion'; }
+            let btn = card.querySelector('.btn-save');
+            if (btn) {
+                btn.style.background = autoSaveEnabled ? '#ff00ff' : '#7700cc';
+                btn.textContent = autoSaveEnabled ? '🤖 Auto Solved' : '🤖 AI Suggestion';
             }
+        }
+        // Submit HAMESHA — card ka intezaar nahi, tab-agnostic
+        if (autoSaveEnabled) {
+            sendToServerNoTrain(task.id, card);  // card=null OK
         }
     }
 }
@@ -723,24 +2136,39 @@ async function fetchTasks() {
 
 function renderPendingStreams() {
     let pending = serverData.pending;
+    // Stale cards remove karo — jo pending mein nahi ya ghosted
     document.querySelectorAll('#pendingView .task-card').forEach(card => {
         let id = card.dataset.id;
         if (!pending[id] || ghostBlocker.has(id)) {
             card.remove();
             delete activeTasksStore[id];
+            sessionStorage.removeItem('hcm_task_' + id);
         }
     });
+    // FIX: Purana `if (activeTasksStore[id]) continue` guarantee nahi deta
+    // ke DOM mein card actually visible hai — kabhi kabhi store mein entry
+    // hoti thi lekin card gum tha (isliye refresh ke bina task nahi dikhti thi).
+    // Ab DOM presence bhi check karo — agar card missing to rebuild.
     for (let id of Object.keys(pending)) {
-        if (ghostBlocker.has(id) || activeTasksStore[id]) continue;
-        let td = pending[id], media = td.media || [], isGrid = media.length > 1;
-        activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '' };
+        if (ghostBlocker.has(id)) continue;
+
+        // Ensure store entry exists (rebuild if lost)
+        if (!activeTasksStore[id]) {
+            let td = pending[id], media = td.media || [], isGrid = media.length > 1;
+            activeTasksStore[id] = { id, clicks: [], type: isGrid ? 'grid' : 'coord', media, prompt: td.prompt || '', sitekey: td.sitekey || '', websiteURL: td.websiteURL || '', rawXhrJson: td.rawXhrJson || '', dimensions: td.dimensions || null };
+            try { sessionStorage.setItem('hcm_task_' + id, JSON.stringify(activeTasksStore[id])); } catch(e) {}
+        }
+
+        // DOM card exists? Agar hai to skip. Agar nahi to rebuild.
+        if (document.querySelector(`#pendingView .task-card[data-id="${id}"]`)) continue;
+
         let card = buildCard(activeTasksStore[id]);
-        
+        let isGrid = activeTasksStore[id].type === 'grid';
         if (isGrid) {
-            gridArea.appendChild(card);
+            if (gridArea) gridArea.appendChild(card);
             if (isAIReady && autoTrainEnabled) predictWithAI(activeTasksStore[id]);
         } else {
-            manualArea.appendChild(card);
+            if (manualArea) manualArea.appendChild(card);
         }
     }
     updateCountsDisplay();
@@ -762,30 +2190,32 @@ function renderTrainedStream() {
         frag.appendChild(card);
     }
     trainedArea.appendChild(frag);
-    setTimeout(checkTrainedImageErrors, 800);
-}
-
-function checkTrainedImageErrors() {
-    let brokenCount = document.querySelectorAll('#trainedView .img-broken').length;
-    let notice = document.getElementById('expiredNotice');
-    if (notice) {
-        if (brokenCount > 0) {
-            notice.textContent = `⚠️ ${brokenCount} image(s) expire ho gayi hain (server 403).`;
-            notice.classList.add('visible');
-        } else {
-            notice.classList.remove('visible');
-        }
-    }
 }
 
 function buildCard(t, isTrained = false) {
     let card = document.createElement('div');
     card.className = 'task-card';
     card.dataset.id = t.id;
-    card.style.minWidth = isTrained ? '320px' : 'auto';
-    let parts = t.prompt.split('|||');
-    let exHtml = parts[1] ? `<img src="${parts[1]}" class="example-img">` : `<div class="example-img-placeholder">🖼️</div>`;
+    
+    // ڈائنامک وڈتھ — grid layout mein minWidth remove kar diya, grid
+    // template khud size control karta hai. Iss se ek line mein multiple
+    // tasks fit hoti hain (dashboard ke size ke hisaab se).
+    // Defaults ab real hCaptcha ke actual production sizes se match:
+    //   wrapW=400 (was 390), wrapH=423 (was 450 — jo bahut bara tha)
+    // wrapH ka calculation: header(55) + canvas(320) + footer(48) = 423
+    // Iss se initial iframe size aur actual content ke darmiyan gap
+    // minimal reh gaya. Baad mein hcm_frame_height postMessage se
+    // exact fine-tune ho jayega.
+    const d = t.dimensions || {};
+    const wrapW = d.wrapW || 400;
+    const wrapH = d.wrapH || 423;
+    
+    const [promptText, exampleUrl] = (t.prompt || '').split('|||');
+    // FIX: XSS defense — attribute breakout via quote in URL rok do,
+    // exampleUrl (real hCaptcha se) sanitize karo
+    let exHtml = exampleUrl ? `<img src="${esc(exampleUrl)}" class="example-img">` : `<div class="example-img-placeholder">🖼️</div>`;
     let mediaHTML = '';
+
     if (t.type === 'grid') {
         mediaHTML = '<div class="img-grid">';
         t.media.forEach(m => {
@@ -798,97 +2228,96 @@ function buildCard(t, isTrained = false) {
             </div>`;
         });
         mediaHTML += '</div>';
+
+        let actions = !isTrained ? `
+            <div class="actions">
+                <button class="btn btn-save" data-action="save">Save & Train</button>
+                <button class="btn btn-reset" data-action="reset">Clear</button>
+                <button class="btn btn-del" data-action="del">❌</button>
+            </div>` : `
+            <div class="actions" id="act-${t.id}">
+                <button class="btn btn-retrain" data-action="retrain">🔧 Retrain</button>
+                <button class="btn btn-del" data-action="del-trained">❌</button>
+            </div>`;
+
+        card.innerHTML = `
+            <div class="task-head">
+                <span class="task-id">#${t.id.substring(0,6)}</span>
+                ${isTrained ? `<span style="font-size:11px;color:#888" id="count-${t.id}">${t.clicks.length} saved</span>` : ''}
+            </div>
+            <div class="prompt-container"><div class="example-wrap">${exHtml}</div><div class="task-prompt">${esc(promptText || '')}</div></div>
+            ${mediaHTML}
+            ${actions}`;
     } else {
-        let m = t.media[0], isVid = m.type === 'video_frames' && m.frames && m.frames.length > 0;
-        let src = isVid ? m.frames[0] : (m.src || '');
-        mediaHTML = `<div class="single-box"><img src="${src}" class="s-img ${isVid?'vid-player':''}" data-id="${t.id}" draggable="false"/>`;
-        t.clicks.forEach(pt => {
-            mediaHTML += `<div class="dot" style="left:${pt.px}%;top:${pt.py}%;"></div>`;
-        });
-        mediaHTML += '</div>';
-        if (isVid && !isTrained) videoTasks.push({ id: t.id, frames: m.frames, current: 0 });
-    }
-    let skipBtn = (t.type === 'grid') ? `<button class="btn btn-skip" data-action="skip" title="Koi image match nahi — seedha Next/Verify">⏭ Skip</button>` : '';
-    let actions = !isTrained ? `
-        <div class="actions">
-            <button class="btn btn-save" data-action="save">Save & Train</button>
-            <button class="btn btn-reset" data-action="reset">Clear</button>
-            ${skipBtn}
-            <button class="btn btn-del" data-action="del">❌</button>
-        </div>` : `
-        <div class="actions" id="act-${t.id}">
-            <button class="btn btn-retrain" data-action="retrain">🔧 Retrain</button>
-            <button class="btn btn-del" data-action="del-trained">❌</button>
+        // ── CaptchaSonic ke liye 2 zaroori fixes:
+        // 1) iframe src mein "newassets.hcaptcha.com" string (CSS selector match)
+        // 2) URL hash mein sitekey (Sonic URLSearchParams(location.hash) se padhta hai)
+        // Fragment hissa (# ke baad) sirf browser tak rehta hai, server ko nahi
+        // jata — safe hai, kuch tootne wala nahi.
+        const sitekey = t.sitekey || 'a5f74b19-9e45-40e0-b45d-47ff91b7a6c2';
+        // ── ZAROORI: iframe URL mein cache-buster (_cb) taimestamp add
+        // karte hain — warna browser same-pathname iframes ko cache
+        // se serve karta tha aur PURANA task ka prompt/canvas dikhta
+        // rehta tha (frameTaskId constant hai module scope mein, sirf
+        // URL query update hone se re-init nahi hoti). Nayi _cb value
+        // se browser force fresh load karta hai.
+        const cacheBuster = t.id + '_' + Date.now();
+        const frameSrc = `${window.location.pathname}?task_frame=1&taskId=${t.id}&_cb=${cacheBuster}#id=0&host=discord.com&sitekey=${sitekey}&frame=challenge&hcapfake=https://newassets.hcaptcha.com/captcha/v1/1f7d13d/static/hcaptcha.html`;
+
+        // ہر ٹاسک کے اپنے سائز کے مطابق آئی فریم
+        mediaHTML = `
+        <div class="h-captcha-challenge-wrapper" style="width:100%;display:flex;justify-content:center;padding:0;margin:0;">
+            <iframe
+                class="hcaptcha-task-frame"
+                data-id="${t.id}"
+                data-hcaptcha-widget-id="0"
+                data-cy="challenge-frame"
+                title="Main content of the hCaptcha challenge"
+                aria-label="hCaptcha challenge"
+                src="${frameSrc}"
+                style="width:${wrapW + 10}px;height:${wrapH + 20}px;border:none;border-radius:4px;background:#ffffff;display:block;margin:0;padding:0;"
+            ></iframe>
         </div>`;
-    card.innerHTML = `
-        <div class="task-head">
-            <span class="task-id">#${t.id.substring(0,6)}</span>
-            ${isTrained ? `<span style="font-size:11px;color:#888" id="count-${t.id}">${t.clicks.length} saved</span>` : ''}
-        </div>
-        <div class="prompt-container"><div class="example-wrap">${exHtml}</div><div class="task-prompt">${parts[0]}</div></div>
-        ${mediaHTML}
-        ${actions}`;
+
+        let actions = !isTrained ? `
+            <div class="actions" style="margin-top:6px;max-width:${wrapW}px;margin-left:auto;margin-right:auto;">
+                <button class="btn btn-del" data-action="del" style="flex:1;background:#331111;color:#ff5555;border:1px solid #552222;">❌ Delete Task</button>
+            </div>` : `
+            <div class="actions" id="act-${t.id}">
+                <button class="btn btn-del" data-action="del-trained">❌ Delete</button>
+            </div>`;
+
+        card.innerHTML = `
+            <div class="task-head" style="max-width:${wrapW}px;margin:0 auto 6px auto;">
+                <span class="task-id">#${t.id.substring(0,6)}</span>
+                <span style="font-size:11px;color:#00ff88;font-weight:bold;">🛡️ Real hCaptcha Frame</span>
+                ${isTrained ? `<span style="font-size:11px;color:#888" id="count-${t.id}">${t.clicks.length} saved</span>` : ''}
+            </div>
+            ${mediaHTML}
+            ${actions}`;
+    }
     return card;
 }
 
-// 🖱️ Right-click = Save & Train (Pending) ya Update & Train (Retrain mode)
-document.body.addEventListener('contextmenu', (e) => {
-    let card = e.target.closest('.task-card');
+// ── RIGHT-CLICK on any task card = trigger Verify (grid: Save button, coord: iframe verify)
+document.body.addEventListener('contextmenu', function(e) {
+    const card = e.target.closest('.task-card');
     if (!card) return;
-
-    let tid = card.dataset.id;
-    let t = activeTasksStore[tid];
-    if (!t) return;
-
-    let isInRetrain = retrainEditingTasks.has(tid);
-    let isPending = card.closest('#pendingView') !== null;
-
-    if (!isPending && !isInRetrain) return;
-
     e.preventDefault();
     e.stopPropagation();
-
-    if (isPending) {
-        // --- Pending tab: Save & Train ---
-        let saveBtn = card.querySelector('[data-action="save"]');
-        if (!t.clicks || t.clicks.length === 0) {
-            if (saveBtn) {
-                saveBtn.classList.add('btn-warn');
-                saveBtn.textContent = '⚠️ Pehle Select Karo!';
-                setTimeout(() => { saveBtn.classList.remove('btn-warn'); saveBtn.textContent = 'Save & Train'; }, 1000);
-            }
-            return;
-        }
-        sendToServer(tid, saveBtn, card);
-
-    } else if (isInRetrain) {
-        // --- Trained tab retrain mode: Update & Train ---
-        let selectedImgs = card.querySelectorAll('.g-img.selected:not(.img-broken), .g-img.retrain-pick:not(.img-broken)');
-        if (!t.clicks || t.clicks.length === 0 || selectedImgs.length === 0) {
-            let confirmBtn = card.querySelector('[data-action="confirm-retrain"]');
-            if (confirmBtn) {
-                confirmBtn.classList.add('btn-warn');
-                let hasBroken = card.querySelectorAll('.img-broken').length > 0;
-                confirmBtn.textContent = hasBroken ? '⚠️ Valid image select karo!' : '⚠️ Pehle Select Karo!';
-                setTimeout(() => { confirmBtn.classList.remove('btn-warn'); confirmBtn.textContent = '✅ Update & Train'; }, 1500);
-            }
-            return;
-        }
-        fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ taskId: tid, clicks: t.clicks })
-        }).then(() => {
-            if (isAIReady && t.type === 'grid') trainAIBrainAsync(t);
-            retrainEditingTasks.delete(tid);
-            card.classList.remove('in-retrain');
-            let b = card.querySelector(`#banner-${tid}`); if (b) b.remove();
-            let actBox = card.querySelector(`#act-${tid}`);
-            if (actBox) actBox.innerHTML = `
-                <button class="btn btn-retrain" data-action="retrain">🔧 Retrain</button>
-                <button class="btn btn-del" data-action="del-trained">❌</button>`;
-            fetchTasks();
-        });
-    }
+    // Coord (iframe) cards: iframe ka apna contextmenu handler khud
+    // verify trigger karta hai — parent kuch na kare, warna DOUBLE
+    // submit hoga aur clicks reset ho jayenge.
+    if (card.querySelector('iframe.hcaptcha-task-frame')) return false;
+    // Grid card: seedha sendToServer call karo — saveBtn.click() se
+    // click handler chain trigger hota tha jo image cells ko UNCLICK
+    // kar deta tha. Directly call zyada safe hai.
+    const tid = card.dataset.id;
+    const t = activeTasksStore[tid];
+    if (!t || !t.clicks || t.clicks.length === 0) return false;
+    const saveBtn = card.querySelector('.btn-save');
+    sendToServer(tid, saveBtn, card);
+    return false;
 });
 
 document.body.addEventListener('click', (e) => {
@@ -908,6 +2337,7 @@ document.body.addEventListener('click', (e) => {
     
     if (actionBtn) {
         let act = actionBtn.dataset.action;
+        
         if (act === 'retrain') {
             retrainEditingTasks.add(tid);
             card.classList.add('in-retrain');
@@ -924,16 +2354,15 @@ document.body.addEventListener('click', (e) => {
         }
         if (act === 'confirm-retrain') {
             let selectedImgs = card.querySelectorAll('.g-img.selected:not(.img-broken), .g-img.retrain-pick:not(.img-broken)');
-            if (!t.clicks || t.clicks.length === 0 || selectedImgs.length === 0) {
+            if ((!t.clicks || t.clicks.length === 0) && selectedImgs.length === 0) {
                 actionBtn.classList.add('btn-warn');
-                let hasBroken = card.querySelectorAll('.img-broken').length > 0;
-                actionBtn.textContent = hasBroken ? '⚠️ Valid image select karo!' : '⚠️ Pehle Select Karo!';
+                actionBtn.textContent = '⚠️ Pehle Select Karo!';
                 setTimeout(() => { actionBtn.classList.remove('btn-warn'); actionBtn.textContent = '✅ Update & Train'; }, 1500);
                 return;
             }
             fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ taskId: tid, clicks: t.clicks })
+                body: JSON.stringify({ taskId: tid, clicks: t.clicks, workerId: workerName, canvasImg: t.canvasImg || "" })
             }).then(() => {
                 if (isAIReady && t.type === 'grid') trainAIBrainAsync(t);
                 retrainEditingTasks.delete(tid);
@@ -950,7 +2379,6 @@ document.body.addEventListener('click', (e) => {
         if (act === 'clear-retrain') {
             t.clicks = [];
             card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick', 'retrain-pick'));
-            card.querySelectorAll('.dot').forEach(d => d.remove());
             return;
         }
         if (act === 'cancel-retrain') {
@@ -961,7 +2389,7 @@ document.body.addEventListener('click', (e) => {
             actBox.innerHTML = `
                 <button class="btn btn-retrain" data-action="retrain">🔧 Retrain</button>
                 <button class="btn btn-del" data-action="del-trained">❌</button>`;
-            fetchTasks();
+                fetchTasks();
             return;
         }
         if (act === 'save') {
@@ -974,21 +2402,17 @@ document.body.addEventListener('click', (e) => {
             sendToServer(tid, actionBtn, card);
             return;
         }
-        if (act === 'skip') {
-            skipTask(tid, actionBtn, card);
-            return;
-        }
         if (act === 'reset') {
             t.clicks = [];
             card.querySelectorAll('.g-img').forEach(img => img.classList.remove('selected', 'ai-pick', 'retrain-pick'));
-            card.querySelectorAll('.dot').forEach(d => d.remove());
             card.classList.remove('ai-processing');
             let saveBtn = card.querySelector('.btn-save');
             if (saveBtn) { saveBtn.style.background = ''; saveBtn.textContent = 'Save & Train'; saveBtn.disabled = false; }
             return;
         }
         if (act === 'del') {
-            ghostBlocker.add(tid); card.remove(); delete activeTasksStore[tid];
+            _addToGhostBlocker(tid); card.remove(); delete activeTasksStore[tid];
+            sessionStorage.removeItem('hcm_task_' + tid);
             updateCountsDisplay();
             fetch(`${SERVER_URL}/api/delete-hcaptcha/${tid}`, { method: 'DELETE' }).catch(()=>{});
             return;
@@ -1012,48 +2436,11 @@ document.body.addEventListener('click', (e) => {
             if (isInRetrain) e.target.classList.add('retrain-pick');
             t.clicks.push(idx);
         }
-    } else if (e.target.classList.contains('s-img')) {
-        let img = e.target;
-        let rect = img.getBoundingClientRect();
-        let nw = img.naturalWidth || 400, nh = img.naturalHeight || 300;
-        let containerRatio = rect.width / rect.height, imageRatio = nw / nh;
-        let actualW = rect.width, actualH = rect.height, offsetX = 0, offsetY = 0;
-        if (containerRatio > imageRatio) {
-            actualW = rect.height * imageRatio; offsetX = (rect.width - actualW) / 2;
-        } else {
-            actualH = rect.width / imageRatio; offsetY = (rect.height - actualH) / 2;
-        }
-        let clickX = e.clientX - rect.left - offsetX, clickY = e.clientY - rect.top - offsetY;
-        if (clickX < 0 || clickX > actualW || clickY < 0 || clickY > actualH) return;
-        let px = Math.max(0, Math.min(100, (clickX / actualW) * 100));
-        let py = Math.max(0, Math.min(100, (clickY / actualH) * 100));
-        t.clicks.push({ px, py });
-        let dot = document.createElement('div');
-        dot.className = 'dot' + (isInRetrain ? ' retrain-dot' : '');
-        dot.style.left = `${((e.clientX - rect.left) / rect.width) * 100}%`;
-        dot.style.top = `${((e.clientY - rect.top) / rect.height) * 100}%`;
-        img.parentElement.appendChild(dot);
     }
 });
 
 function deleteTrained(taskId) {
     fetch(`${SERVER_URL}/api/delete-hcaptcha/${taskId}`, { method: 'DELETE' }).then(() => fetchTasks());
-}
-
-// ⏭ SKIP: koi image match nahi — server ko clicks:[] bhejo (kuch train nahi)
-// Server relay karega { action:'solve', taskId, clicks:[] } → extension Next/Verify daba dega
-function skipTask(taskId, btnEl, card) {
-    if (btnEl) { btnEl.textContent = '⏭ Skipping...'; btnEl.disabled = true; }
-    fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskId, clicks: [], skip: true })
-    }).catch(()=>{});
-    ghostBlocker.add(taskId);
-    if (card) card.remove();
-    delete activeTasksStore[taskId];
-    delete serverData.pending[taskId];
-    updateCountsDisplay();
 }
 
 function sendToServerNoTrain(taskId, card) {
@@ -1062,36 +2449,48 @@ function sendToServerNoTrain(taskId, card) {
     fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskId, clicks: t.clicks })
+        body: JSON.stringify({ taskId, clicks: t.clicks, workerId: workerName, canvasImg: t.canvasImg || "" })
     }).catch(()=>{});
-    ghostBlocker.add(taskId);
+    _addToGhostBlocker(taskId);
     if (card) card.remove();
     delete activeTasksStore[taskId];
+    sessionStorage.removeItem('hcm_task_' + taskId);
     updateCountsDisplay();
 }
 
 function sendToServer(taskId, btnEl, card) {
     let t = activeTasksStore[taskId];
-    if (!t || !t.clicks || t.clicks.length === 0) {
+    let hasClicks = t && t.clicks && t.clicks.length > 0;
+    let hasDrags  = t && t.drags && t.drags.length > 0;
+    if (!t || (!hasClicks && !hasDrags)) {
         if (card) card.classList.remove('ai-processing');
         return;
     }
     if (btnEl) {
         btnEl.style.background = '';
         btnEl.textContent = '✅ Saving...';
-        btnEl.disabled = true;
+        btnEl.style.pointerEvents = 'none';
     }
+
+    let finalClicks = [];
+    if (hasDrags) {
+        t.drags.forEach(pair => { finalClicks = finalClicks.concat(pair); });
+    } else {
+        finalClicks = t.clicks.slice();
+    }
+
     fetch(`${SERVER_URL}/api/submit-hcaptcha`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ taskId, clicks: t.clicks })
+        body: JSON.stringify({ taskId, clicks: finalClicks, workerId: workerName, canvasImg: t.canvasImg || "" })
     }).catch(()=>{});
-    ghostBlocker.add(taskId);
+    _addToGhostBlocker(taskId);
     if (isAIReady && t.type === 'grid' && t.clicks.length > 0) {
         trainAIBrainAsync(t);
     }
     if (card) card.remove();
     delete activeTasksStore[taskId];
+    sessionStorage.removeItem('hcm_task_' + taskId);
     updateCountsDisplay();
 }
 
@@ -1101,29 +2500,6 @@ function filterTasks() {
         c.style.display = c.dataset.id.toLowerCase().includes(f) ? "" : "none";
     });
 }
-
-setInterval(() => {
-    videoTasks.forEach(vt => {
-        let el = document.querySelector(`.vid-player[data-id="${vt.id}"]`);
-        if (el && vt.frames?.length > 0) {
-            vt.current = (vt.current + 1) % vt.frames.length;
-            el.src = vt.frames[vt.current];
-        }
-    });
-}, 150);
-
-// 🔄 Auto-refresh: agar pending tasks nazar na aayein to 5 seconds baad dobara try karo
-setInterval(() => {
-    if (!workerName) return;
-    if (currentTab === 'pending') {
-        let gridCount = gridArea.children.length;
-        let manualCount = manualArea.children.length;
-        if (gridCount === 0 && manualCount === 0 && !isFetching) {
-            fetchTasks();
-        }
-    }
-}, 5000);
-
 </script>
 </body>
 </html>
