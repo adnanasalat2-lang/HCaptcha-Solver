@@ -170,7 +170,7 @@
         <button class="btn-clear-ai" onclick="resetAIBrain()">🧹 Reset Brain</button>
         <button class="btn-clear-ai" onclick="doLogout()" style="background:#332211;color:#ffaa55;border-color:#775522;">🚪 Logout</button>
         <div class="search-box">
-            <input type="text" id="searchInput" oninput="filterTasks()" placeholder="🔍 Trained: ID ya prompt..."/>
+            <input type="text" id="searchInput" oninput="filterTasks()" placeholder="🔍 ID ya prompt search..."/>
         </div>
     </div>
 </div>
@@ -2151,12 +2151,11 @@ async function fetchTasks() {
     try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 8000);
-        // 🔍 Trained tab mein search box ka text server ko bhejo (poore DB mein dhoonde)
+        // 🔍 Search box ka text server ko bhejo — dono tabs (pending + trained)
+        // poore DB mein ID ya prompt se dhoonde (sirf loaded cards nahi).
         let searchParam = '';
-        if (currentTab === 'trained') {
-            let s = (document.getElementById('searchInput')?.value || '').trim();
-            if (s) searchParam = '&search=' + encodeURIComponent(s);
-        }
+        let s = (document.getElementById('searchInput')?.value || '').trim();
+        if (s) searchParam = '&search=' + encodeURIComponent(s);
         const res = await fetch(
             `${SERVER_URL}/api/tasks?tab=${currentTab}&page=${trainedPage}&size=40&workerId=${workerName}${searchParam}&t=${Date.now()}`,
             { cache: 'no-store', signal: controller.signal }
@@ -2295,7 +2294,7 @@ function buildCard(t, isTrained = false) {
 
         card.innerHTML = `
             <div class="task-head">
-                <span class="task-id">#${t.id.substring(0,6)}</span>
+                <span class="task-id" style="cursor:pointer" title="Click = copy full ID" onclick="navigator.clipboard.writeText('${t.id}')">#${t.id}</span>
                 ${isTrained ? `<span style="font-size:11px;color:#888" id="count-${t.id}">${t.clicks.length} saved</span>` : ''}
             </div>
             <div class="prompt-container"><div class="example-wrap">${exHtml}</div><div class="task-prompt">${esc(promptText || '')}</div></div>
@@ -2343,7 +2342,7 @@ function buildCard(t, isTrained = false) {
 
         card.innerHTML = `
             <div class="task-head" style="max-width:${wrapW}px;margin:0 auto 6px auto;">
-                <span class="task-id">#${t.id.substring(0,6)}</span>
+                <span class="task-id" style="cursor:pointer" title="Click = copy full ID" onclick="navigator.clipboard.writeText('${t.id}')">#${t.id}</span>
                 <span style="font-size:11px;color:#00ff88;font-weight:bold;">🛡️ Real hCaptcha Frame</span>
                 ${isTrained ? `<span style="font-size:11px;color:#888" id="count-${t.id}">${t.clicks.length} saved</span>` : ''}
             </div>
@@ -2653,23 +2652,15 @@ function sendToServer(taskId, btnEl, card) {
 }
 
 function filterTasks() {
-    // Trained tab: server-side search (poore trained DB mein ID ya prompt se) —
-    // taake purana galat task jo current page pe nahi hai wo bhi mil jaye,
-    // phir usko Retrain / Delete kar sako.
-    if (currentTab === 'trained') {
-        clearTimeout(window._trainedSearchTimer);
-        window._trainedSearchTimer = setTimeout(() => {
-            trainedPage = 0;
-            trainedArea.innerHTML = '';   // purane cards clear, fresh result dikhao
-            fetchTasks();
-        }, 350);
-        return;
-    }
-    // Pending tab: client-side filter (jaise pehle)
-    let f = document.getElementById('searchInput').value.toLowerCase().replace('#', '');
-    document.querySelectorAll('#pendingView .task-card').forEach(c => {
-        c.style.display = c.dataset.id.toLowerCase().includes(f) ? "" : "none";
-    });
+    // Dono tabs (pending + trained): server-side search — ID ya prompt se poore
+    // DB mein dhoondo, taake purana ya kisi bhi page ka task mil jaye aur usko
+    // Delete / Retrain kar sako. Debounce taake har keystroke pe fetch na ho.
+    clearTimeout(window._searchTimer);
+    window._searchTimer = setTimeout(() => {
+        trainedPage = 0;
+        if (currentTab === 'trained') trainedArea.innerHTML = '';
+        fetchTasks();   // renderPendingStreams / renderTrainedStream result dikha dega
+    }, 350);
 }
 </script>
 </body>
