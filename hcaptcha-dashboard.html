@@ -132,6 +132,7 @@
         .btn-mode:hover { transform: scale(1.02); }
         .btn-grid { background: #00ff88; color: #000; }
         .btn-manual { background: #ff9900; color: #000; }
+        .btn-kolo { background: #3498db; color: #fff; }
     </style>
 </head>
 <body>
@@ -142,6 +143,7 @@
         <input type="text" id="wName" placeholder="Enter Name/ID (e.g. Worker-1)" required autocomplete="off">
         <button class="btn-mode btn-grid" onclick="startApp('grid')">🤖 Grid Mode (AI Auto)</button>
         <button class="btn-mode btn-manual" onclick="startApp('manual')">👷 Manual Mode (Lightweight)</button>
+        <button class="btn-mode btn-kolo" onclick="startApp('kolo')">🎯 Kolotibablo Login</button>
     </div>
 </div>
 
@@ -1194,15 +1196,22 @@ function startApp(mode, savedName) {
     } catch (e) {}
 
     const wb = document.getElementById('myWorkerBadge');
-    if (wb) wb.textContent = `👤 ${workerName} (${mode === 'grid' ? 'Grid' : 'Manual'})`;
+    let modeLabel = mode === 'grid' ? 'Grid' : (mode === 'kolo' ? 'Kolotibablo' : 'Manual');
+    if (wb) wb.textContent = `👤 ${workerName} (${modeLabel})`;
 
     if (mode === 'manual') {
         document.getElementById('colGrid').style.display = 'none';
         document.getElementById('btnAutoTrain').style.display = 'none';
-        isAIReady = false; 
+        isAIReady = false;
         syncStatus.innerHTML = '⚡ Lightweight Mode (No AI)';
     } else {
+        // grid aur kolo dono AI use karte hain, manual column hide
         document.getElementById('colManual').style.display = 'none';
+        // Kolo mode: grid column ka header badal do taake pata chale ye kolotibablo stream hai
+        if (mode === 'kolo') {
+            let hdr = document.querySelector('#colGrid .col-title-ai');
+            if (hdr) hdr.textContent = '🎯 Kolotibablo Login Stream';
+        }
         setTimeout(initAI, 100);
     }
     initWS();
@@ -1579,7 +1588,7 @@ function initWS() {
                     delete _iframeMsgBuffer[tid];
                     updateCountsDisplay();
                 }
-                if (msg.type === 'sync_ai_batch' && workerMode === 'grid') {
+                if (msg.type === 'sync_ai_batch' && (workerMode === 'grid' || workerMode === 'kolo')) {
                     if (msg.data.workerId !== workerName) { 
                         msg.data.updates.forEach(u => {
                             addToDataset(u.label, u.featureArr, true);
@@ -2096,9 +2105,10 @@ async function predictWithAI(task) {
         if (autoSaveEnabled) {
             sendToServerNoTrain(task.id, card);  // card=null OK
         }
-    } else if (predictedClicks.length === 0) {
-        // 🤖 AI ne concept jaana (knnCpuDataset[pText] mojood tha) par is grid ki
-        // kisi image pe confident match nahi mila → matlab "No Match".
+    } else if (predictedClicks.length === 0 && workerMode === 'kolo') {
+        // 🤖 SIRF kolotibablo mode: AI ne concept jaana par is grid ki kisi image
+        // pe confident match nahi mila → matlab "No Match". (Grid/hcaptcha mode me
+        // ye branch nahi chalta — wahan 0-match pe kuch auto nahi hota, waisa hi.)
         //  • Auto Train ON  → Next box ko SUGGESTION ke tor pe highlight karo
         //  • Auto Save ON   → khud skip kar do
         //  • Auto Save OFF  → sirf suggest; tum Save & Train dabao ge to skip+train hoga
@@ -2273,11 +2283,14 @@ function buildCard(t, isTrained = false) {
         });
         mediaHTML += '</div>';
 
+        // Skip button + Next box SIRF kolotibablo mode me — grid/hcaptcha mode
+        // bilkul waisa hi rahega (koi extra button/box nahi).
+        let koloSkipBtn = (workerMode === 'kolo') ? `<button class="btn btn-skip" data-action="skip" title="Koi image match nahi — seedha Next/Verify">⏭ Skip</button>` : '';
         let actions = !isTrained ? `
             <div class="actions">
                 <button class="btn btn-save" data-action="save">Save & Train</button>
                 <button class="btn btn-reset" data-action="reset">Clear</button>
-                <button class="btn btn-skip" data-action="skip" title="Koi image match nahi — seedha Next/Verify">⏭ Skip</button>
+                ${koloSkipBtn}
                 <button class="btn btn-del" data-action="del">❌</button>
             </div>` : `
             <div class="actions" id="act-${t.id}">
@@ -2285,9 +2298,9 @@ function buildCard(t, isTrained = false) {
                 <button class="btn btn-del" data-action="del-trained">❌</button>
             </div>`;
 
-        // ⏭ 10th box — "Next / No Match". Training tab pe click karke AI ko sikhao
-        // ke is grid me kuch match nahi (AI isko negative examples se seekhta hai).
-        let nextBoxHtml = !isTrained ? `
+        // ⏭ 10th box — "Next / No Match" SIRF kolotibablo mode me. Click karke AI ko
+        // sikhao ke is grid me kuch match nahi (negative examples se seekhta hai).
+        let nextBoxHtml = (!isTrained && workerMode === 'kolo') ? `
             <div class="next-box ${t.skipSelected ? 'selected' : ''}" data-nextbox="1" title="Koi match nahi — AI ko sikhao ke yahan Next dabana hai">
                 <span class="nb-icon">⏭</span><span>Next / No Match</span>
             </div>` : '';
